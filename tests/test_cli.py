@@ -1,4 +1,4 @@
-from milestones.cli import build_search_query, sort_key
+from milestones.cli import build_search_query, excerpt, sort_key
 
 BUCKETS = ["Soon", "Later", "Not urgent"]
 
@@ -29,3 +29,10 @@ def test_build_search_query_dedupes_owners_and_fits_search_cap():
     assert "(user:NCATSTranslator OR" in q  # advanced search ANDs bare qualifiers
     assert "no:milestone" in q and "is:issue" in q
     assert len(q) < 256  # GitHub search query length cap
+
+
+def test_excerpt_collapses_whitespace_and_truncates():
+    assert excerpt("## Heading\n\nsome   body\ttext") == "## Heading some body text"
+    assert excerpt(None) == ""
+    long = excerpt("word " * 100)
+    assert len(long) == 201 and long.endswith("…")
