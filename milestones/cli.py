@@ -12,7 +12,7 @@ from pathlib import Path
 from . import gh
 
 EXAMPLE_CONFIG = """\
-buckets = ["Soon", "Later", "Not urgent"]
+buckets = ["Needed soon", "Needed later", "Not urgent"]
 repos = [
   "gaurav/milestones",
   "NCATSTranslator/Babel",
@@ -31,7 +31,7 @@ def load_config() -> dict:
             config = tomllib.load(f)
     except FileNotFoundError:
         sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
-    config.setdefault("buckets", ["Soon", "Later", "Not urgent"])
+    config.setdefault("buckets", ["Needed soon", "Needed later", "Not urgent"])
     if not config.get("repos"):
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
     bad = [r for r in config["repos"] if r.count("/") != 1 or not all(r.split("/"))]
@@ -42,6 +42,30 @@ def load_config() -> dict:
 
 REPO_RE = re.compile(r"(?:(?:https?://)?github\.com/)?([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
 REPOS_BLOCK = re.compile(r"^repos\s*=\s*\[[^\]]*\]", re.M)
+
+
+# "v1.2", "Babel v1.19" — and dated releases, "2026aug24" or "Week ending 2026-08-25".
+VERSION_RE = re.compile(r"\bv\d+(\.\d+)*\b", re.I)
+DATE_RE = re.compile(r"\b\d{4}(-\d{2}-\d{2}|[a-z]{3}\d{1,2})\b", re.I)
+
+
+def milestone_problems(title: str, due: str | None, open_issues: int, closed_issues: int,
+                       buckets: list[str], today: str) -> list[str]:
+    """What's wrong with one open milestone, as fixes to make."""
+    problems = []
+    is_bucket = title in buckets
+    if not is_bucket and not (VERSION_RE.search(title) or DATE_RE.search(title)):
+        problems.append(f"rename: no version or date in the title, and not one of "
+                        f"{', '.join(buckets)}")
+    if not is_bucket and not due:
+        problems.append("no due date: give it one however far out, or it never comes due to roll over")
+    if due and due < today and open_issues:
+        problems.append(f"overdue since {due} with {open_issues} open: roll it over")
+    if closed_issues and not open_issues:
+        problems.append(f"done ({closed_issues} closed, 0 open): close the milestone")
+    if not closed_issues and not open_issues and not is_bucket:
+        problems.append("empty: delete it, or file the work it stands for")
+    return problems
 
 
 def parse_repo(text: str) -> str:
@@ -119,26 +143,26 @@ def print_table(rows: list[tuple], headers: tuple):
 # --- commands ---------------------------------------------------------------
 
 
-def cmd_status(config, args):
+def fetch_milestones(repos: list[str], fields: str) -> list[tuple[str, dict]]:
+    """(repo, milestone) for every open milestone, one GraphQL round trip."""
     # ponytail: first 50 open milestones per repo, paginate if a repo exceeds it.
-    fragment = (
-        "fragment ms on Repository { nameWithOwner "
-        "milestones(states: OPEN, first: 50) { nodes { "
-        "title url dueOn issues(states: OPEN) { totalCount } } } }"
-    )
+    fragment = ("fragment ms on Repository { nameWithOwner "
+                f"milestones(states: OPEN, first: 50) {{ nodes {{ title url dueOn {fields} }} }} }}")
     aliases = " ".join(
         f'r{i}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") {{ ...ms }}'
-        for i, r in enumerate(config["repos"])
+        for i, r in enumerate(repos)
     )
     data = gh.graphql(f"{fragment}\nquery {{ {aliases} }}")
+    return [(repo["nameWithOwner"], m)
+            for repo in data.values() for m in repo["milestones"]["nodes"]]
 
+
+def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    for repo_data in data.values():
-        for m in repo_data["milestones"]["nodes"]:
-            due = m["dueOn"][:10] if m["dueOn"] else None
-            milestones.append((repo_data["nameWithOwner"], m["title"], due,
-                               m["issues"]["totalCount"], m["url"]))
+    for repo, m in fetch_milestones(config["repos"], "issues(states: OPEN) { totalCount }"):
+        due = m["dueOn"][:10] if m["dueOn"] else None
+        milestones.append((repo, m["title"], due, m["issues"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
 
     rows = []
@@ -275,6 +299,29 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
+def cmd_check(config, args):
+    today = datetime.date.today().isoformat()
+    fields = "open: issues(states: OPEN) { totalCount } closed: issues(states: CLOSED) { totalCount }"
+    seen_buckets: dict[str, set] = {r: set() for r in config["repos"]}
+    rows = []
+    for repo, m in fetch_milestones(config["repos"], fields):
+        seen_buckets.setdefault(repo, set()).add(m["title"])
+        for problem in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
+                                          m["open"]["totalCount"], m["closed"]["totalCount"],
+                                          config["buckets"], today):
+            rows.append((repo, m["title"], problem, m["url"]))
+
+    for repo, titles in seen_buckets.items():
+        missing = [b for b in config["buckets"] if b not in titles]
+        if missing:
+            rows.append((repo, "—", f"missing buckets {', '.join(missing)}: run milestones setup "
+                                    f"{repo}", ""))
+    if rows:
+        print_table(sorted(rows), ("REPO", "MILESTONE", "FIX", "URL"))
+    else:
+        print("Nothing to fix — every open milestone is named and dated sensibly.")
+
+
 def cmd_add(config, args):
     # The API answer normalises case and follows renames, and 404s on a typo.
     repo = gh.api(f"repos/{parse_repo(args.repo)}")["full_name"]
@@ -336,6 +383,7 @@ def main():
     rollover.add_argument("--close", action="store_true", help="close FROM once empty")
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
+    sub.add_parser("check", help="milestones that need renaming, dating, closing or rolling over")
     add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
     add.add_argument("repo", metavar="REPO")
     remove = sub.add_parser("remove", help="stop tracking a repo")
@@ -345,7 +393,7 @@ def main():
     args = parser.parse_args()
     config = load_config()
     {"status": cmd_status, "triage": cmd_triage, "rollover": cmd_rollover,
-     "setup": cmd_setup, "discover": cmd_discover, "add": cmd_add,
+     "setup": cmd_setup, "discover": cmd_discover, "add": cmd_add, "check": cmd_check,
      "remove": cmd_remove}[args.command](config, args)
 
 

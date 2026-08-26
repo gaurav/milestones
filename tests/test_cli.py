@@ -1,10 +1,11 @@
 import pytest
 
 from milestones.cli import (
-    build_search_queries, excerpt, load_config, parse_repo, sort_key, write_repos,
+    build_search_queries, excerpt, load_config, milestone_problems, parse_repo, sort_key,
+    write_repos,
 )
 
-BUCKETS = ["Soon", "Later", "Not urgent"]
+BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
 
 
 def test_sort_key_orders_dated_then_buckets_then_other():
@@ -12,13 +13,13 @@ def test_sort_key_orders_dated_then_buckets_then_other():
         ("Not urgent", None),
         ("Zebra ideas", None),
         ("v2026.09", "2026-09-15"),
-        ("Soon", None),
+        ("Needed soon", None),
         ("v2025.01", "2025-01-01"),  # overdue: sorts first among dated
-        ("Later", None),
+        ("Needed later", None),
     ]
     milestones.sort(key=lambda m: sort_key(m[0], m[1], BUCKETS))
     assert [m[0] for m in milestones] == [
-        "v2025.01", "v2026.09", "Soon", "Later", "Not urgent", "Zebra ideas",
+        "v2025.01", "v2026.09", "Needed soon", "Needed later", "Not urgent", "Zebra ideas",
     ]
 
 
@@ -80,3 +81,28 @@ def test_write_repos_leaves_the_rest_of_the_config_alone(tmp_path):
     write_repos(path, ["a/b", "c/d"])
     assert path.read_text() == (
         '# a comment\n\nbuckets = ["Soon"]\n\nrepos = [\n  "a/b",\n  "c/d",\n]\n\n# trailing\n')
+
+
+def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25"):
+    return milestone_problems(title, due, open_issues, closed_issues, BUCKETS, today)
+
+
+def test_milestone_problems_accepts_versions_dates_and_buckets():
+    for title, due in [("Babel v1.19", "2026-09-01"), ("Phyx.js v1.2.2", "2026-09-01"),
+                       ("2026aug24", "2026-08-30"), ("Week ending 2026-08-31", "2026-08-31"),
+                       ("Needed soon", None), ("Not urgent", None)]:
+        assert problems(title, due) == [], title
+
+
+def test_milestone_problems_flags_names_dates_and_stale_milestones():
+    assert "rename" in problems("Next release", "2026-09-01")[0]
+    assert "no due date" in problems("v2.0")[0]
+    # Two independent fixes: an undated milestone needs a date even if it also needs a name.
+    assert [p.split(":")[0] for p in problems("Next release")] == ["rename", "no due date"]
+    assert "overdue" in problems("v2.0", "2026-08-19")[0]
+    # A finished milestone is worth closing whether or not it is also overdue.
+    assert problems("v2.0", "2026-09-01", open_issues=0, closed_issues=3) == [
+        "done (3 closed, 0 open): close the milestone"]
+    assert "empty" in problems("v2.0", "2026-09-01", open_issues=0)[-1]
+    # Buckets are meant to sit empty between triage rounds.
+    assert problems("Needed later", None, open_issues=0) == []

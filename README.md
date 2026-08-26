@@ -21,7 +21,7 @@ Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write t
 and they rewrite just the `repos` list):
 
 ```toml
-buckets = ["Soon", "Later", "Not urgent"]
+buckets = ["Needed soon", "Needed later", "Not urgent"]
 
 repos = [
   "gaurav/milestones",
@@ -43,10 +43,17 @@ uv run milestones rollover OWNER/NAME FROM TO [--close]
 uv run milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
 uv run milestones discover                      # repos owned by your configured owners that have
                                                 # issues/milestones but aren't in the config yet
+uv run milestones check                         # everything that needs fixing: milestones to
+                                                # rename, date, close, or roll over, and repos
+                                                # missing their standing buckets
 uv run milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                                 # rewrites the repos list in the config
 uv run milestones remove REPO                   # stop tracking a repo, same syntax
 ```
+
+`check` reports only; it changes nothing. A milestone is well-formed if it is one of the standing
+buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending 2026-08-31`)
+*and* carries a due date — however far out, since an undated milestone never comes due to roll over.
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
