@@ -54,8 +54,10 @@ uv run milestones remove REPO                   # stop tracking a repo, same syn
 
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
-to a standing bucket, set the due date to today / tomorrow / next Monday / in a month / a date you
-type, close, delete, roll over, or run `setup` — plus open, skip and quit. A milestone is well-formed if it is one of the standing
+to a standing bucket, set the due date to today / tomorrow / next Monday / in a month, close, delete,
+roll over, or run `setup` — plus open, skip and quit. A single keypress acts immediately; the fixes
+that need more (a new title, a typed date, a milestone to roll onto) then ask, and take blank as
+"skip". A milestone is well-formed if it is one of the standing
 buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending 2026-08-31`)
 *and* carries a due date — however far out, since an undated milestone never comes due to roll over.
 

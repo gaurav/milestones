@@ -5,7 +5,9 @@ import datetime
 import os
 import re
 import sys
+import termios
 import tomllib
+import tty
 import webbrowser
 from pathlib import Path
 
@@ -374,77 +376,109 @@ def set_due(repo: str, number: int, date: datetime.date) -> None:
     print(f"  → due {date.isoformat()}")
 
 
+def read_key(prompt: str) -> str:
+    """One keypress, no Enter. Falls back to a whole line when stdin isn't a terminal."""
+    print(prompt, end="", flush=True)
+    if not sys.stdin.isatty():  # ponytail: also how the scripted tests drive this
+        line = sys.stdin.readline()
+        if not line:
+            sys.exit("\nAborted.")
+        print(line.strip())
+        return line.strip()[:1]
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        key = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    if key in ("\x03", "\x04"):  # Ctrl-C, Ctrl-D: raw mode swallows the usual signal
+        sys.exit("\nAborted.")
+    print(key)
+    return key
+
+
 def walk_findings(config, findings: list[dict]) -> None:
-    today = datetime.date.today()
-    dates = date_choices(today)
+    dates = date_choices(datetime.date.today())
     for n, f in enumerate(findings, 1):
-        repo, number = f["repo"], f["number"]
+        repo, number, kind = f["repo"], f["number"], f["kind"]
         detail = f"  ({f['detail']})" if f["detail"] else ""
-        print(f"\n[{n}/{len(findings)}] {f['kind']}: {repo}  {f['title']}{detail}")
+        print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}{detail}")
         print(f"  {f['url']}")
 
-        options = ["o open", "s skip", "q quit"]
-        if f["kind"] == "rename":
-            options = [f"{i} → {b}" for i, b in enumerate(config["buckets"], 1)] + \
-                      ["r rename to something else"] + options
-        elif f["kind"] in ("undated", "overdue"):
-            options = [f"{key} {label} ({date.isoformat()})" for key, label, date in dates] + \
-                      ["YYYY-MM-DD"] + options
-        if f["kind"] == "overdue":
-            options.insert(0, "R rollover to another milestone")
-        if f["kind"] == "done":
-            options.insert(0, "c close it")
-        if f["kind"] == "empty":
-            options.insert(0, "D delete it")
-        if f["kind"] == "buckets":
-            options.insert(0, "b create the missing buckets")
+        def patch(**fields):
+            gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", **fields)
 
+        options = []
+        if kind == "rename":
+            options += [(str(i), f"→ {b}") for i, b in enumerate(config["buckets"], 1)]
+            options.append(("r", "rename to…"))
+        if kind in ("undated", "overdue"):
+            options += [(key, f"{label} {date.isoformat()}") for key, label, date in dates]
+            options.append(("e", "another date…"))
+        if kind == "overdue":
+            options.append(("r", "roll its issues over…"))
+        if kind == "done":
+            options.append(("c", "close it"))
+        if kind == "empty":
+            options.append(("d", "delete it"))
+        if kind == "buckets":
+            options.append(("b", "create the missing buckets"))
+        options += [("o", "open"), ("s", "skip"), ("q", "quit")]
+
+        prompt = "  " + "  ".join(f"[{key}] {label}" for key, label in options) + "  "
         while True:
-            answer = ask("  " + ", ".join(options) + ": ").strip()
-            if answer == "q":
+            key = read_key(prompt)
+            if key == "q":
                 return
-            if answer == "s":
+            if key == "s":
                 break
-            if answer == "o":
+            if key == "o":
                 webbrowser.open(f["url"])
                 continue
-            if answer == "b" and f["kind"] == "buckets":
-                cmd_setup(config, argparse.Namespace(repo=repo))
+            # Anything needing more than a keypress asks a second question; blank skips.
+            if key == "r" and kind == "rename":
+                title = ask("  new title (blank to skip): ").strip()
+                if title:
+                    patch(title=title)
+                    print(f"  → renamed to '{title}'")
                 break
-            if answer == "c" and f["kind"] == "done":
-                gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", state="closed")
-                print("  → closed")
+            if key == "r" and kind == "overdue":
+                dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
+                if dst:
+                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"], dst=dst,
+                                                            close=False))
                 break
-            if answer == "D" and f["kind"] == "empty":
+            if key == "e" and kind in ("undated", "overdue"):
+                typed = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
+                if not typed:
+                    break
+                try:
+                    set_due(repo, number, datetime.date.fromisoformat(typed))
+                    break
+                except ValueError:
+                    print("  Not a YYYY-MM-DD date.")
+                    continue
+            if key == "d" and kind == "empty":
                 if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() == "y":
                     gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
                     print("  → deleted")
                     break
                 continue
-            if answer == "R" and f["kind"] == "overdue":
-                dst = ask("  roll its open issues onto which milestone title? ").strip()
-                if dst:
-                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"], dst=dst,
-                                                            close=False))
-                    break
-                continue
-            if f["kind"] == "rename":
-                title = None
-                if answer.isdigit() and 1 <= int(answer) <= len(config["buckets"]):
-                    title = config["buckets"][int(answer) - 1]
-                elif answer == "r":
-                    title = ask("  new title: ").strip() or None
-                if title:
-                    gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", title=title)
-                    print(f"  → renamed to '{title}'")
-                    break
-            if f["kind"] in ("undated", "overdue"):
-                chosen = next((d for key, _, d in dates if key == answer), None)
-                if chosen is None and answer:
-                    try:
-                        chosen = datetime.date.fromisoformat(answer)
-                    except ValueError:
-                        chosen = None
+            if key == "c" and kind == "done":
+                patch(state="closed")
+                print("  → closed")
+                break
+            if key == "b" and kind == "buckets":
+                cmd_setup(config, argparse.Namespace(repo=repo))
+                break
+            if kind == "rename" and key.isdigit() and 1 <= int(key) <= len(config["buckets"]):
+                title = config["buckets"][int(key) - 1]
+                patch(title=title)
+                print(f"  → renamed to '{title}'")
+                break
+            if kind in ("undated", "overdue"):
+                chosen = next((d for k, _, d in dates if k == key), None)
                 if chosen:
                     set_due(repo, number, chosen)
                     break
