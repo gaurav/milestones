@@ -15,8 +15,14 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   issues-only listing; don't use it as an "is this empty" check.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list, so `gh.api(paginate=True)`'s flattening does not apply.
+- Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
+  reads back on the day you meant. Clearing one needs `due_on: null`, which `gh.api` can't
+  send — use `echo '{"due_on":null}' | gh api -X PATCH ... --input -`.
 - Issue listings lag writes by a few seconds: a rollover immediately after another can see a
   stale (empty) issue list. Rerunning works; not worth retry logic.
+
+To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
+symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
 the standing buckets for exercising `rollover`/`triage`. Tests (`uv run pytest`) cover only the

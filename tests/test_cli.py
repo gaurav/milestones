@@ -1,7 +1,10 @@
+import datetime
+
 import pytest
 
 from milestones.cli import (
-    build_search_queries, excerpt, load_config, milestone_problems, parse_repo, sort_key,
+    build_search_queries, date_choices, excerpt, load_config, milestone_problems, parse_repo,
+    sort_key,
     write_repos,
 )
 
@@ -94,15 +97,27 @@ def test_milestone_problems_accepts_versions_dates_and_buckets():
         assert problems(title, due) == [], title
 
 
+def kinds(*args, **kwargs):
+    return [kind for kind, _ in problems(*args, **kwargs)]
+
+
 def test_milestone_problems_flags_names_dates_and_stale_milestones():
-    assert "rename" in problems("Next release", "2026-09-01")[0]
-    assert "no due date" in problems("v2.0")[0]
+    assert kinds("Next release", "2026-09-01") == ["rename"]
+    assert kinds("v2.0", "2026-08-19") == ["overdue"]
     # Two independent fixes: an undated milestone needs a date even if it also needs a name.
-    assert [p.split(":")[0] for p in problems("Next release")] == ["rename", "no due date"]
-    assert "overdue" in problems("v2.0", "2026-08-19")[0]
+    assert kinds("Next release") == ["rename", "undated"]
     # A finished milestone is worth closing whether or not it is also overdue.
     assert problems("v2.0", "2026-09-01", open_issues=0, closed_issues=3) == [
-        "done (3 closed, 0 open): close the milestone"]
-    assert "empty" in problems("v2.0", "2026-09-01", open_issues=0)[-1]
+        ("done", "3 closed, 0 open")]
+    assert problems("v2.0", "2026-08-19", open_issues=4) == [("overdue", "due 2026-08-19, 4 open")]
+    assert kinds("v2.0", "2026-09-01", open_issues=0) == ["empty"]
     # Buckets are meant to sit empty between triage rounds.
     assert problems("Needed later", None, open_issues=0) == []
+
+
+def test_date_choices_lands_on_the_next_monday():
+    monday = datetime.date(2026, 8, 24)
+    for offset in range(7):  # every weekday resolves to the *following* Monday
+        chosen = dict((label, d) for _, label, d in date_choices(monday + datetime.timedelta(offset)))
+        assert chosen["next Monday"] == monday + datetime.timedelta(7), offset
+        assert chosen["next Monday"].weekday() == 0

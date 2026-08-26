@@ -49,22 +49,32 @@ VERSION_RE = re.compile(r"\bv\d+(\.\d+)*\b", re.I)
 DATE_RE = re.compile(r"\b\d{4}(-\d{2}-\d{2}|[a-z]{3}\d{1,2})\b", re.I)
 
 
+# Each kind is one shape of fix, and heads its own group in the report.
+KINDS = {
+    "rename": "Rename — no version or date in the title, and not a standing bucket",
+    "undated": "Set a due date — however far out; an undated milestone never comes due",
+    "overdue": "Roll over or re-date — past due with work still open",
+    "done": "Close — every issue on it is closed",
+    "empty": "Delete or fill — nothing has ever been filed against it",
+    "buckets": "Run setup — the repo is missing standing buckets",
+}
+
+
 def milestone_problems(title: str, due: str | None, open_issues: int, closed_issues: int,
-                       buckets: list[str], today: str) -> list[str]:
-    """What's wrong with one open milestone, as fixes to make."""
+                       buckets: list[str], today: str) -> list[tuple[str, str]]:
+    """(kind, detail) for everything wrong with one open milestone."""
     problems = []
     is_bucket = title in buckets
     if not is_bucket and not (VERSION_RE.search(title) or DATE_RE.search(title)):
-        problems.append(f"rename: no version or date in the title, and not one of "
-                        f"{', '.join(buckets)}")
+        problems.append(("rename", ""))
     if not is_bucket and not due:
-        problems.append("no due date: give it one however far out, or it never comes due to roll over")
+        problems.append(("undated", ""))
     if due and due < today and open_issues:
-        problems.append(f"overdue since {due} with {open_issues} open: roll it over")
+        problems.append(("overdue", f"due {due}, {open_issues} open"))
     if closed_issues and not open_issues:
-        problems.append(f"done ({closed_issues} closed, 0 open): close the milestone")
+        problems.append(("done", f"{closed_issues} closed, 0 open"))
     if not closed_issues and not open_issues and not is_bucket:
-        problems.append("empty: delete it, or file the work it stands for")
+        problems.append(("empty", "no issues at all"))
     return problems
 
 
@@ -299,27 +309,146 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
-def cmd_check(config, args):
+def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
-    fields = "open: issues(states: OPEN) { totalCount } closed: issues(states: CLOSED) { totalCount }"
-    seen_buckets: dict[str, set] = {r: set() for r in config["repos"]}
-    rows = []
+    fields = ("number open: issues(states: OPEN) { totalCount } "
+              "closed: issues(states: CLOSED) { totalCount }")
+    seen: dict[str, set] = {r: set() for r in config["repos"]}
+    findings = []
     for repo, m in fetch_milestones(config["repos"], fields):
-        seen_buckets.setdefault(repo, set()).add(m["title"])
-        for problem in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
-                                          m["open"]["totalCount"], m["closed"]["totalCount"],
-                                          config["buckets"], today):
-            rows.append((repo, m["title"], problem, m["url"]))
-
-    for repo, titles in seen_buckets.items():
+        seen.setdefault(repo, set()).add(m["title"])
+        for kind, detail in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
+                                               m["open"]["totalCount"], m["closed"]["totalCount"],
+                                               config["buckets"], today):
+            findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
+                             "url": m["url"], "number": m["number"]})
+    for repo, titles in seen.items():
         missing = [b for b in config["buckets"] if b not in titles]
         if missing:
-            rows.append((repo, "—", f"missing buckets {', '.join(missing)}: run milestones setup "
-                                    f"{repo}", ""))
-    if rows:
-        print_table(sorted(rows), ("REPO", "MILESTONE", "FIX", "URL"))
-    else:
+            findings.append({"kind": "buckets", "repo": repo, "title": "(whole repo)",
+                             "detail": ", ".join(missing),
+                             "url": f"https://github.com/{repo}/milestones", "number": None})
+    findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
+    return findings
+
+
+def print_findings(findings: list[dict]) -> None:
+    repos = len({f["repo"] for f in findings})
+    print(f"{len(findings)} fixes across {repos} repo{'s' if repos != 1 else ''}.")
+    for kind, heading in KINDS.items():
+        group = [f for f in findings if f["kind"] == kind]
+        if not group:
+            continue
+        print(f"\n{heading}  ({len(group)})")
+        # Repo and title get their own column so a repeat offender is obvious at a glance.
+        repo_w = max(len(f["repo"]) for f in group)
+        title_w = max(len(f["title"]) for f in group)
+        for f in group:
+            line = "  • %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
+                                       f["detail"])
+            print("%s\n    %s" % (line.rstrip(), f["url"]))
+
+
+def cmd_check(config, args):
+    findings = collect_findings(config)
+    if not findings:
         print("Nothing to fix — every open milestone is named and dated sensibly.")
+        return
+    print_findings(findings)
+    if args.interactive:
+        walk_findings(config, findings)
+
+
+def date_choices(today: datetime.date) -> list[tuple[str, str, datetime.date]]:
+    day = datetime.timedelta(days=1)
+    return [("t", "today", today),
+            ("m", "tomorrow", today + day),
+            ("n", "next Monday", today + day * (7 - today.weekday())),
+            ("x", "in a month", today + day * 30)]
+
+
+def set_due(repo: str, number: int, date: datetime.date) -> None:
+    # Midday UTC: GitHub stores the instant, and midnight can read back as the day before.
+    gh.api(f"repos/{repo}/milestones/{number}", method="PATCH",
+           due_on=f"{date.isoformat()}T12:00:00Z")
+    print(f"  → due {date.isoformat()}")
+
+
+def walk_findings(config, findings: list[dict]) -> None:
+    today = datetime.date.today()
+    dates = date_choices(today)
+    for n, f in enumerate(findings, 1):
+        repo, number = f["repo"], f["number"]
+        detail = f"  ({f['detail']})" if f["detail"] else ""
+        print(f"\n[{n}/{len(findings)}] {f['kind']}: {repo}  {f['title']}{detail}")
+        print(f"  {f['url']}")
+
+        options = ["o open", "s skip", "q quit"]
+        if f["kind"] == "rename":
+            options = [f"{i} → {b}" for i, b in enumerate(config["buckets"], 1)] + \
+                      ["r rename to something else"] + options
+        elif f["kind"] in ("undated", "overdue"):
+            options = [f"{key} {label} ({date.isoformat()})" for key, label, date in dates] + \
+                      ["YYYY-MM-DD"] + options
+        if f["kind"] == "overdue":
+            options.insert(0, "R rollover to another milestone")
+        if f["kind"] == "done":
+            options.insert(0, "c close it")
+        if f["kind"] == "empty":
+            options.insert(0, "D delete it")
+        if f["kind"] == "buckets":
+            options.insert(0, "b create the missing buckets")
+
+        while True:
+            answer = ask("  " + ", ".join(options) + ": ").strip()
+            if answer == "q":
+                return
+            if answer == "s":
+                break
+            if answer == "o":
+                webbrowser.open(f["url"])
+                continue
+            if answer == "b" and f["kind"] == "buckets":
+                cmd_setup(config, argparse.Namespace(repo=repo))
+                break
+            if answer == "c" and f["kind"] == "done":
+                gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", state="closed")
+                print("  → closed")
+                break
+            if answer == "D" and f["kind"] == "empty":
+                if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() == "y":
+                    gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
+                    print("  → deleted")
+                    break
+                continue
+            if answer == "R" and f["kind"] == "overdue":
+                dst = ask("  roll its open issues onto which milestone title? ").strip()
+                if dst:
+                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"], dst=dst,
+                                                            close=False))
+                    break
+                continue
+            if f["kind"] == "rename":
+                title = None
+                if answer.isdigit() and 1 <= int(answer) <= len(config["buckets"]):
+                    title = config["buckets"][int(answer) - 1]
+                elif answer == "r":
+                    title = ask("  new title: ").strip() or None
+                if title:
+                    gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", title=title)
+                    print(f"  → renamed to '{title}'")
+                    break
+            if f["kind"] in ("undated", "overdue"):
+                chosen = next((d for key, _, d in dates if key == answer), None)
+                if chosen is None and answer:
+                    try:
+                        chosen = datetime.date.fromisoformat(answer)
+                    except ValueError:
+                        chosen = None
+                if chosen:
+                    set_due(repo, number, chosen)
+                    break
+            print("  Not one of those.")
 
 
 def cmd_add(config, args):
@@ -383,7 +512,10 @@ def main():
     rollover.add_argument("--close", action="store_true", help="close FROM once empty")
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
-    sub.add_parser("check", help="milestones that need renaming, dating, closing or rolling over")
+    check = sub.add_parser("check",
+                           help="milestones that need renaming, dating, closing or rolling over")
+    check.add_argument("-i", "--interactive", action="store_true",
+                       help="walk the findings one by one and fix them")
     add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
     add.add_argument("repo", metavar="REPO")
     remove = sub.add_parser("remove", help="stop tracking a repo")
