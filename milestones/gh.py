@@ -42,7 +42,10 @@ def graphql(query: str) -> dict:
 def search_issues(query: str) -> list[dict]:
     # `gh search issues` uses the legacy search path and returns nothing anymore;
     # the REST endpoint needs advanced_search=true. Items are REST-shaped issues.
-    # ponytail: first 100 results, newest-updated; chunk per-repo queries if a
-    # triage session ever clears 100.
+    # ponytail: GitHub caps search itself at 1000 results per query; the caller
+    # splits by repo, so no single query has come near that.
     path = f"search/issues?q={quote(query)}&sort=updated&advanced_search=true&per_page=100"
-    return api(path)["items"]
+    # Not api(paginate=True): that flattens pages that are lists, and search pages
+    # are dicts wrapping an "items" list.
+    pages = json.loads(_run(["api", "--paginate", "--slurp", path]))
+    return [item for page in pages for item in page["items"]]

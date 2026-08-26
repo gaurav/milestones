@@ -1,4 +1,6 @@
-from milestones.cli import build_search_query, excerpt, sort_key
+import pytest
+
+from milestones.cli import build_search_queries, excerpt, load_config, sort_key
 
 BUCKETS = ["Soon", "Later", "Not urgent"]
 
@@ -18,17 +20,38 @@ def test_sort_key_orders_dated_then_buckets_then_other():
     ]
 
 
-def test_build_search_query_dedupes_owners_and_fits_search_cap():
+def test_build_search_queries_scope_to_configured_repos_only():
     repos = [
         "gaurav/milestones", "gaurav/taxondna",
         "NCATSTranslator/Babel", "TranslatorSRI/babel-validation",
         "heal-data-stewards/heal-cdes", "helxplatform/dug", "phyloref/phyx.js",
     ]
-    q = build_search_query(repos)
-    assert q.count("user:gaurav") == 1
-    assert "(user:NCATSTranslator OR" in q  # advanced search ANDs bare qualifiers
-    assert "no:milestone" in q and "is:issue" in q
-    assert len(q) < 256  # GitHub search query length cap
+    queries = build_search_queries(repos)
+    joined = " ".join(queries)
+    assert all("repo:" + r in joined for r in repos)
+    assert "user:" not in joined  # owner-wide search let unconfigured repos crowd results out
+    assert " OR " in queries[0]  # advanced search ANDs bare qualifiers
+    assert all("no:milestone" in q and "is:issue" in q for q in queries)
+    assert all(len(q) < 256 for q in queries)  # GitHub search query length cap
+
+
+def test_build_search_queries_split_to_stay_under_the_cap():
+    repos = [f"owner{i}/some-repository-name" for i in range(20)]
+    queries = build_search_queries(repos)
+    assert len(queries) > 1
+    assert all(len(q) < 256 for q in queries)
+    joined = " ".join(queries)
+    assert all("repo:" + r in joined for r in repos)
+
+
+def test_load_config_rejects_repos_that_are_not_owner_slash_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "milestones.toml").write_text(
+        'repos = ["gaurav/milestones", "gaurav", "https://github.com/gaurav/x"]\n')
+    with pytest.raises(SystemExit) as excinfo:
+        load_config()
+    listed = str(excinfo.value).split("OWNER/NAME: ")[1]
+    assert listed == "gaurav, https://github.com/gaurav/x"  # the good repo is not named
 
 
 def test_excerpt_collapses_whitespace_and_truncates():

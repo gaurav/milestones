@@ -58,10 +58,24 @@ def sort_key(title: str, due_on: str | None, buckets: list[str]):
     return (2, "", title)
 
 
-def build_search_query(repos: list[str]) -> str:
-    # Advanced search ANDs repeated qualifiers, so owners must be OR'd explicitly.
-    owners = " OR ".join(f"user:{o}" for o in owners_of(repos))
-    return f"is:issue is:open no:milestone archived:false ({owners})"
+def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
+    """Queries covering every configured repo, each under GitHub's 256-char cap.
+
+    Scoped by repo rather than by owner: an owner's unconfigured repos would
+    otherwise crowd real results out of the single page search_issues fetches.
+    """
+    def query(batch):
+        # Advanced search ANDs repeated qualifiers, so repos must be OR'd explicitly.
+        return "is:issue is:open no:milestone archived:false (%s)" % (
+            " OR ".join("repo:" + r for r in batch))
+
+    queries, batch = [], []
+    for repo in sorted(set(repos)):
+        if batch and len(query(batch + [repo])) > cap:
+            queries.append(query(batch))
+            batch = []
+        batch.append(repo)
+    return queries + [query(batch)]
 
 
 def excerpt(body: str | None, width: int = 200) -> str:
@@ -190,12 +204,12 @@ def cmd_triage(config, args):
                      paginate=True)
         issues = [_norm_issue(i, args.repo) for i in raw if "pull_request" not in i]
     else:
-        configured = set(config["repos"])
         issues = []
-        for item in gh.search_issues(build_search_query(config["repos"])):
-            repo = "/".join(item["repository_url"].split("/")[-2:])
-            if repo in configured:
+        for query in build_search_queries(config["repos"]):
+            for item in gh.search_issues(query):
+                repo = "/".join(item["repository_url"].split("/")[-2:])
                 issues.append(_norm_issue(item, repo))
+        issues.sort(key=lambda i: i["updated"], reverse=True)
 
     if not issues:
         print("Nothing to triage.")
