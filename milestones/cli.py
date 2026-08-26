@@ -29,7 +29,17 @@ def load_config() -> dict:
     config.setdefault("buckets", ["Soon", "Later", "Not urgent"])
     if not config.get("repos"):
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
+    bad = [r for r in config["repos"] if r.count("/") != 1 or not all(r.split("/"))]
+    if bad:
+        sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
     return config
+
+
+def ask(prompt: str) -> str:
+    try:
+        return input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nAborted.")
 
 
 def owners_of(repos: list[str]) -> list[str]:
@@ -42,7 +52,9 @@ def sort_key(title: str, due_on: str | None, buckets: list[str]):
     if due_on:
         return (0, due_on, title)
     if title in buckets:
-        return (1, str(buckets.index(title)), title)
+        # Slot 0 already separates the branches, so slot 1 is only ever compared
+        # against the same type.
+        return (1, buckets.index(title), title)
     return (2, "", title)
 
 
@@ -67,6 +79,7 @@ def print_table(rows: list[tuple], headers: tuple):
 
 
 def cmd_status(config, args):
+    # ponytail: first 50 open milestones per repo, paginate if a repo exceeds it.
     fragment = (
         "fragment ms on Repository { nameWithOwner "
         "milestones(states: OPEN, first: 50) { nodes { "
@@ -126,8 +139,8 @@ def cmd_rollover(config, args):
     if issues:
         for issue in issues:
             print(f"  #{issue['number']} {issue['title']}")
-        answer = input(f"Move {len(issues)} open issues from '{args.src}' to '{args.dst}' "
-                       f"in {args.repo}? [y/N] ")
+        answer = ask(f"Move {len(issues)} open issues from '{args.src}' to '{args.dst}' "
+                     f"in {args.repo}? [y/N] ")
         if answer.strip().lower() != "y":
             sys.exit("Aborted.")
         for issue in issues:
@@ -192,8 +205,9 @@ def cmd_triage(config, args):
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
 
+        assign = f"[1-{len(choices)}] assign, " if choices else ""
         while True:
-            answer = input(f"  [1-{len(choices)}] assign, s skip, o open, q quit: ").strip().lower()
+            answer = ask(f"  {assign}s skip, o open, q quit: ").strip().lower()
             if answer == "q":
                 return
             if answer == "s" or (answer == "" and not choices):
@@ -207,6 +221,7 @@ def cmd_triage(config, args):
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
                 break
+            print(f"  Not one of: {assign}s, o, q.")
 
 
 def cmd_discover(config, args):
@@ -221,6 +236,8 @@ def cmd_discover(config, args):
             f"nameWithOwner isArchived issues(states: OPEN) {{ totalCount }} "
             f"milestones(states: OPEN) {{ totalCount }} }} }} }} }}"
         )
+        if data["repositoryOwner"] is None:
+            sys.exit(f"No GitHub user or organisation '{owner}' — check the repos in your config.")
         for r in data["repositoryOwner"]["repositories"]["nodes"]:
             issues, ms = r["issues"]["totalCount"], r["milestones"]["totalCount"]
             if not r["isArchived"] and r["nameWithOwner"] not in configured and (issues or ms):

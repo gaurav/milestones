@@ -6,7 +6,10 @@ from urllib.parse import quote
 
 
 def _run(args: list[str]) -> str:
-    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SystemExit("gh not found; install the GitHub CLI: https://cli.github.com")
     if proc.returncode != 0:
         raise SystemExit(f"gh {' '.join(args[:3])}... failed:\n{proc.stderr.strip()}")
     return proc.stdout
