@@ -17,7 +17,8 @@ Requires Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and an authenticated
 uv sync
 ```
 
-Create `~/.config/milestones.toml` by hand (the tool only ever reads it):
+Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write to it,
+and they rewrite just the `repos` list):
 
 ```toml
 buckets = ["Soon", "Later", "Not urgent"]
@@ -42,6 +43,9 @@ uv run milestones rollover OWNER/NAME FROM TO [--close]
 uv run milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
 uv run milestones discover                      # repos owned by your configured owners that have
                                                 # issues/milestones but aren't in the config yet
+uv run milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
+                                                # rewrites the repos list in the config
+uv run milestones remove REPO                   # stop tracking a repo, same syntax
 ```
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at

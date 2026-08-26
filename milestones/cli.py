@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import os
+import re
 import sys
 import tomllib
 import webbrowser
@@ -19,8 +20,12 @@ repos = [
 """
 
 
+def config_path() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "milestones.toml"
+
+
 def load_config() -> dict:
-    path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "milestones.toml"
+    path = config_path()
     try:
         with open(path, "rb") as f:
             config = tomllib.load(f)
@@ -33,6 +38,28 @@ def load_config() -> dict:
     if bad:
         sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
     return config
+
+
+REPO_RE = re.compile(r"(?:(?:https?://)?github\.com/)?([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
+REPOS_BLOCK = re.compile(r"^repos\s*=\s*\[[^\]]*\]", re.M)
+
+
+def parse_repo(text: str) -> str:
+    """OWNER/NAME from either that or a github.com URL."""
+    match = REPO_RE.fullmatch(text.strip())
+    if not match:
+        sys.exit(f"Not a repo: {text!r}. Give OWNER/NAME or a github.com URL.")
+    return f"{match[1]}/{match[2]}"
+
+
+def write_repos(path: Path, repos: list[str]) -> None:
+    """Rewrite just the repos list, leaving the rest of the config alone."""
+    # ponytail: comments *inside* the repos list are dropped; nothing else is touched.
+    block = "repos = [\n" + "".join(f'  "{r}",\n' for r in repos) + "]"
+    text, count = REPOS_BLOCK.subn(lambda _: block, path.read_text(), count=1)
+    if count != 1:
+        sys.exit(f"Can't find a `repos = [...]` list to edit in {path}; edit it by hand.")
+    path.write_text(text)
 
 
 def ask(prompt: str) -> str:
@@ -248,6 +275,27 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
+def cmd_add(config, args):
+    # The API answer normalises case and follows renames, and 404s on a typo.
+    repo = gh.api(f"repos/{parse_repo(args.repo)}")["full_name"]
+    if repo in config["repos"]:
+        print(f"already tracked: {repo}")
+        return
+    write_repos(config_path(), config["repos"] + [repo])
+    print(f"tracking {repo} — run `milestones setup {repo}` to create its buckets")
+
+
+def cmd_remove(config, args):
+    repo = parse_repo(args.repo)
+    keep = [r for r in config["repos"] if r.lower() != repo.lower()]
+    if len(keep) == len(config["repos"]):
+        sys.exit(f"Not tracked: {repo}. Tracked: {', '.join(config['repos'])}")
+    if not keep:
+        sys.exit(f"{repo} is the only tracked repo; a config with none is rejected on load.")
+    write_repos(config_path(), keep)
+    print(f"stopped tracking {repo}")
+
+
 def cmd_discover(config, args):
     configured = set(config["repos"])
     rows = set()  # transferred repos can echo under their old owner; dedupe
@@ -288,12 +336,17 @@ def main():
     rollover.add_argument("--close", action="store_true", help="close FROM once empty")
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
+    add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
+    add.add_argument("repo", metavar="REPO")
+    remove = sub.add_parser("remove", help="stop tracking a repo")
+    remove.add_argument("repo", metavar="REPO")
     sub.add_parser("discover", help="repos with issues/milestones missing from the config")
 
     args = parser.parse_args()
     config = load_config()
     {"status": cmd_status, "triage": cmd_triage, "rollover": cmd_rollover,
-     "setup": cmd_setup, "discover": cmd_discover}[args.command](config, args)
+     "setup": cmd_setup, "discover": cmd_discover, "add": cmd_add,
+     "remove": cmd_remove}[args.command](config, args)
 
 
 if __name__ == "__main__":

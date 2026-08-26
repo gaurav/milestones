@@ -1,6 +1,8 @@
 import pytest
 
-from milestones.cli import build_search_queries, excerpt, load_config, sort_key
+from milestones.cli import (
+    build_search_queries, excerpt, load_config, parse_repo, sort_key, write_repos,
+)
 
 BUCKETS = ["Soon", "Later", "Not urgent"]
 
@@ -59,3 +61,22 @@ def test_excerpt_collapses_whitespace_and_truncates():
     assert excerpt(None) == ""
     long = excerpt("word " * 100)
     assert len(long) == 201 and long.endswith("…")
+
+
+def test_parse_repo_accepts_urls_and_shorthand():
+    for text in ["NCATSTranslator/translator-diagram",
+                 "https://github.com/NCATSTranslator/translator-diagram",
+                 "https://github.com/NCATSTranslator/translator-diagram.git",
+                 "  github.com/NCATSTranslator/translator-diagram/  "]:
+        assert parse_repo(text) == "NCATSTranslator/translator-diagram"
+    for bad in ["translator-diagram", "https://github.com/NCATSTranslator/x/issues", ""]:
+        with pytest.raises(SystemExit):
+            parse_repo(bad)
+
+
+def test_write_repos_leaves_the_rest_of_the_config_alone(tmp_path):
+    path = tmp_path / "milestones.toml"
+    path.write_text('# a comment\n\nbuckets = ["Soon"]\n\nrepos = [\n  "a/b",\n]\n\n# trailing\n')
+    write_repos(path, ["a/b", "c/d"])
+    assert path.read_text() == (
+        '# a comment\n\nbuckets = ["Soon"]\n\nrepos = [\n  "a/b",\n  "c/d",\n]\n\n# trailing\n')
