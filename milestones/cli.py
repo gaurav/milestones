@@ -111,18 +111,25 @@ def cmd_status(config, args):
         print("No open milestones in any configured repo.")
 
 
-def cmd_setup(config, args):
-    existing = {m["title"] for m in gh.api(f"repos/{args.repo}/milestones?state=all", paginate=True)}
-    for bucket in config["buckets"]:
-        if bucket in existing:
-            print(f"exists:  {bucket}")
-        else:
-            gh.api(f"repos/{args.repo}/milestones", method="POST", title=bucket)
-            print(f"created: {bucket}")
-
-
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
     return {m["title"]: m for m in gh.api(f"repos/{repo}/milestones?state={state}", paginate=True)}
+
+
+def cmd_setup(config, args):
+    existing = _milestones_by_title(args.repo)
+    for bucket in config["buckets"]:
+        milestone = existing.get(bucket)
+        if milestone is None:
+            gh.api(f"repos/{args.repo}/milestones", method="POST", title=bucket)
+            print(f"created:  {bucket}")
+        elif milestone["state"] != "open":
+            # A closed bucket is invisible to status and the triage menu, so
+            # "it exists" is not good enough for a repair command.
+            gh.api(f"repos/{args.repo}/milestones/{milestone['number']}", method="PATCH",
+                   state="open")
+            print(f"reopened: {bucket}")
+        else:
+            print(f"exists:   {bucket}")
 
 
 def cmd_rollover(config, args):
@@ -132,10 +139,14 @@ def cmd_rollover(config, args):
             sys.exit(f"No milestone '{title}' in {args.repo}. "
                      f"Milestones: {', '.join(sorted(by_title))}")
     src, dst = by_title[args.src], by_title[args.dst]
+    if dst["state"] != "open":
+        sys.exit(f"'{args.dst}' is closed; issues moved onto it would disappear from both "
+                 f"status and triage. Reopen it first.")
 
-    issues = gh.api(f"repos/{args.repo}/issues?milestone={src['number']}&state=open&per_page=100",
-                    paginate=True)
-    issues = [i for i in issues if "pull_request" not in i]
+    raw = gh.api(f"repos/{args.repo}/issues?milestone={src['number']}&state=open&per_page=100",
+                 paginate=True)
+    issues = [i for i in raw if "pull_request" not in i]
+    open_prs = len(raw) - len(issues)
     if issues:
         for issue in issues:
             print(f"  #{issue['number']} {issue['title']}")
@@ -151,9 +162,12 @@ def cmd_rollover(config, args):
         print(f"No open issues in '{args.src}'.")
 
     if args.close:
-        remaining = gh.api(f"repos/{args.repo}/milestones/{src['number']}")["open_issues"]
-        if remaining:
-            sys.exit(f"Not closing '{args.src}': still has {remaining} open issues.")
+        # Not re-reading the milestone's open_issues: it lags writes, and it counts
+        # the PRs we deliberately leave alone. We moved every open issue we saw, so
+        # only those PRs can stand in the way.
+        if open_prs:
+            sys.exit(f"Not closing '{args.src}': {open_prs} open pull request(s) still on it. "
+                     f"Move them by hand, or close it in the web UI.")
         gh.api(f"repos/{args.repo}/milestones/{src['number']}", method="PATCH", state="closed")
         print(f"closed '{args.src}'")
 
