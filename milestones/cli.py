@@ -157,31 +157,27 @@ def cmd_rollover(config, args):
         sys.exit(f"'{args.dst}' is closed; issues moved onto it would disappear from both "
                  f"status and triage. Reopen it first.")
 
-    raw = gh.api(f"repos/{args.repo}/issues?milestone={src['number']}&state=open&per_page=100",
-                 paginate=True)
-    issues = [i for i in raw if "pull_request" not in i]
-    open_prs = len(raw) - len(issues)
-    if issues:
-        for issue in issues:
-            print(f"  #{issue['number']} {issue['title']}")
-        answer = ask(f"Move {len(issues)} open issues from '{args.src}' to '{args.dst}' "
+    # The REST issues endpoint returns pull requests too, and they move the same way.
+    items = gh.api(f"repos/{args.repo}/issues?milestone={src['number']}&state=open&per_page=100",
+                   paginate=True)
+    if items:
+        for item in items:
+            print(f"  #{item['number']} {item['title']}"
+                  f"{' (PR)' if 'pull_request' in item else ''}")
+        answer = ask(f"Move {len(items)} open issues and PRs from '{args.src}' to '{args.dst}' "
                      f"in {args.repo}? [y/N] ")
         if answer.strip().lower() != "y":
             sys.exit("Aborted.")
-        for issue in issues:
-            gh.api(f"repos/{args.repo}/issues/{issue['number']}", method="PATCH",
+        for item in items:
+            gh.api(f"repos/{args.repo}/issues/{item['number']}", method="PATCH",
                    milestone=dst["number"])
-            print(f"moved #{issue['number']}")
+            print(f"moved #{item['number']}")
     else:
-        print(f"No open issues in '{args.src}'.")
+        print(f"Nothing open in '{args.src}'.")
 
     if args.close:
-        # Not re-reading the milestone's open_issues: it lags writes, and it counts
-        # the PRs we deliberately leave alone. We moved every open issue we saw, so
-        # only those PRs can stand in the way.
-        if open_prs:
-            sys.exit(f"Not closing '{args.src}': {open_prs} open pull request(s) still on it. "
-                     f"Move them by hand, or close it in the web UI.")
+        # Not re-reading the milestone's open_issues to confirm it is empty: that
+        # counter lags writes, and we just moved everything open off it.
         gh.api(f"repos/{args.repo}/milestones/{src['number']}", method="PATCH", state="closed")
         print(f"closed '{args.src}'")
 
