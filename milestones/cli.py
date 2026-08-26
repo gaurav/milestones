@@ -377,12 +377,25 @@ def cmd_check(config, args):
         walk_findings(config, findings)
 
 
-def date_choices(today: datetime.date) -> list[tuple[str, str, datetime.date]]:
+def favourite_date(typed: list[datetime.date]) -> datetime.date | None:
+    """The date typed most often this session; the most recent one wins a tie."""
+    if not typed:
+        return None
+    return max(set(typed), key=lambda d: (typed.count(d), len(typed) - typed[::-1].index(d)))
+
+
+def date_choices(today: datetime.date,
+                 favourite: datetime.date | None = None) -> list[tuple[str, str, datetime.date]]:
+    """The keyed dates on offer. The fourth slot is the far-off default until a
+    session types a date of its own, after which it offers that date back — the
+    same handful of milestones usually want the same day."""
     day = datetime.timedelta(days=1)
+    next_month = (today.replace(day=28) + day * 4).replace(day=1)
     return [("t", "today", today),
             ("m", "tomorrow", today + day),
             ("n", "next Monday", today + day * (7 - today.weekday())),
-            ("x", "in a month", today + day * 30)]
+            ("x", "start of next month", next_month) if favourite is None
+            else ("x", f"again, {favourite:%a}", favourite)]
 
 
 def set_due(repo: str, number: int, date: datetime.date) -> None:
@@ -415,8 +428,10 @@ def read_key(prompt: str) -> str:
 
 
 def walk_findings(config, findings: list[dict]) -> None:
-    dates = date_choices(datetime.date.today())
+    today = datetime.date.today()
+    typed: list[datetime.date] = []  # session-only; the "again" slot follows these
     for n, f in enumerate(findings, 1):
+        dates = date_choices(today, favourite_date(typed))
         repo, number, kind = f["repo"], f["number"], f["kind"]
         detail = f"  ({f['detail']})" if f["detail"] else ""
         count = issue_count(f["issues"])
@@ -468,15 +483,17 @@ def walk_findings(config, findings: list[dict]) -> None:
                                                             close=False))
                 break
             if key == "e" and kind in ("undated", "overdue"):
-                typed = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
-                if not typed:
+                answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
+                if not answer:
                     break
                 try:
-                    set_due(repo, number, datetime.date.fromisoformat(typed))
-                    break
+                    chosen = datetime.date.fromisoformat(answer)
                 except ValueError:
                     print("  Not a YYYY-MM-DD date.")
                     continue
+                typed.append(chosen)
+                set_due(repo, number, chosen)
+                break
             if key == "d" and kind == "empty":
                 if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() == "y":
                     gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")

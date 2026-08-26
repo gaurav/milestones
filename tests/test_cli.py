@@ -3,8 +3,8 @@ import datetime
 import pytest
 
 from milestones.cli import (
-    build_search_queries, date_choices, excerpt, load_config, milestone_problems, parse_repo,
-    sort_key,
+    build_search_queries, date_choices, excerpt, favourite_date, load_config,
+    milestone_problems, parse_repo, sort_key,
     write_repos,
 )
 
@@ -115,9 +115,30 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     assert problems("Needed later", None, open_issues=0) == []
 
 
-def test_date_choices_lands_on_the_next_monday():
+def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():
     monday = datetime.date(2026, 8, 24)
     for offset in range(7):  # every weekday resolves to the *following* Monday
         chosen = dict((label, d) for _, label, d in date_choices(monday + datetime.timedelta(offset)))
         assert chosen["next Monday"] == monday + datetime.timedelta(7), offset
         assert chosen["next Monday"].weekday() == 0
+        assert chosen["start of next month"] == datetime.date(2026, 9, 1), offset
+    # December has to roll the year over, and February is the short month.
+    assert dict((l, d) for _, l, d in date_choices(datetime.date(2026, 12, 31)))[
+        "start of next month"] == datetime.date(2027, 1, 1)
+    assert dict((l, d) for _, l, d in date_choices(datetime.date(2028, 2, 29)))[
+        "start of next month"] == datetime.date(2028, 3, 1)
+
+
+def test_date_choices_offers_back_the_session_favourite():
+    today, meeting = datetime.date(2026, 8, 24), datetime.date(2026, 9, 3)
+    key, label, date = date_choices(today, meeting)[-1]
+    assert (key, date) == ("x", meeting) and "Thu" in label  # 2026-09-03 is a Thursday
+    # The presets stay put; only the fourth slot follows the session.
+    assert date_choices(today, meeting)[:3] == date_choices(today)[:3]
+
+
+def test_favourite_date_prefers_the_most_used_then_the_most_recent():
+    a, b = datetime.date(2026, 9, 3), datetime.date(2026, 9, 10)
+    assert favourite_date([]) is None
+    assert favourite_date([a, b, a]) == a
+    assert favourite_date([a, b]) == b  # tie: whichever was typed last
