@@ -14,7 +14,7 @@ from pathlib import Path
 from . import gh
 
 EXAMPLE_CONFIG = """\
-buckets = ["Needed soon", "Needed later", "Not urgent"]
+buckets = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
 repos = [
   "gaurav/milestones",
   "NCATSTranslator/Babel",
@@ -33,7 +33,7 @@ def load_config() -> dict:
             config = tomllib.load(f)
     except FileNotFoundError:
         sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
-    config.setdefault("buckets", ["Needed soon", "Needed later", "Not urgent"])
+    config.setdefault("buckets", ["Needed soon", "Needed later", "Not urgent", "Upstream"])
     if not config.get("repos"):
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
     bad = [r for r in config["repos"] if r.count("/") != 1 or not all(r.split("/"))]

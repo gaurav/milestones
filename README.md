@@ -4,7 +4,8 @@ I have measured out my life with GitHub milestones
 
 A personal CLI for viewing and managing GitHub milestones across all my repositories.
 Milestones are the single source of truth: dated milestones for "this release"/"next release",
-plus standing undated buckets ("Soon", "Later", "Not urgent") that never close. Every issue's
+plus standing undated buckets ("Needed soon", "Needed later", "Not urgent", "Upstream" — for
+work that belongs in someone else's tracker) that never close. Every issue's
 bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
 complain in a comment if they disagree.
 
@@ -21,7 +22,7 @@ Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write t
 and they rewrite just the `repos` list):
 
 ```toml
-buckets = ["Needed soon", "Needed later", "Not urgent"]
+buckets = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
 
 repos = [
   "gaurav/milestones",
