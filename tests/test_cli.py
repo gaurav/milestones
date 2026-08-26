@@ -1,10 +1,11 @@
 import datetime
+import io
 
 import pytest
 
 from milestones.cli import (
-    build_search_queries, date_choices, excerpt, favourite_date, load_config,
-    milestone_problems, parse_repo, sort_key,
+    KINDS, build_search_queries, date_choices, excerpt, favourite_date, issue_count,
+    load_config, milestone_problems, parse_repo, print_findings, read_key, sort_key,
     write_repos,
 )
 
@@ -142,3 +143,37 @@ def test_favourite_date_prefers_the_most_used_then_the_most_recent():
     assert favourite_date([]) is None
     assert favourite_date([a, b, a]) == a
     assert favourite_date([a, b]) == b  # tie: whichever was typed last
+
+
+def test_issue_count_reads_naturally_and_stays_out_of_the_way():
+    assert [issue_count(n) for n in (0, 1, 42)] == ["(0 issues)", "(1 issue)", "(42 issues)"]
+    assert issue_count(None) == ""  # a whole-repo finding has no count to show
+
+
+def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("skip\n"))
+    assert read_key("choose: ") == "s"
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # closed stdin ends the walk
+    with pytest.raises(SystemExit):
+        read_key("choose: ")
+
+
+def finding(kind, repo, title, detail="", issues=0):
+    return {"kind": kind, "repo": repo, "title": title, "detail": detail, "issues": issues,
+            "url": f"https://github.com/{repo}/milestone/1", "number": 1}
+
+
+def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):
+    print_findings([
+        finding("rename", "owner/one", "Next release", issues=3),
+        finding("rename", "owner/a-much-longer-repo", "Later", issues=1),
+        finding("overdue", "owner/one", "v2.0", "due 2026-08-19, 4 still open", issues=12),
+    ])
+    out = capsys.readouterr().out
+    assert out.startswith("3 fixes across 2 repos.")
+    assert KINDS["rename"] in out and KINDS["overdue"] in out
+    # Same group, so the counts line up under each other whatever the repo name's length.
+    rename_lines = [l for l in out.splitlines() if "(3 issues)" in l or "(1 issue)" in l]
+    assert len(rename_lines) == 2
+    assert len({l.index("(") for l in rename_lines}) == 1
+    assert "  https://github.com/owner/one/milestone/1" in out  # a URL under every finding

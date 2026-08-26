@@ -18,8 +18,13 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
   reads back on the day you meant. Clearing one needs `due_on: null`, which `gh.api` can't
   send — use `echo '{"due_on":null}' | gh api -X PATCH ... --input -`.
-- Issue listings lag writes by a few seconds: a rollover immediately after another can see a
-  stale (empty) issue list. Rerunning works; not worth retry logic.
+- Issue listings lag writes by up to ~10s: a rollover straight after another, or a triage run
+  straight after filing an issue, can see a stale list. Rerunning works; not worth retry logic.
+
+`check -i` reads single keypresses, but falls back to whole lines when stdin is not a tty, so
+`printf 's\ns\ne\n2026-09-03\nq\n' | milestones check -i` drives it end to end. Its findings
+are collected once up front, so a title renamed mid-walk still shows its old name later in the
+same run.
 
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
