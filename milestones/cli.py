@@ -72,11 +72,11 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
     if not is_bucket and not due:
         problems.append(("undated", ""))
     if due and due < today and open_issues:
-        problems.append(("overdue", f"due {due}, {open_issues} open"))
+        problems.append(("overdue", f"due {due}, {open_issues} still open"))
     if closed_issues and not open_issues:
-        problems.append(("done", f"{closed_issues} closed, 0 open"))
+        problems.append(("done", f"all {closed_issues} closed"))
     if not closed_issues and not open_issues and not is_bucket:
-        problems.append(("empty", "no issues at all"))
+        problems.append(("empty", ""))
     return problems
 
 
@@ -172,18 +172,23 @@ def fetch_milestones(repos: list[str], fields: str) -> list[tuple[str, dict]]:
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    for repo, m in fetch_milestones(config["repos"], "issues(states: OPEN) { totalCount }"):
+    fields = ("open: issues(states: OPEN) { totalCount } "
+              "closed: issues(states: CLOSED) { totalCount }")
+    for repo, m in fetch_milestones(config["repos"], fields):
         due = m["dueOn"][:10] if m["dueOn"] else None
-        milestones.append((repo, m["title"], due, m["issues"]["totalCount"], m["url"]))
+        milestones.append((repo, m["title"], due, m["open"]["totalCount"],
+                           m["closed"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
 
     rows = []
-    for repo, title, due, count, url in milestones:
+    for repo, title, due, count, closed, url in milestones:
         flags = " ".join(filter(None, ["!OVERDUE" if due and due < today else "",
-                                       "(empty)" if count == 0 else ""]))
-        rows.append((repo, title, due or "—", count, flags, url))
+                                       # Empty means nothing was ever filed, not "all done".
+                                       "(empty)" if count == 0 and closed == 0 else "",
+                                       "(done)" if count == 0 and closed else ""]))
+        rows.append((repo, title, due or "—", count, closed, flags, url))
     if rows:
-        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "", "URL"))
+        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "", "URL"))
     else:
         print("No open milestones in any configured repo.")
 
@@ -287,8 +292,9 @@ def cmd_triage(config, args):
         if issue["body"]:
             print(f"  > {excerpt(issue['body'])}")
         for i, m in enumerate(choices, 1):
-            due = f" (due {m['due_on'][:10]})" if m["due_on"] else ""
-            print(f"  {i}) {m['title']}{due}")
+            due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
+            # REST open_issues counts PRs too, so this is a rough "how loaded is it" signal.
+            print(f"  {i}) {m['title']} ({m['open_issues']} open{due})")
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
 
@@ -311,6 +317,13 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
+def issue_count(issues: int | None) -> str:
+    """"(3 issues)", and nothing at all where a count makes no sense."""
+    if issues is None:
+        return ""
+    return f"({issues} issue{'' if issues == 1 else 's'})"
+
+
 def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
     fields = ("number open: issues(states: OPEN) { totalCount } "
@@ -323,12 +336,13 @@ def collect_findings(config) -> list[dict]:
                                                m["open"]["totalCount"], m["closed"]["totalCount"],
                                                config["buckets"], today):
             findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
-                             "url": m["url"], "number": m["number"]})
+                             "url": m["url"], "number": m["number"],
+                             "issues": m["open"]["totalCount"] + m["closed"]["totalCount"]})
     for repo, titles in seen.items():
         missing = [b for b in config["buckets"] if b not in titles]
         if missing:
             findings.append({"kind": "buckets", "repo": repo, "title": "(whole repo)",
-                             "detail": ", ".join(missing),
+                             "detail": ", ".join(missing), "issues": None,
                              "url": f"https://github.com/{repo}/milestones", "number": None})
     findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
     return findings
@@ -345,9 +359,11 @@ def print_findings(findings: list[dict]) -> None:
         # Repo and title get their own column so a repeat offender is obvious at a glance.
         repo_w = max(len(f["repo"]) for f in group)
         title_w = max(len(f["title"]) for f in group)
-        for f in group:
-            line = "  • %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
-                                       f["detail"])
+        counts = [issue_count(f["issues"]) for f in group]
+        count_w = max(len(c) for c in counts)
+        for count, f in zip(counts, group):
+            line = "  • %s  %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
+                                           count.ljust(count_w), f["detail"])
             print("%s\n    %s" % (line.rstrip(), f["url"]))
 
 
@@ -403,7 +419,9 @@ def walk_findings(config, findings: list[dict]) -> None:
     for n, f in enumerate(findings, 1):
         repo, number, kind = f["repo"], f["number"], f["kind"]
         detail = f"  ({f['detail']})" if f["detail"] else ""
-        print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}{detail}")
+        count = issue_count(f["issues"])
+        print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}"
+              f"{'  ' + count if count else ''}{detail}")
         print(f"  {f['url']}")
 
         def patch(**fields):

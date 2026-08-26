@@ -107,9 +107,9 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     # Two independent fixes: an undated milestone needs a date even if it also needs a name.
     assert kinds("Next release") == ["rename", "undated"]
     # A finished milestone is worth closing whether or not it is also overdue.
-    assert problems("v2.0", "2026-09-01", open_issues=0, closed_issues=3) == [
-        ("done", "3 closed, 0 open")]
-    assert problems("v2.0", "2026-08-19", open_issues=4) == [("overdue", "due 2026-08-19, 4 open")]
+    assert problems("v2.0", "2026-09-01", open_issues=0, closed_issues=3) == [("done", "all 3 closed")]
+    assert problems("v2.0", "2026-08-19", open_issues=4) == [
+        ("overdue", "due 2026-08-19, 4 still open")]
     assert kinds("v2.0", "2026-09-01", open_issues=0) == ["empty"]
     # Buckets are meant to sit empty between triage rounds.
     assert problems("Needed later", None, open_issues=0) == []

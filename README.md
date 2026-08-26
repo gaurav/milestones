@@ -35,7 +35,8 @@ repos = [
 ```sh
 uv run milestones status                        # the default command (bare `milestones` runs it):
                                                 # all open milestones across configured repos by
-                                                # due date; flags !OVERDUE and (empty), links each
+                                                # due date, with open and closed issue counts;
+                                                # flags !OVERDUE, (empty) and (done), links each
 uv run milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
                                                 # time and assign each to a milestone/bucket
 uv run milestones rollover OWNER/NAME FROM TO [--close]
