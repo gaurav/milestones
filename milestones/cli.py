@@ -97,7 +97,7 @@ def cmd_status(config, args):
     fragment = (
         "fragment ms on Repository { nameWithOwner "
         "milestones(states: OPEN, first: 50) { nodes { "
-        "title dueOn issues(states: OPEN) { totalCount } } } }"
+        "title url dueOn issues(states: OPEN) { totalCount } } } }"
     )
     aliases = " ".join(
         f'r{i}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") {{ ...ms }}'
@@ -111,16 +111,16 @@ def cmd_status(config, args):
         for m in repo_data["milestones"]["nodes"]:
             due = m["dueOn"][:10] if m["dueOn"] else None
             milestones.append((repo_data["nameWithOwner"], m["title"], due,
-                               m["issues"]["totalCount"]))
+                               m["issues"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
 
     rows = []
-    for repo, title, due, count in milestones:
+    for repo, title, due, count, url in milestones:
         flags = " ".join(filter(None, ["!OVERDUE" if due and due < today else "",
                                        "(empty)" if count == 0 else ""]))
-        rows.append((repo, title, due or "—", count, flags))
+        rows.append((repo, title, due or "—", count, flags, url))
     if rows:
-        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", ""))
+        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "", "URL"))
     else:
         print("No open milestones in any configured repo.")
 
@@ -275,7 +275,8 @@ def cmd_discover(config, args):
 
 def main():
     parser = argparse.ArgumentParser(prog="milestones", description=__doc__)
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
+    parser.set_defaults(command="status")
 
     sub.add_parser("status", help="all open milestones across configured repos, by due date")
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")

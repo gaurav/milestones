@@ -31,8 +31,9 @@ repos = [
 ## Commands
 
 ```sh
-uv run milestones status                        # all open milestones across configured repos,
-                                                # sorted by due date; flags !OVERDUE and (empty)
+uv run milestones status                        # the default command (bare `milestones` runs it):
+                                                # all open milestones across configured repos by
+                                                # due date; flags !OVERDUE and (empty), links each
 uv run milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
                                                 # time and assign each to a milestone/bucket
 uv run milestones rollover OWNER/NAME FROM TO [--close]
@@ -51,3 +52,12 @@ release time, roll what didn't make it into the next milestone instead of re-tri
 ```sh
 uv run pytest
 ```
+
+To get a `milestones` command on your PATH that always runs the code in this working tree:
+
+```sh
+uv tool install --editable .
+```
+
+Re-run it only if the dependencies or the entry point change; edits to the source take effect
+immediately.
