@@ -65,7 +65,7 @@ def test_excerpt_collapses_whitespace_and_truncates():
     assert excerpt("## Heading\n\nsome   body\ttext") == "## Heading some body text"
     assert excerpt(None) == ""
     long = excerpt("word " * 100)
-    assert len(long) == 201 and long.endswith("…")
+    assert len(long) <= 200 and long.endswith(" …")
 
 
 def test_parse_repo_accepts_urls_and_shorthand():

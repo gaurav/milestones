@@ -6,9 +6,11 @@ import os
 import re
 import sys
 import termios
+import textwrap
 import tomllib
 import tty
 import webbrowser
+from collections import Counter
 from pathlib import Path
 
 from . import gh
@@ -142,8 +144,7 @@ def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
 
 
 def excerpt(body: str | None, width: int = 200) -> str:
-    text = " ".join((body or "").split())
-    return text[:width] + ("…" if len(text) > width else "")
+    return textwrap.shorten(body or "", width, placeholder=" …")
 
 
 def print_table(rows: list[tuple], headers: tuple):
@@ -412,9 +413,9 @@ def cmd_check(config, args):
 
 def favourite_date(typed: list[datetime.date]) -> datetime.date | None:
     """The date typed most often this session; the most recent one wins a tie."""
-    if not typed:
-        return None
-    return max(set(typed), key=lambda d: (typed.count(d), len(typed) - typed[::-1].index(d)))
+    # max keeps the first of equal keys, so counting backwards breaks a tie in
+    # favour of the date typed most recently.
+    return max(reversed(typed), key=Counter(typed).__getitem__, default=None)
 
 
 def date_choices(today: datetime.date,
