@@ -465,7 +465,7 @@ def walk_findings(config, findings: list[dict]) -> None:
 
         prompt = "  " + "  ".join(f"[{key}] {label}" for key, label in options) + "  "
         while True:
-            key = read_key(prompt)
+            key = read_key(prompt).lower()
             if key == "q":
                 return
             if key == "s":
