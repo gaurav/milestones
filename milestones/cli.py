@@ -70,16 +70,20 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
                        buckets: list[str], today: str) -> list[tuple[str, str]]:
     """(kind, detail) for everything wrong with one open milestone."""
     problems = []
-    is_bucket = title in buckets
-    if not is_bucket and not (VERSION_RE.search(title) or DATE_RE.search(title)):
-        problems.append(("rename", ""))
-    if not is_bucket and not due:
-        problems.append(("undated", ""))
     if due and due < today and open_issues:
         problems.append(("overdue", f"due {due}, {open_issues} still open"))
-    if closed_issues and not open_issues and not is_bucket:
+    if title in buckets:
+        # A standing bucket is meant to be undated, named for itself, and empty
+        # between triage rounds — and closing one would hide it from status and
+        # triage. Running late is the only thing that can be wrong with one.
+        return problems
+    if not (VERSION_RE.search(title) or DATE_RE.search(title)):
+        problems.append(("rename", ""))
+    if not due:
+        problems.append(("undated", ""))
+    if closed_issues and not open_issues:
         problems.append(("done", f"all {closed_issues} closed"))
-    if not closed_issues and not open_issues and not is_bucket:
+    if not closed_issues and not open_issues:
         problems.append(("empty", ""))
     return problems
 
