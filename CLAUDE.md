@@ -35,6 +35,12 @@ are collected once up front and one milestone can raise several, so anything a w
 milestone has to be carried across to its other findings by hand (`walk_findings`'s `rename` and
 `gone`) — the list is never re-fetched mid-run.
 
+A closed standing bucket is invisible to `status` and to the `triage` menu, and only `setup`
+brings it back — so nothing here may close or delete one. That invariant is enforced in four
+places (`setup` reopens, `rollover` refuses both a closed destination and `--close` on a bucket,
+`check` skips buckets in its `done`, `empty`, `rename` and `undated` rules); add the guard when
+you add a path that could close a milestone.
+
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
 

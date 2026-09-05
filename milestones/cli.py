@@ -250,6 +250,11 @@ def cmd_rollover(config, args):
     if dst["state"] != "open":
         sys.exit(f"'{args.dst}' is closed; issues moved onto it would disappear from both "
                  f"status and triage. Reopen it first.")
+    if args.close and args.src in config["buckets"]:
+        # Every other path refuses to close a bucket; --close was the way round it.
+        sys.exit(f"'{args.src}' is a standing bucket, so it outlives the issues on it. "
+                 f"Closing it would hide it from status and triage until setup reopened it; "
+                 f"roll it over without --close.")
 
     # The REST issues endpoint returns pull requests too, and they move the same way.
     items = gh.api(f"repos/{args.repo}/issues?milestone={src['number']}&state=open&per_page=100",
