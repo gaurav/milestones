@@ -167,9 +167,11 @@ def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tup
         for i, r in enumerate(repos)
     )
     data = gh.graphql(f"{fragment}\nquery {{ {aliases} }}")
-    return ([repo["nameWithOwner"] for repo in data.values()],
+    # A repo that can't be resolved comes back null; gh.graphql has already warned.
+    found = [repo for repo in data.values() if repo]
+    return ([repo["nameWithOwner"] for repo in found],
             [(repo["nameWithOwner"], m)
-             for repo in data.values() for m in repo["milestones"]["nodes"]])
+             for repo in found for m in repo["milestones"]["nodes"]])
 
 
 def cmd_status(config, args):
