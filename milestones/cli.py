@@ -155,8 +155,10 @@ def print_table(rows: list[tuple], headers: tuple):
 # --- commands ---------------------------------------------------------------
 
 
-def fetch_milestones(repos: list[str], fields: str) -> list[tuple[str, dict]]:
-    """(repo, milestone) for every open milestone, one GraphQL round trip."""
+def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tuple[str, dict]]]:
+    """GitHub's own name for each repo, and (repo, milestone) for every open
+    milestone, in one GraphQL round trip. The names follow renames and fix up
+    the config's capitalisation, so callers should key off them, not off `repos`."""
     # ponytail: first 50 open milestones per repo, paginate if a repo exceeds it.
     fragment = ("fragment ms on Repository { nameWithOwner "
                 f"milestones(states: OPEN, first: 50) {{ nodes {{ title url dueOn {fields} }} }} }}")
@@ -165,8 +167,9 @@ def fetch_milestones(repos: list[str], fields: str) -> list[tuple[str, dict]]:
         for i, r in enumerate(repos)
     )
     data = gh.graphql(f"{fragment}\nquery {{ {aliases} }}")
-    return [(repo["nameWithOwner"], m)
-            for repo in data.values() for m in repo["milestones"]["nodes"]]
+    return ([repo["nameWithOwner"] for repo in data.values()],
+            [(repo["nameWithOwner"], m)
+             for repo in data.values() for m in repo["milestones"]["nodes"]])
 
 
 def cmd_status(config, args):
@@ -174,7 +177,7 @@ def cmd_status(config, args):
     milestones = []
     fields = ("open: issues(states: OPEN) { totalCount } "
               "closed: issues(states: CLOSED) { totalCount }")
-    for repo, m in fetch_milestones(config["repos"], fields):
+    for repo, m in fetch_milestones(config["repos"], fields)[1]:
         due = m["dueOn"][:10] if m["dueOn"] else None
         milestones.append((repo, m["title"], due, m["open"]["totalCount"],
                            m["closed"]["totalCount"], m["url"]))
@@ -328,10 +331,11 @@ def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
     fields = ("number open: issues(states: OPEN) { totalCount } "
               "closed: issues(states: CLOSED) { totalCount }")
-    seen: dict[str, set] = {r: set() for r in config["repos"]}
+    repos, milestones = fetch_milestones(config["repos"], fields)
+    seen: dict[str, set] = {r: set() for r in repos}
     findings = []
-    for repo, m in fetch_milestones(config["repos"], fields):
-        seen.setdefault(repo, set()).add(m["title"])
+    for repo, m in milestones:
+        seen[repo].add(m["title"])
         for kind, detail in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
                                                m["open"]["totalCount"], m["closed"]["totalCount"],
                                                config["buckets"], today):
