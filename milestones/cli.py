@@ -155,23 +155,44 @@ def print_table(rows: list[tuple], headers: tuple):
 # --- commands ---------------------------------------------------------------
 
 
+def after(cursor: str | None) -> str:
+    """The `after:` argument for a paginated connection, empty for the first page."""
+    return f', after: "{cursor}"' if cursor else ""
+
+
 def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tuple[str, dict]]]:
     """GitHub's own name for each repo, and (repo, milestone) for every open
-    milestone, in one GraphQL round trip. The names follow renames and fix up
-    the config's capitalisation, so callers should key off them, not off `repos`."""
-    # ponytail: first 50 open milestones per repo, paginate if a repo exceeds it.
-    fragment = ("fragment ms on Repository { nameWithOwner "
-                f"milestones(states: OPEN, first: 50) {{ nodes {{ title url dueOn {fields} }} }} }}")
-    aliases = " ".join(
-        f'r{i}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") {{ ...ms }}'
-        for i, r in enumerate(repos)
-    )
-    data = gh.graphql(f"{fragment}\nquery {{ {aliases} }}")
-    # A repo that can't be resolved comes back null; gh.graphql has already warned.
-    found = [repo for repo in data.values() if repo]
-    return ([repo["nameWithOwner"] for repo in found],
-            [(repo["nameWithOwner"], m)
-             for repo in found for m in repo["milestones"]["nodes"]])
+    milestone. The names follow renames and fix up the config's capitalisation,
+    so callers should key off them, not off `repos`.
+
+    One aliased round trip per page: every repo is queried together, and only the
+    repos that still have milestones left go into the next trip, so the usual case
+    of nobody being near a full page costs exactly one query.
+    """
+    names: dict[str, str] = {}
+    milestones = []
+    pages: dict[str, str | None] = {r: None for r in repos}  # repo -> next page's cursor
+    while pages:
+        alias_of = {f"r{i}": repo for i, repo in enumerate(pages)}
+        aliases = " ".join(
+            f'{alias}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") '
+            f"{{ nameWithOwner milestones(states: OPEN, first: 100{after(pages[r])}) "
+            f"{{ pageInfo {{ hasNextPage endCursor }} "
+            f"nodes {{ title url dueOn {fields} }} }} }}"
+            for alias, r in alias_of.items()
+        )
+        data = gh.graphql(f"query {{ {aliases} }}")
+        pages = {}
+        for alias, repo in alias_of.items():
+            node = data[alias]
+            if node is None:  # deleted, private, or a typo; gh.graphql has warned
+                continue
+            names[repo] = node["nameWithOwner"]
+            milestones += [(node["nameWithOwner"], m) for m in node["milestones"]["nodes"]]
+            page = node["milestones"]["pageInfo"]
+            if page["hasNextPage"]:
+                pages[repo] = page["endCursor"]
+    return list(names.values()), milestones
 
 
 def cmd_status(config, args):
@@ -572,20 +593,27 @@ def cmd_discover(config, args):
     configured = set(config["repos"])
     rows = set()  # transferred repos can echo under their old owner; dedupe
     for owner in owners_of(config["repos"]):
-        # ponytail: first 100 repos per owner, add pagination when an owner exceeds it.
-        data = gh.graphql(
-            f'query {{ repositoryOwner(login: "{owner}") {{ '
-            f"repositories(first: 100, isFork: false, ownerAffiliations: OWNER, "
-            f"orderBy: {{field: PUSHED_AT, direction: DESC}}) {{ nodes {{ "
-            f"nameWithOwner isArchived issues(states: OPEN) {{ totalCount }} "
-            f"milestones(states: OPEN) {{ totalCount }} }} }} }} }}"
-        )
-        if data["repositoryOwner"] is None:
-            sys.exit(f"No GitHub user or organisation '{owner}' — check the repos in your config.")
-        for r in data["repositoryOwner"]["repositories"]["nodes"]:
-            issues, ms = r["issues"]["totalCount"], r["milestones"]["totalCount"]
-            if not r["isArchived"] and r["nameWithOwner"] not in configured and (issues or ms):
-                rows.add((issues, ms, r["nameWithOwner"]))
+        cursor = None
+        while True:
+            data = gh.graphql(
+                f'query {{ repositoryOwner(login: "{owner}") {{ '
+                f"repositories(first: 100, isFork: false, ownerAffiliations: OWNER, "
+                f"orderBy: {{field: PUSHED_AT, direction: DESC}}{after(cursor)}) {{ "
+                f"pageInfo {{ hasNextPage endCursor }} nodes {{ "
+                f"nameWithOwner isArchived issues(states: OPEN) {{ totalCount }} "
+                f"milestones(states: OPEN) {{ totalCount }} }} }} }} }}"
+            )
+            if data["repositoryOwner"] is None:
+                sys.exit(f"No GitHub user or organisation '{owner}' — "
+                         f"check the repos in your config.")
+            repositories = data["repositoryOwner"]["repositories"]
+            for r in repositories["nodes"]:
+                issues, ms = r["issues"]["totalCount"], r["milestones"]["totalCount"]
+                if not r["isArchived"] and r["nameWithOwner"] not in configured and (issues or ms):
+                    rows.add((issues, ms, r["nameWithOwner"]))
+            if not repositories["pageInfo"]["hasNextPage"]:
+                break
+            cursor = repositories["pageInfo"]["endCursor"]
     if rows:
         print_table([(name, issues, ms) for issues, ms, name in sorted(rows, reverse=True)],
                     ("REPO NOT IN CONFIG", "OPEN ISSUES", "OPEN MILESTONES"))
