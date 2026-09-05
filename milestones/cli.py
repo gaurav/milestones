@@ -463,6 +463,9 @@ def read_key(prompt: str) -> str:
     return key
 
 
+STAY, QUIT = "stay", "quit"  # what an option's action asks the walk to do next
+
+
 def walk_findings(config, findings: list[dict]) -> None:
     today = datetime.date.today()
     typed: list[datetime.date] = []  # session-only; the "again" slot follows these
@@ -493,88 +496,89 @@ def walk_findings(config, findings: list[dict]) -> None:
             if new in config["buckets"]:
                 gone.add((repo, number))
 
+        # Anything needing more than a keypress asks a second question; blank skips.
+        def rename_typed():
+            title = ask("  new title (blank to skip): ").strip()
+            if title:
+                rename(title)
+
+        def roll_over():
+            dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
+            if dst:
+                try:
+                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
+                                                            dst=dst, close=False))
+                except SystemExit as exit:
+                    # rollover is also a top-level command, so it exits on a bad title
+                    # or a declined confirmation; that should back out of this one
+                    # finding, not the whole walk. Ctrl-C lands here too — press it
+                    # again at the next prompt to leave.
+                    print(f"  {exit}")
+
+        def type_date():
+            answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
+            if not answer:
+                return None
+            try:
+                chosen = datetime.date.fromisoformat(answer)
+            except ValueError:
+                print("  Not a YYYY-MM-DD date.")
+                return STAY
+            typed.append(chosen)
+            set_due(repo, number, chosen)
+
+        def delete_it():
+            if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() != "y":
+                return STAY
+            gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
+            print("  → deleted")
+            gone.add((repo, number))
+
+        def close_it():
+            patch(state="closed")
+            print("  → closed")
+            gone.add((repo, number))
+
+        def open_it():
+            webbrowser.open(f["url"])
+            return STAY
+
+        # (key, label, what it does). One table, so a key can't be offered without a
+        # handler or handled without being offered; an action returns STAY to ask
+        # again and QUIT to leave the walk, and anything else moves on.
         options = []
         if kind == "rename":
-            options += [(str(i), f"→ {b}") for i, b in enumerate(config["buckets"], 1)]
-            options.append(("r", "rename to…"))
+            options += [(str(i), f"→ {b}", lambda b=b: rename(b))
+                        for i, b in enumerate(config["buckets"], 1)]
+            options.append(("r", "rename to…", rename_typed))
         if kind in ("undated", "overdue"):
-            options += [(key, f"{label} {date.isoformat()}") for key, label, date in dates]
-            options.append(("e", "another date…"))
+            options += [(key, f"{label} {date.isoformat()}", lambda d=date: set_due(repo, number, d))
+                        for key, label, date in dates]
+            options.append(("e", "another date…", type_date))
         if kind == "overdue":
-            options.append(("r", "roll its issues over…"))
+            options.append(("r", "roll its issues over…", roll_over))
         if kind == "done":
-            options.append(("c", "close it"))
+            options.append(("c", "close it", close_it))
         if kind == "empty":
-            options.append(("d", "delete it"))
+            options.append(("d", "delete it", delete_it))
         if kind == "buckets":
-            options.append(("b", "create the missing buckets"))
-        options += [("o", "open"), ("s", "skip"), ("q", "quit")]
+            options.append(("b", "create the missing buckets",
+                            lambda: cmd_setup(config, argparse.Namespace(repo=repo))))
+        options += [("o", "open", open_it), ("s", "skip", lambda: None),
+                    ("q", "quit", lambda: QUIT)]
 
-        prompt = "  " + "  ".join(f"[{key}] {label}" for key, label in options) + "  "
+        actions = {key: action for key, _, action in options}
+        prompt = "  " + "  ".join(f"[{key}] {label}" for key, label, _ in options) + "  "
         while True:
-            key = read_key(prompt).lower()
-            if key == "q":
+            action = actions.get(read_key(prompt).lower())
+            if action is None:
+                print("  Not one of those.")
+                continue
+            outcome = action()
+            if outcome == QUIT:
                 return
-            if key == "s":
+            if outcome != STAY:
                 break
-            if key == "o":
-                webbrowser.open(f["url"])
-                continue
-            # Anything needing more than a keypress asks a second question; blank skips.
-            if key == "r" and kind == "rename":
-                title = ask("  new title (blank to skip): ").strip()
-                if title:
-                    rename(title)
-                break
-            if key == "r" and kind == "overdue":
-                dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
-                if dst:
-                    try:
-                        cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
-                                                                dst=dst, close=False))
-                    except SystemExit as exit:
-                        # rollover is also a top-level command, so it exits on a bad
-                        # title or a declined confirmation; that should back out of
-                        # this one finding, not the whole walk. Ctrl-C lands here too
-                        # — press it again at the next prompt to leave.
-                        print(f"  {exit}")
-                break
-            if key == "e" and kind in ("undated", "overdue"):
-                answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
-                if not answer:
-                    break
-                try:
-                    chosen = datetime.date.fromisoformat(answer)
-                except ValueError:
-                    print("  Not a YYYY-MM-DD date.")
-                    continue
-                typed.append(chosen)
-                set_due(repo, number, chosen)
-                break
-            if key == "d" and kind == "empty":
-                if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() == "y":
-                    gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
-                    print("  → deleted")
-                    gone.add((repo, number))
-                    break
-                continue
-            if key == "c" and kind == "done":
-                patch(state="closed")
-                print("  → closed")
-                gone.add((repo, number))
-                break
-            if key == "b" and kind == "buckets":
-                cmd_setup(config, argparse.Namespace(repo=repo))
-                break
-            if kind == "rename" and key.isdigit() and 1 <= int(key) <= len(config["buckets"]):
-                rename(config["buckets"][int(key) - 1])
-                break
-            if kind in ("undated", "overdue"):
-                chosen = next((d for k, _, d in dates if k == key), None)
-                if chosen:
-                    set_due(repo, number, chosen)
-                    break
-            print("  Not one of those.")
 
 
 def cmd_add(config, args):
