@@ -215,10 +215,16 @@ def cmd_status(config, args):
 
     rows = []
     for repo, title, due, count, closed, url in milestones:
-        flags = " ".join(filter(None, ["!OVERDUE" if due and due < today else "",
-                                       # Empty means nothing was ever filed, not "all done".
-                                       "(empty)" if count == 0 and closed == 0 else "",
-                                       "(done)" if count == 0 and closed else ""]))
+        # `check` owns what is wrong with a milestone; status shows the three of its
+        # kinds that read as a state the milestone is in rather than a fix to make,
+        # and so agrees with `check` about standing buckets and about a past-due
+        # milestone with nothing left open. Empty means nothing was ever filed on it,
+        # not "all done".
+        kinds = {kind for kind, _ in milestone_problems(title, due, count, closed,
+                                                        config["buckets"], today)}
+        flags = " ".join(flag for kind, flag in (("overdue", "!OVERDUE"),
+                                                 ("empty", "(empty)"), ("done", "(done)"))
+                         if kind in kinds)
         rows.append((repo, title, due or "—", count, closed, flags, url))
     if rows:
         print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "", "URL"))
