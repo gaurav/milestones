@@ -632,34 +632,39 @@ def cmd_discover(config, args):
 
 def main():
     parser = argparse.ArgumentParser(prog="milestones", description=__doc__)
-    sub = parser.add_subparsers(dest="command")
-    parser.set_defaults(command="status")
+    sub = parser.add_subparsers()
+    parser.set_defaults(func=cmd_status)  # bare `milestones` is `milestones status`
 
-    sub.add_parser("status", help="all open milestones across configured repos, by due date")
+    sub.add_parser("status", help="all open milestones across configured repos, by due date"
+                   ).set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
+    triage.set_defaults(func=cmd_triage)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
     rollover.add_argument("src", metavar="FROM", help="source milestone title")
     rollover.add_argument("dst", metavar="TO", help="destination milestone title")
     rollover.add_argument("--close", action="store_true", help="close FROM once empty")
+    rollover.set_defaults(func=cmd_rollover)
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
+    setup.set_defaults(func=cmd_setup)
     check = sub.add_parser("check",
                            help="milestones that need renaming, dating, closing or rolling over")
     check.add_argument("-i", "--interactive", action="store_true",
                        help="walk the findings one by one and fix them")
+    check.set_defaults(func=cmd_check)
     add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
     add.add_argument("repo", metavar="REPO")
+    add.set_defaults(func=cmd_add)
     remove = sub.add_parser("remove", help="stop tracking a repo")
     remove.add_argument("repo", metavar="REPO")
-    sub.add_parser("discover", help="repos with issues/milestones missing from the config")
+    remove.set_defaults(func=cmd_remove)
+    sub.add_parser("discover", help="repos with issues/milestones missing from the config"
+                   ).set_defaults(func=cmd_discover)
 
     args = parser.parse_args()
-    config = load_config()
-    {"status": cmd_status, "triage": cmd_triage, "rollover": cmd_rollover,
-     "setup": cmd_setup, "discover": cmd_discover, "add": cmd_add, "check": cmd_check,
-     "remove": cmd_remove}[args.command](config, args)
+    args.func(load_config(), args)
 
 
 if __name__ == "__main__":
