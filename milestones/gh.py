@@ -32,8 +32,11 @@ def api(path: str, method: str = "GET", paginate: bool = False, **fields):
     if not out.strip():
         return None
     data = json.loads(out)
-    if paginate:  # --slurp wraps each page in an outer list
-        return [item for page in data for item in page]
+    if paginate:
+        # --slurp wraps each page in an outer list; a search page is a dict around
+        # its "items" rather than a list of results in its own right.
+        return [item for page in data
+                for item in (page["items"] if isinstance(page, dict) else page)]
     return data
 
 
@@ -61,7 +64,4 @@ def search_issues(query: str) -> list[dict]:
     # ponytail: GitHub caps search itself at 1000 results per query; the caller
     # splits by repo, so no single query has come near that.
     path = f"search/issues?q={quote(query)}&sort=updated&advanced_search=true&per_page=100"
-    # Not api(paginate=True): that flattens pages that are lists, and search pages
-    # are dicts wrapping an "items" list.
-    pages = json.loads(_run(["api", "--paginate", "--slurp", path]))
-    return [item for page in pages for item in page["items"]]
+    return api(path, paginate=True) or []

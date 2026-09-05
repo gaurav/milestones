@@ -22,7 +22,7 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
   `gh.graphql`'s `partial_ok`.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
-  `items`), not a list, so `gh.api(paginate=True)`'s flattening does not apply.
+  `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
   reads back on the day you meant. Clearing one needs `due_on: null`, which `gh.api` can't
   send — use `echo '{"due_on":null}' | gh api -X PATCH ... --input -`.
