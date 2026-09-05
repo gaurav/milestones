@@ -434,9 +434,12 @@ def read_key(prompt: str) -> str:
 def walk_findings(config, findings: list[dict]) -> None:
     today = datetime.date.today()
     typed: list[datetime.date] = []  # session-only; the "again" slot follows these
+    gone: set[tuple[str, int]] = set()  # deleted, closed, or now a standing bucket
     for n, f in enumerate(findings, 1):
         dates = date_choices(today, favourite_date(typed))
         repo, number, kind = f["repo"], f["number"], f["kind"]
+        if (repo, number) in gone:
+            continue
         detail = f"  ({f['detail']})" if f["detail"] else ""
         count = issue_count(f["issues"])
         print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}"
@@ -445,6 +448,18 @@ def walk_findings(config, findings: list[dict]) -> None:
 
         def patch(**fields):
             gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", **fields)
+
+        def rename(new: str) -> None:
+            # Findings were collected up front and one milestone can raise several,
+            # so carry the new title across to the rest — and drop them altogether
+            # once it has become a standing bucket, where they no longer apply.
+            patch(title=new)
+            print(f"  → renamed to '{new}'")
+            for other in findings:
+                if (other["repo"], other["number"]) == (repo, number):
+                    other["title"] = new
+            if new in config["buckets"]:
+                gone.add((repo, number))
 
         options = []
         if kind == "rename":
@@ -477,8 +492,7 @@ def walk_findings(config, findings: list[dict]) -> None:
             if key == "r" and kind == "rename":
                 title = ask("  new title (blank to skip): ").strip()
                 if title:
-                    patch(title=title)
-                    print(f"  → renamed to '{title}'")
+                    rename(title)
                 break
             if key == "r" and kind == "overdue":
                 dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
@@ -509,19 +523,19 @@ def walk_findings(config, findings: list[dict]) -> None:
                 if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() == "y":
                     gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
                     print("  → deleted")
+                    gone.add((repo, number))
                     break
                 continue
             if key == "c" and kind == "done":
                 patch(state="closed")
                 print("  → closed")
+                gone.add((repo, number))
                 break
             if key == "b" and kind == "buckets":
                 cmd_setup(config, argparse.Namespace(repo=repo))
                 break
             if kind == "rename" and key.isdigit() and 1 <= int(key) <= len(config["buckets"]):
-                title = config["buckets"][int(key) - 1]
-                patch(title=title)
-                print(f"  → renamed to '{title}'")
+                rename(config["buckets"][int(key) - 1])
                 break
             if kind in ("undated", "overdue"):
                 chosen = next((d for k, _, d in dates if k == key), None)

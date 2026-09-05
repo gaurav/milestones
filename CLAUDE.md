@@ -11,6 +11,9 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - Milestone writes are REST-only; no GraphQL mutations exist. Reads are fine in GraphQL.
 - GraphQL `repositories` defaults `ownerAffiliations` to include collaborator repos — pass
   `ownerAffiliations: OWNER`. Transferred repos can still echo under their old owner; dedupe.
+- `repository(owner:, name:)` follows renames and normalises case, so the `nameWithOwner` coming
+  back need not match the config's spelling. Key anything per-repo off the returned name, never
+  off the configured string — `fetch_milestones` returns the names for exactly that reason.
 - A milestone's `open_issues` counts **pull requests** too, so it never agrees with an
   issues-only listing; don't use it as an "is this empty" check.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
@@ -23,8 +26,9 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 
 `check -i` reads single keypresses, but falls back to whole lines when stdin is not a tty, so
 `printf 's\ns\ne\n2026-09-03\nq\n' | milestones check -i` drives it end to end. Its findings
-are collected once up front, so a title renamed mid-walk still shows its old name later in the
-same run.
+are collected once up front and one milestone can raise several, so anything a walk does to a
+milestone has to be carried across to its other findings by hand (`walk_findings`'s `rename` and
+`gone`) — the list is never re-fetched mid-run.
 
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
