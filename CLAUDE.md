@@ -38,12 +38,17 @@ milestone has to be carried across to its other findings by hand (`walk_findings
 A closed standing bucket is invisible to `status` and to the `triage` menu, and only `setup`
 brings it back — so nothing here may close or delete one. That invariant is enforced in four
 places (`setup` reopens, `rollover` refuses both a closed destination and `--close` on a bucket,
-`check` skips buckets in its `done`, `empty`, `rename` and `undated` rules); add the guard when
-you add a path that could close a milestone.
+and `milestone_problems` returns early for a bucket, so `check` never raises a `done`, `empty`,
+`rename` or `undated` finding against one); add the guard when you add a path that could close a
+milestone.
 
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
-the standing buckets for exercising `rollover`/`triage`. Tests (`uv run pytest`) cover only the
+the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its
+only milestones are the four buckets, and a bucket raises nothing but `overdue`. To exercise the
+walk's write paths, create a scratch milestone with no due date and no issues — that one milestone
+raises `rename`, `undated` and `empty` together, so a single walk reaches the rename, the date and
+the delete prompts, and `[d]` clears it up at the end. Tests (`uv run pytest`) cover only the
 pure functions; keep it that way rather than mocking `gh`.
