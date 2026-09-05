@@ -15,7 +15,12 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   back need not match the config's spelling. Key anything per-repo off the returned name, never
   off the configured string — `fetch_milestones` returns the names for exactly that reason.
 - A milestone's `open_issues` counts **pull requests** too, so it never agrees with an
-  issues-only listing; don't use it as an "is this empty" check.
+  issues-only listing; don't use it as an "is this empty" check. The `triage` menu shows it
+  anyway, on purpose — a PR on a milestone is work sitting on that milestone.
+- `gh api graphql` exits **nonzero on any GraphQL error**, including a partial one, but still
+  prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
+  where one repo is gone therefore looks like total failure unless you keep that stdout; see
+  `gh.graphql`'s `partial_ok`.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list, so `gh.api(paginate=True)`'s flattening does not apply.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it

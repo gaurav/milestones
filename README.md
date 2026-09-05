@@ -49,7 +49,8 @@ milestones discover                      # repos owned by your configured owners
                                          # issues/milestones but aren't in the config yet
 milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
-                                         # roll over, and repos missing their buckets.
+                                         # roll over, and repos with a standing bucket
+                                         # missing or closed.
                                          # -i then walks the list and applies your answers
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config

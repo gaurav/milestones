@@ -58,7 +58,7 @@ KINDS = {
     "overdue": "Roll over or re-date — past due with work still open",
     "done": "Close — every issue on it is closed",
     "empty": "Delete or fill — nothing has ever been filed against it",
-    "buckets": "Run setup — the repo is missing standing buckets",
+    "buckets": "Run setup — the repo has no open milestone for these standing buckets",
 }
 
 
@@ -319,7 +319,8 @@ def cmd_triage(config, args):
             print(f"  > {excerpt(issue['body'])}")
         for i, m in enumerate(choices, 1):
             due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
-            # REST open_issues counts PRs too, so this is a rough "how loaded is it" signal.
+            # REST open_issues counts PRs as well as issues, which is what we want here:
+            # both are work sitting on that milestone.
             print(f"  {i}) {m['title']} ({m['open_issues']} open{due})")
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
