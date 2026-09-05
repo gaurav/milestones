@@ -73,7 +73,7 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
         problems.append(("undated", ""))
     if due and due < today and open_issues:
         problems.append(("overdue", f"due {due}, {open_issues} still open"))
-    if closed_issues and not open_issues:
+    if closed_issues and not open_issues and not is_bucket:
         problems.append(("done", f"all {closed_issues} closed"))
     if not closed_issues and not open_issues and not is_bucket:
         problems.append(("empty", ""))

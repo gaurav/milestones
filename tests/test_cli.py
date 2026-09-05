@@ -112,8 +112,10 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     assert problems("v2.0", "2026-08-19", open_issues=4) == [
         ("overdue", "due 2026-08-19, 4 still open")]
     assert kinds("v2.0", "2026-09-01", open_issues=0) == ["empty"]
-    # Buckets are meant to sit empty between triage rounds.
+    # Buckets are meant to sit empty between triage rounds, and to outlive the
+    # issues they held: closing one hides it from status and triage.
     assert problems("Needed later", None, open_issues=0) == []
+    assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
 
 
 def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():
