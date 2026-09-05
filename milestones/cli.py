@@ -483,8 +483,15 @@ def walk_findings(config, findings: list[dict]) -> None:
             if key == "r" and kind == "overdue":
                 dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
                 if dst:
-                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"], dst=dst,
-                                                            close=False))
+                    try:
+                        cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
+                                                                dst=dst, close=False))
+                    except SystemExit as exit:
+                        # rollover is also a top-level command, so it exits on a bad
+                        # title or a declined confirmation; that should back out of
+                        # this one finding, not the whole walk. Ctrl-C lands here too
+                        # — press it again at the next prompt to leave.
+                        print(f"  {exit}")
                 break
             if key == "e" and kind in ("undated", "overdue"):
                 answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
