@@ -167,7 +167,7 @@ def after(cursor: str | None) -> str:
     return f', after: "{cursor}"' if cursor else ""
 
 
-def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tuple[str, dict]]]:
+def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]]]:
     """GitHub's own name for each repo, and (repo, milestone) for every open
     milestone. The names follow renames and fix up the config's capitalisation,
     so callers should key off them, not off `repos`.
@@ -185,7 +185,9 @@ def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tup
             f'{alias}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") '
             f"{{ nameWithOwner milestones(states: OPEN, first: 100{after(pages[r])}) "
             f"{{ pageInfo {{ hasNextPage endCursor }} "
-            f"nodes {{ title url dueOn {fields} }} }} }}"
+            f"nodes {{ title url dueOn number "
+            f"open: issues(states: OPEN) {{ totalCount }} "
+            f"closed: issues(states: CLOSED) {{ totalCount }} }} }} }}"
             for alias, r in alias_of.items()
         )
         data = gh.graphql(f"query {{ {aliases} }}")
@@ -205,9 +207,7 @@ def fetch_milestones(repos: list[str], fields: str) -> tuple[list[str], list[tup
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    fields = ("open: issues(states: OPEN) { totalCount } "
-              "closed: issues(states: CLOSED) { totalCount }")
-    for repo, m in fetch_milestones(config["repos"], fields)[1]:
+    for repo, m in fetch_milestones(config["repos"])[1]:
         due = m["dueOn"][:10] if m["dueOn"] else None
         milestones.append((repo, m["title"], due, m["open"]["totalCount"],
                            m["closed"]["totalCount"], m["url"]))
@@ -227,7 +227,9 @@ def cmd_status(config, args):
 
 
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
-    return {m["title"]: m for m in gh.api(f"repos/{repo}/milestones?state={state}", paginate=True)}
+    return {m["title"]: m
+            for m in gh.api(f"repos/{repo}/milestones?state={state}&per_page=100",
+                            paginate=True)}
 
 
 def cmd_setup(config, args):
@@ -288,12 +290,6 @@ def cmd_rollover(config, args):
         print(f"closed '{args.src}'")
 
 
-def _milestone_menu(config, repo: str) -> list[dict]:
-    open_ms = [m for m in _milestones_by_title(repo, state="open").values()]
-    open_ms.sort(key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
-    return open_ms
-
-
 def _norm_issue(issue: dict, repo: str) -> dict:
     return {"repo": repo, "number": issue["number"], "title": issue["title"],
             "body": issue["body"], "labels": [l["name"] for l in issue["labels"]],
@@ -320,7 +316,9 @@ def cmd_triage(config, args):
     for n, issue in enumerate(issues, 1):
         repo = issue["repo"]
         if repo not in menus:
-            menus[repo] = _milestone_menu(config, repo)
+            menus[repo] = sorted(
+                _milestones_by_title(repo, state="open").values(),
+                key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
         choices = menus[repo]
 
         print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  (updated {issue['updated'][:10]})")
@@ -365,9 +363,7 @@ def issue_count(issues: int | None) -> str:
 
 def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
-    fields = ("number open: issues(states: OPEN) { totalCount } "
-              "closed: issues(states: CLOSED) { totalCount }")
-    repos, milestones = fetch_milestones(config["repos"], fields)
+    repos, milestones = fetch_milestones(config["repos"])
     seen: dict[str, set] = {r: set() for r in repos}
     findings = []
     for repo, m in milestones:
