@@ -15,8 +15,10 @@ Requires Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and an authenticated
 [`gh`](https://cli.github.com/) (all API calls go through it; there is no other auth).
 
 ```sh
-uv sync
+uv tool install --editable .
 ```
+
+That puts a `milestones` command on your PATH running the code in this working tree, so edits to the source take effect immediately; re-run it only if the dependencies or the entry point change. To run it out of the checkout without installing, prefix every command below with `uv run`.
 
 Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write to it,
 and they rewrite just the `repos` list):
@@ -33,25 +35,25 @@ repos = [
 ## Commands
 
 ```sh
-uv run milestones status                        # the default command (bare `milestones` runs it):
-                                                # all open milestones across configured repos by
-                                                # due date, with open and closed issue counts;
-                                                # flags !OVERDUE, (empty) and (done), links each
-uv run milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
-                                                # time and assign each to a milestone/bucket
-uv run milestones rollover OWNER/NAME FROM TO [--close]
-                                                # move all open issues from milestone FROM to TO
-                                                # (by title); --close closes FROM once empty
-uv run milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
-uv run milestones discover                      # repos owned by your configured owners that have
-                                                # issues/milestones but aren't in the config yet
-uv run milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
-                                                # milestones to rename, date, close, delete or
-                                                # roll over, and repos missing their buckets.
-                                                # -i then walks the list and applies your answers
-uv run milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
-                                                # rewrites the repos list in the config
-uv run milestones remove REPO                   # stop tracking a repo, same syntax
+milestones status                        # the default command (bare `milestones` runs it):
+                                         # all open milestones across configured repos by
+                                         # due date, with open and closed issue counts;
+                                         # flags !OVERDUE, (empty) and (done), links each
+milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
+                                         # time and assign each to a milestone/bucket
+milestones rollover OWNER/NAME FROM TO [--close]
+                                         # move all open issues from milestone FROM to TO
+                                         # (by title); --close closes FROM once empty
+milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
+milestones discover                      # repos owned by your configured owners that have
+                                         # issues/milestones but aren't in the config yet
+milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
+                                         # milestones to rename, date, close, delete or
+                                         # roll over, and repos missing their buckets.
+                                         # -i then walks the list and applies your answers
+milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
+                                         # rewrites the repos list in the config
+milestones remove REPO                   # stop tracking a repo, same syntax
 ```
 
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
@@ -74,12 +76,3 @@ release time, roll what didn't make it into the next milestone instead of re-tri
 ```sh
 uv run pytest
 ```
-
-To get a `milestones` command on your PATH that always runs the code in this working tree:
-
-```sh
-uv tool install --editable .
-```
-
-Re-run it only if the dependencies or the entry point change; edits to the source take effect
-immediately.
