@@ -117,6 +117,10 @@ def owners_of(repos: list[str]) -> list[str]:
     return sorted({r.split("/")[0] for r in repos})
 
 
+def repo_url(repo: str) -> str:
+    return f"https://github.com/{repo}"
+
+
 def sort_key(title: str, due_on: str | None, buckets: list[str]):
     """Dated milestones ascending (overdue naturally first), then buckets in
     config order, then other undated milestones by title."""
@@ -207,7 +211,8 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    for repo, m in fetch_milestones(config["repos"])[1]:
+    tracked, entries = fetch_milestones(config["repos"])
+    for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
         milestones.append((repo, m["title"], due, m["open"]["totalCount"],
                            m["closed"]["totalCount"], m["url"]))
@@ -228,7 +233,16 @@ def cmd_status(config, args):
         rows.append((repo, title, due or "—", count, closed, flags, url))
     if rows:
         print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "", "URL"))
-    else:
+    # A tracked repo with no open milestone has no row of its own, and so is invisible
+    # here unless it is named; `discover` lists the config's repos in full.
+    quiet = sorted(set(tracked) - {m[0] for m in milestones})
+    if quiet:
+        if rows:
+            print()
+        print(f"{len(quiet)} tracked repo{'s' if len(quiet) != 1 else ''} "
+              f"with no open milestones:")
+        print_table([(r, repo_url(r)) for r in quiet], ("REPO", "URL"))
+    elif not rows:
         print("No open milestones in any configured repo.")
 
 
@@ -609,6 +623,12 @@ def cmd_remove(config, args):
 
 
 def cmd_discover(config, args):
+    # Straight from the config, before any API call: it prints instantly, and it still
+    # prints if the search below dies on an owner that no longer exists.
+    print_table([(r, repo_url(r)) for r in config["repos"]], ("TRACKED REPO", "URL"))
+    if args.tracked_only:
+        return
+    print()
     configured = set(config["repos"])
     rows = set()  # transferred repos can echo under their old owner; dedupe
     for owner in owners_of(config["repos"]):
@@ -634,8 +654,9 @@ def cmd_discover(config, args):
                 break
             cursor = repositories["pageInfo"]["endCursor"]
     if rows:
-        print_table([(name, issues, ms) for issues, ms, name in sorted(rows, reverse=True)],
-                    ("REPO NOT IN CONFIG", "OPEN ISSUES", "OPEN MILESTONES"))
+        print_table([(name, issues, ms, repo_url(name))
+                     for issues, ms, name in sorted(rows, reverse=True)],
+                    ("REPO NOT IN CONFIG", "OPEN ISSUES", "OPEN MILESTONES", "URL"))
     else:
         print("Nothing new — the config covers every repo found.")
 
@@ -670,8 +691,12 @@ def main():
     remove = sub.add_parser("remove", help="stop tracking a repo")
     remove.add_argument("repo", metavar="REPO")
     remove.set_defaults(func=cmd_remove)
-    sub.add_parser("discover", help="repos with issues/milestones missing from the config"
-                   ).set_defaults(func=cmd_discover)
+    discover = sub.add_parser("discover",
+                              help="the tracked repos, then ones with issues/milestones "
+                                   "missing from the config")
+    discover.add_argument("--tracked-only", action="store_true",
+                          help="just list the tracked repos; don't go looking for more")
+    discover.set_defaults(func=cmd_discover)
 
     args = parser.parse_args()
     args.func(load_config(), args)

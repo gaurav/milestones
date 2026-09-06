@@ -38,15 +38,18 @@ repos = [
 milestones status                        # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
                                          # due date, with open and closed issue counts;
-                                         # flags !OVERDUE, (empty) and (done), links each
+                                         # flags !OVERDUE, (empty) and (done), links each,
+                                         # then names any tracked repo with nothing open
 milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
                                          # time and assign each to a milestone/bucket
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
-milestones discover                      # repos owned by your configured owners that have
-                                         # issues/milestones but aren't in the config yet
+milestones discover [--tracked-only]     # the repos you track, then repos owned by your
+                                         # configured owners that have issues/milestones
+                                         # but aren't in the config yet;
+                                         # --tracked-only stops after the first list
 milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
                                          # roll over, and repos with a standing bucket
