@@ -6,7 +6,7 @@ import pytest
 from milestones.cli import (
     KINDS, build_search_queries, date_choices, excerpt, favourite_date, issue_count,
     load_config, milestone_problems, missing_buckets, parse_repo, print_findings, read_key,
-    sort_key, write_repos,
+    sort_key, write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -79,12 +79,31 @@ def test_parse_repo_accepts_urls_and_shorthand():
             parse_repo(bad)
 
 
-def test_write_repos_leaves_the_rest_of_the_config_alone(tmp_path):
+def test_write_repo_list_leaves_the_rest_of_the_config_alone(tmp_path):
     path = tmp_path / "milestones.toml"
     path.write_text('# a comment\n\nbuckets = ["Soon"]\n\nrepos = [\n  "a/b",\n]\n\n# trailing\n')
-    write_repos(path, ["a/b", "c/d"])
+    write_repo_list(path, "repos", ["a/b", "c/d"])
     assert path.read_text() == (
         '# a comment\n\nbuckets = ["Soon"]\n\nrepos = [\n  "a/b",\n  "c/d",\n]\n\n# trailing\n')
+
+
+def test_write_repo_list_appends_an_optional_list_the_config_hasnt_got(tmp_path):
+    path = tmp_path / "milestones.toml"
+    path.write_text('repos = [\n  "a/b",\n]\n')
+    write_repo_list(path, "ignore", ["c/d"])
+    assert path.read_text() == 'repos = [\n  "a/b",\n]\n\nignore = [\n  "c/d",\n]\n'
+    write_repo_list(path, "ignore", ["c/d", "e/f"])  # and rewrites it in place thereafter
+    assert path.read_text() == (
+        'repos = [\n  "a/b",\n]\n\nignore = [\n  "c/d",\n  "e/f",\n]\n')
+
+
+def test_write_repo_list_refuses_a_list_it_cannot_rewrite(tmp_path):
+    # Present but not as a bracketed list: appending a second one would be silent
+    # corruption, so this is a hand-edit rather than a guess.
+    path = tmp_path / "milestones.toml"
+    path.write_text('repos = [\n  "a/b",\n]\nignore = "c/d"\n')
+    with pytest.raises(SystemExit):
+        write_repo_list(path, "ignore", ["c/d", "e/f"])
 
 
 def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25"):

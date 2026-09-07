@@ -47,7 +47,6 @@ def load_config() -> dict:
 
 
 REPO_RE = re.compile(r"(?:(?:https?://)?github\.com/)?([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
-REPOS_BLOCK = re.compile(r"^repos\s*=\s*\[[^\]]*\]", re.M)
 
 
 # "v1.2", "Babel v1.19" — and dated releases, "2026aug24" or "Week ending 2026-08-25".
@@ -108,13 +107,22 @@ def parse_repo(text: str) -> str:
     return f"{match[1]}/{match[2]}"
 
 
-def write_repos(path: Path, repos: list[str]) -> None:
-    """Rewrite just the repos list, leaving the rest of the config alone."""
-    # ponytail: comments *inside* the repos list are dropped; nothing else is touched.
-    block = "repos = [\n" + "".join(f'  "{r}",\n' for r in repos) + "]"
-    text, count = REPOS_BLOCK.subn(lambda _: block, path.read_text(), count=1)
+def write_repo_list(path: Path, key: str, repos: list[str]) -> None:
+    """Rewrite just one OWNER/NAME list, leaving the rest of the config alone."""
+    # ponytail: comments *inside* the list are dropped; nothing else is touched.
+    block = f"{key} = [\n" + "".join(f'  "{r}",\n' for r in repos) + "]"
+    # A literal replacement would have its backslashes interpreted; a lambda hands the
+    # block over as-is.
+    text, count = re.subn(rf"^{key}\s*=\s*\[[^\]]*\]", lambda _: block, path.read_text(),
+                          count=1, flags=re.M)
     if count != 1:
-        sys.exit(f"Can't find a `repos = [...]` list to edit in {path}; edit it by hand.")
+        # `ignore` is optional, so not finding it can mean it was never written — but it
+        # can also mean the list is there in a shape the pattern can't rewrite, and
+        # appending a second one would then be silent corruption. `repos` is required by
+        # load_config, so it only ever takes the second branch.
+        if re.search(rf"^{key}\s*=", text, re.M):
+            sys.exit(f"Can't find a `{key} = [...]` list to edit in {path}; edit it by hand.")
+        text = text.rstrip("\n") + f"\n\n{block}\n"
     path.write_text(text)
 
 
@@ -633,7 +641,7 @@ def cmd_add(config, args):
     if repo in config["repos"]:
         print(f"already tracked: {repo}")
         return
-    write_repos(config_path(), config["repos"] + [repo])
+    write_repo_list(config_path(), "repos", config["repos"] + [repo])
     print(f"tracking {repo} — `milestones setup {repo}` creates the standing buckets "
           f"there if you want them")
 
@@ -645,7 +653,7 @@ def cmd_remove(config, args):
         sys.exit(f"Not tracked: {repo}. Tracked: {', '.join(config['repos'])}")
     if not keep:
         sys.exit(f"{repo} is the only tracked repo; a config with none is rejected on load.")
-    write_repos(config_path(), keep)
+    write_repo_list(config_path(), "repos", keep)
     print(f"stopped tracking {repo}")
 
 
