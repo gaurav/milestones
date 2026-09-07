@@ -53,12 +53,17 @@ def test_build_search_queries_split_to_stay_under_the_cap():
 
 def test_load_config_rejects_repos_that_are_not_owner_slash_name(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    (tmp_path / "milestones.toml").write_text(
-        'repos = ["gaurav/milestones", "gaurav", "https://github.com/gaurav/x"]\n')
+    config = tmp_path / "milestones.toml"
+    # The ignore list is checked by the same rule; a bad entry there is just as fatal.
+    config.write_text('repos = ["gaurav/milestones", "gaurav"]\n'
+                      'ignore = ["https://github.com/gaurav/x"]\n')
     with pytest.raises(SystemExit) as excinfo:
         load_config()
     listed = str(excinfo.value).split("OWNER/NAME: ")[1]
     assert listed == "gaurav, https://github.com/gaurav/x"  # the good repo is not named
+
+    config.write_text('repos = ["gaurav/milestones"]\n')
+    assert load_config()["ignore"] == []  # optional, unlike repos, and empty by default
 
 
 def test_excerpt_collapses_whitespace_and_truncates():

@@ -38,9 +38,12 @@ def load_config() -> dict:
     except FileNotFoundError:
         sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
     config.setdefault("buckets", list(DEFAULT_BUCKETS))
+    # An empty ignore list is the normal state; an empty repos list is not.
+    config.setdefault("ignore", [])
     if not config.get("repos"):
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
-    bad = [r for r in config["repos"] if r.count("/") != 1 or not all(r.split("/"))]
+    bad = [r for r in config["repos"] + config["ignore"]
+           if r.count("/") != 1 or not all(r.split("/"))]
     if bad:
         sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
     return config
@@ -657,6 +660,25 @@ def cmd_remove(config, args):
     print(f"stopped tracking {repo}")
 
 
+def cmd_ignore(config, args):
+    # No API round trip to canonicalise the name, unlike `add`: ignoring is not tracking,
+    # a typo costs nothing but a repo staying visible, and the first pass through
+    # `discover`'s output is dozens of repos at once. Case is handled where they're
+    # compared instead.
+    ignore = list(config["ignore"])
+    for text in args.repos:
+        repo = parse_repo(text)
+        if repo.lower() in {r.lower() for r in config["repos"]}:
+            print(f"tracked, not ignored: {repo} — `milestones remove {repo}` first")
+        elif repo.lower() in {r.lower() for r in ignore}:
+            print(f"already ignored: {repo}")
+        else:
+            ignore.append(repo)
+            print(f"ignoring {repo}")
+    if ignore != config["ignore"]:
+        write_repo_list(config_path(), "ignore", ignore)
+
+
 def cmd_discover(config, args):
     # Straight from the config, before any API call: it prints instantly, and it still
     # prints if the search below dies on an owner that no longer exists.
@@ -664,8 +686,11 @@ def cmd_discover(config, args):
     if args.tracked_only:
         return
     print()
-    configured = set(config["repos"])
-    rows = set()  # transferred repos can echo under their old owner; dedupe
+    # Both lists are typed by hand while GitHub answers with the canonical spelling, so
+    # compare in lower case — `remove` already does.
+    configured = {r.lower() for r in config["repos"]}
+    ignored = {r.lower() for r in config["ignore"]}
+    rows, hidden = set(), set()  # transferred repos can echo under their old owner; dedupe
     for owner in owners_of(config["repos"]):
         cursor = None
         while True:
@@ -682,9 +707,16 @@ def cmd_discover(config, args):
                          f"check the repos in your config.")
             repositories = data["repositoryOwner"]["repositories"]
             for r in repositories["nodes"]:
+                name = r["nameWithOwner"]
                 issues, ms = r["issues"]["totalCount"], r["milestones"]["totalCount"]
-                if not r["isArchived"] and r["nameWithOwner"] not in configured and (issues or ms):
-                    rows.add((issues, ms, r["nameWithOwner"]))
+                if r["isArchived"] or name.lower() in configured or not (issues or ms):
+                    continue
+                # Tracked wins over ignored, so a repo that ends up in both lists simply
+                # never reaches here and drops out of the count on its own.
+                if name.lower() in ignored:
+                    hidden.add(name)
+                else:
+                    rows.add((issues, ms, name))
             if not repositories["pageInfo"]["hasNextPage"]:
                 break
             cursor = repositories["pageInfo"]["endCursor"]
@@ -692,8 +724,16 @@ def cmd_discover(config, args):
         print_table([(name, issues, ms, repo_url(name))
                      for issues, ms, name in sorted(rows, reverse=True)],
                     ("REPO NOT IN CONFIG", "OPEN ISSUES", "OPEN MILESTONES", "URL"))
-    else:
+    elif not hidden:
+        # Only true if nothing was hidden either: repos left out on purpose are not repos
+        # the config covers.
         print("Nothing new — the config covers every repo found.")
+    if hidden:
+        if rows:
+            print()
+        print(f"Found {len(hidden)} ignored repositor{'y' if len(hidden) == 1 else 'ies'}; "
+              f"use `milestones add` to explicitly add them or delete them from the "
+              f"ignore list at {config_path()}.")
 
 
 def main():
@@ -726,6 +766,9 @@ def main():
     remove = sub.add_parser("remove", help="stop tracking a repo")
     remove.add_argument("repo", metavar="REPO")
     remove.set_defaults(func=cmd_remove)
+    ignore = sub.add_parser("ignore", help="hide repos from discover without tracking them")
+    ignore.add_argument("repos", metavar="REPO", nargs="+")
+    ignore.set_defaults(func=cmd_ignore)
     discover = sub.add_parser("discover",
                               help="the tracked repos, then ones with issues/milestones "
                                    "missing from the config")
