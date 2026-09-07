@@ -741,7 +741,7 @@ def cmd_discover(config, args):
                 # Tracked wins over ignored, so a repo that ends up in both lists simply
                 # never reaches here and drops out of the count on its own.
                 if is_ignored(name, config["ignore"]):
-                    hidden.add(name)
+                    hidden.add((issues, ms, name))
                 else:
                     rows.add((issues, ms, name))
             if not repositories["pageInfo"]["hasNextPage"]:
@@ -755,12 +755,22 @@ def cmd_discover(config, args):
         # Only true if nothing was hidden either: repos left out on purpose are not repos
         # the config covers.
         print("Nothing new — the config covers every repo found.")
+    if args.list_ignored and not hidden:
+        print("\nNothing ignored — no repo found is on the ignore list.")
     if hidden:
         if rows:
             print()
+        if args.list_ignored:
+            # Same columns as the suggestions above, so a repo reads the same whichever
+            # table it is in and `milestones add` takes the first column either way.
+            print_table([(name, issues, ms, repo_url(name))
+                         for issues, ms, name in sorted(hidden, reverse=True)],
+                        ("IGNORED REPO", "OPEN ISSUES", "OPEN MILESTONES", "URL"))
+            print()
         print(f"Found {len(hidden)} ignored repositor{'y' if len(hidden) == 1 else 'ies'}; "
               f"use `milestones add` to explicitly add them or delete them from the "
-              f"ignore list at {config_path()}.")
+              f"ignore list at {config_path()}."
+              + ("" if args.list_ignored else " Pass `--list-ignored` to see which."))
 
 
 def main():
@@ -799,8 +809,11 @@ def main():
     discover = sub.add_parser("discover",
                               help="the tracked repos, then ones with issues/milestones "
                                    "missing from the config")
-    discover.add_argument("--tracked-only", action="store_true",
-                          help="just list the tracked repos; don't go looking for more")
+    listing = discover.add_mutually_exclusive_group()
+    listing.add_argument("--tracked-only", action="store_true",
+                         help="just list the tracked repos; don't go looking for more")
+    listing.add_argument("--list-ignored", action="store_true",
+                         help="list the ignored repos found, rather than only counting them")
     discover.set_defaults(func=cmd_discover)
 
     args = parser.parse_args()
