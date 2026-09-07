@@ -543,15 +543,11 @@ def walk_findings(config, findings: list[dict]) -> None:
         def roll_over():
             dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
             if dst:
-                try:
-                    cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
-                                                            dst=dst, close=False))
-                except SystemExit as exit:
-                    # rollover is also a top-level command, so it exits on a bad title
-                    # or a declined confirmation; that should back out of this one
-                    # finding, not the whole walk. Ctrl-C lands here too — press it
-                    # again at the next prompt to leave.
-                    print(f"  {exit}")
+                # rollover is also a top-level command, so it exits on a bad title or a
+                # declined confirmation; the walk below turns that back into one failed
+                # answer rather than the end of the run.
+                cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
+                                                        dst=dst, close=False))
 
         def type_date():
             answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
@@ -615,7 +611,16 @@ def walk_findings(config, findings: list[dict]) -> None:
             if action is None:
                 print("  Not one of those.")
                 continue
-            outcome = action()
+            try:
+                outcome = action()
+            except SystemExit as exit:
+                # Every way an action can fail arrives as a SystemExit: gh.py raises one
+                # for any failed call, and `ask` raises one for a declined confirmation
+                # or a Ctrl-C. None of them should cost you the findings still queued, so
+                # report it and ask again — nothing was fixed either way. The Ctrl-C that
+                # leaves is the one at the keypress prompt above, outside this.
+                print(f"  {exit}")
+                continue
             if outcome == QUIT:
                 return
             if outcome != STAY:
