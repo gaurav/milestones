@@ -5,8 +5,8 @@ import pytest
 
 from milestones.cli import (
     KINDS, build_search_queries, date_choices, excerpt, favourite_date, issue_count,
-    load_config, milestone_problems, missing_buckets, parse_repo, print_findings, read_key,
-    sort_key, write_repo_list,
+    is_ignored, load_config, milestone_problems, missing_buckets, parse_ignore, parse_repo,
+    print_findings, read_key, sort_key, write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -82,6 +82,30 @@ def test_parse_repo_accepts_urls_and_shorthand():
     for bad in ["translator-diagram", "https://github.com/NCATSTranslator/x/issues", ""]:
         with pytest.raises(SystemExit):
             parse_repo(bad)
+
+
+def test_parse_ignore_reads_a_bare_owner_as_the_whole_owner():
+    # `owner/*` is what the config stores, but an unquoted one is a shell glob, so a
+    # bare owner — which can never be a repo — means the same thing.
+    for text in ["gaurav", "gaurav/", "gaurav/*", "  gaurav/*  "]:
+        assert parse_ignore(text) == "gaurav/*", text
+    for text in ["gaurav/waif", "https://github.com/gaurav/waif", "github.com/gaurav/waif/"]:
+        assert parse_ignore(text) == "gaurav/waif", text
+    for bad in ["", "/", "https://github.com/gaurav/waif/issues"]:
+        with pytest.raises(SystemExit):
+            parse_ignore(bad)
+
+
+def test_is_ignored_matches_a_repo_itself_or_its_owner():
+    assert is_ignored("gaurav/waif", ["gaurav/waif"])
+    assert is_ignored("gaurav/waif", ["gaurav/*"])
+    assert is_ignored("gaurav/*", ["gaurav/*"])  # so a repeated owner isn't appended twice
+    assert not is_ignored("gaurav/waif", ["gaurav/ideas", "other/*"])
+    assert not is_ignored("gaurav/waif", [])
+    # An owner entry says nothing about the repos already listed under it, and vice versa.
+    assert not is_ignored("gaurav/*", ["gaurav/waif"])
+    # Both sides fold case; GitHub answers with the canonical spelling, the list is typed.
+    assert is_ignored("GAURAV/Waif", ["gaurav/waif"]) and is_ignored("GAURAV/Waif", ["Gaurav/*"])
 
 
 def test_write_repo_list_leaves_the_rest_of_the_config_alone(tmp_path):

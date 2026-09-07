@@ -110,6 +110,27 @@ def parse_repo(text: str) -> str:
     return f"{match[1]}/{match[2]}"
 
 
+def parse_ignore(text: str) -> str:
+    """One ignore-list entry: a repo, or `OWNER/*` for everything under one owner.
+
+    A bare owner means the same as `OWNER/*`, which is what you can actually type —
+    an unquoted `owner/*` is a "no matches found" error in zsh. The config keeps the
+    explicit form, where a bare name would read like a repo someone mistyped.
+    """
+    owner, _, name = text.strip().rstrip("/").partition("/")
+    if owner and name in ("", "*"):
+        return f"{owner}/*"
+    return parse_repo(text)
+
+
+def is_ignored(name: str, ignore: list[str]) -> bool:
+    """Whether OWNER/NAME is on the ignore list, itself or under an ignored owner."""
+    # Folded case throughout: the list is typed by hand while GitHub answers with the
+    # canonical spelling.
+    name = name.lower()
+    return any(entry.lower() in (name, f"{name.split('/')[0]}/*") for entry in ignore)
+
+
 def write_repo_list(path: Path, key: str, repos: list[str]) -> None:
     """Rewrite just one OWNER/NAME list, leaving the rest of the config alone."""
     # ponytail: comments *inside* the list are dropped; nothing else is touched.
@@ -665,16 +686,23 @@ def cmd_ignore(config, args):
     # a typo costs nothing but a repo staying visible, and the first pass through
     # `discover`'s output is dozens of repos at once. Case is handled where they're
     # compared instead.
+    tracked = {r.lower() for r in config["repos"]}
     ignore = list(config["ignore"])
     for text in args.repos:
-        repo = parse_repo(text)
-        if repo.lower() in {r.lower() for r in config["repos"]}:
-            print(f"tracked, not ignored: {repo} — `milestones remove {repo}` first")
-        elif repo.lower() in {r.lower() for r in ignore}:
-            print(f"already ignored: {repo}")
+        entry = parse_ignore(text)
+        # An owner entry is allowed to sit over repos you track — that is the point of
+        # it: add the handful you want, then ignore the rest of the owner. discover
+        # checks tracked before ignored, so those keep showing up.
+        if not entry.endswith("/*") and entry.lower() in tracked:
+            print(f"tracked, not ignored: {entry} — `milestones remove {entry}` first")
+        elif is_ignored(entry, ignore):
+            print(f"already ignored: {entry}")
+        elif entry.endswith("/*"):
+            ignore.append(entry)
+            print(f"ignoring {entry} — every repo of that owner's you don't track")
         else:
-            ignore.append(repo)
-            print(f"ignoring {repo}")
+            ignore.append(entry)
+            print(f"ignoring {entry}")
     if ignore != config["ignore"]:
         write_repo_list(config_path(), "ignore", ignore)
 
@@ -686,10 +714,9 @@ def cmd_discover(config, args):
     if args.tracked_only:
         return
     print()
-    # Both lists are typed by hand while GitHub answers with the canonical spelling, so
-    # compare in lower case — `remove` already does.
+    # Typed by hand while GitHub answers with the canonical spelling, so compare in
+    # lower case — `remove` already does, and `is_ignored` does the same.
     configured = {r.lower() for r in config["repos"]}
-    ignored = {r.lower() for r in config["ignore"]}
     rows, hidden = set(), set()  # transferred repos can echo under their old owner; dedupe
     for owner in owners_of(config["repos"]):
         cursor = None
@@ -713,7 +740,7 @@ def cmd_discover(config, args):
                     continue
                 # Tracked wins over ignored, so a repo that ends up in both lists simply
                 # never reaches here and drops out of the count on its own.
-                if name.lower() in ignored:
+                if is_ignored(name, config["ignore"]):
                     hidden.add(name)
                 else:
                     rows.add((issues, ms, name))
