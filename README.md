@@ -34,6 +34,11 @@ repos = [
   "gaurav/milestones",
   "NCATSTranslator/Babel",
 ]
+
+# Optional: repos you own but don't triage, so `discover` stops offering them.
+ignore = [
+  "NCATSTranslator/Planning-Committee",
+]
 ```
 
 ## Commands
@@ -52,7 +57,8 @@ milestones rollover OWNER/NAME FROM TO [--close]
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
 milestones discover [--tracked-only]     # the repos you track, then repos owned by your
                                          # configured owners that have issues/milestones
-                                         # but aren't in the config yet;
+                                         # but aren't in the config yet; ignored repos are
+                                         # counted in one closing line rather than listed;
                                          # --tracked-only stops after the first list
 milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
@@ -62,6 +68,8 @@ milestones check [-i|--interactive]      # everything that needs fixing, grouped
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
 milestones remove REPO                   # stop tracking a repo, same syntax
+milestones ignore REPO [REPO ...]        # hide repos from discover without tracking them;
+                                         # appends to the ignore list in the config
 ```
 
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
@@ -76,6 +84,13 @@ onto) then ask, and take blank as "skip". A milestone is well-formed if it is on
 standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
 to roll over.
+
+Owning a repo is not the same as triaging it, and `discover` searches by owner, so most of what it
+turns up is someone else's to manage. `ignore` is the third state beside tracked and untracked:
+an ignored repo is dropped from the suggestions and counted in a closing line naming the config, so
+the list stays short without hiding that anything was left out. Take the names straight from
+`discover`'s output — `ignore` accepts several at once. Un-ignoring is a hand-edit of that list,
+or `add`, which tracks the repo and so outranks it.
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
