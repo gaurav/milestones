@@ -5,8 +5,8 @@ import pytest
 
 from milestones.cli import (
     KINDS, build_search_queries, date_choices, excerpt, favourite_date, issue_count,
-    load_config, milestone_problems, parse_repo, print_findings, read_key, sort_key,
-    write_repos,
+    load_config, milestone_problems, missing_buckets, parse_repo, print_findings, read_key,
+    sort_key, write_repos,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -116,6 +116,18 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     # issues they held: closing one hides it from status and triage.
     assert problems("Needed later", None, open_issues=0) == []
     assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
+
+
+def test_missing_buckets_only_counts_a_gap_in_a_repo_that_uses_them():
+    # A repo using none of them has opted out of this much triage; one using some has
+    # probably lost the rest. Config order survives, so the walk numbers them the same
+    # way `setup` would create them.
+    assert missing_buckets(BUCKETS, set()) == []
+    assert missing_buckets(BUCKETS, {"v1.2", "Backlog"}) == []
+    assert missing_buckets(BUCKETS, {"Not urgent"}) == ["Needed soon", "Needed later"]
+    assert missing_buckets(BUCKETS, {"Needed later", "v1.2"}) == ["Needed soon", "Not urgent"]
+    assert missing_buckets(BUCKETS, set(BUCKETS)) == []
+    assert missing_buckets([], {"v1.2"}) == []  # buckets switched off in the config entirely
 
 
 def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():
