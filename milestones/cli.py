@@ -586,8 +586,11 @@ def walk_findings(config, findings: list[dict]) -> None:
         # again and QUIT to leave the walk, and anything else moves on.
         options = []
         if kind == "rename":
+            # The repo's own missing buckets, not every configured one: renaming onto a
+            # title it already has is a duplicate-title 422, and a repo using none of
+            # them has opted out, so it is offered a typed title and nothing else.
             options += [(str(i), f"→ {b}", lambda b=b: rename(b))
-                        for i, b in enumerate(config["buckets"], 1)]
+                        for i, b in enumerate(f["free_buckets"], 1)]
             options.append(("r", "rename to…", rename_typed))
         if kind in ("undated", "overdue"):
             options += [(key, f"{label} {date.isoformat()}", lambda d=date: set_due(repo, number, d))
