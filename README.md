@@ -9,6 +9,10 @@ work that belongs in someone else's tracker) that never close. Every issue's
 bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
 complain in a comment if they disagree.
 
+The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
+a repo without them is simply left alone. Every command picks up whichever buckets a repo
+actually has, and `check` asks for a missing one only where the repo already uses the others.
+
 ## Setup
 
 Requires Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and an authenticated
@@ -52,8 +56,8 @@ milestones discover [--tracked-only]     # the repos you track, then repos owned
                                          # --tracked-only stops after the first list
 milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
-                                         # roll over, and repos with a standing bucket
-                                         # missing or closed.
+                                         # roll over, and repos that use standing buckets
+                                         # but have one missing or closed.
                                          # -i then walks the list and applies your answers
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
@@ -62,15 +66,16 @@ milestones remove REPO                   # stop tracking a repo, same syntax
 
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
-to a standing bucket, set the due date to today / tomorrow / next Monday / the start of next month,
-close, delete, roll over, or run `setup` — plus open, skip and quit. Once you type a date of your
-own, the fourth date slot offers that date back for the rest of the session (the one you have typed
-most often, most recent winning ties), since a run of milestones usually wants the same day — "after
-the project meeting" is one keypress each after the first. A single keypress acts immediately; the fixes
-that need more (a new title, a typed date, a milestone to roll onto) then ask, and take blank as
-"skip". A milestone is well-formed if it is one of the standing
-buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending 2026-08-31`)
-*and* carries a due date — however far out, since an undated milestone never comes due to roll over.
+to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
+the start of next month, close, delete, roll over, or run `setup` — plus open, skip and quit. Once
+you type a date of your own, the fourth date slot offers that date back for the rest of the session
+(the one you have typed most often, most recent winning ties), since a run of milestones usually
+wants the same day — "after the project meeting" is one keypress each after the first. A single
+keypress acts immediately; the fixes that need more (a new title, a typed date, a milestone to roll
+onto) then ask, and take blank as "skip". A milestone is well-formed if it is one of the repo's
+standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
+2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
+to roll over.
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
