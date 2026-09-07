@@ -36,8 +36,10 @@ repos = [
 ]
 
 # Optional: repos you own but don't triage, so `discover` stops offering them.
+# `OWNER/*` covers every repo of an owner you haven't tracked.
 ignore = [
   "NCATSTranslator/Planning-Committee",
+  "TranslatorSRI/*",
 ]
 ```
 
@@ -68,8 +70,9 @@ milestones check [-i|--interactive]      # everything that needs fixing, grouped
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
 milestones remove REPO                   # stop tracking a repo, same syntax
-milestones ignore REPO [REPO ...]        # hide repos from discover without tracking them;
-                                         # appends to the ignore list in the config
+milestones ignore REPO|OWNER [...]       # hide repos from discover without tracking them;
+                                         # a bare OWNER hides everything of that owner's
+                                         # you don't track; appends to the config
 ```
 
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
@@ -91,6 +94,12 @@ an ignored repo is dropped from the suggestions and counted in a closing line na
 the list stays short without hiding that anything was left out. Take the names straight from
 `discover`'s output — `ignore` accepts several at once. Un-ignoring is a hand-edit of that list,
 or `add`, which tracks the repo and so outranks it.
+
+`milestones ignore OWNER` covers a whole owner, which is the other way round: track the few repos
+you do triage, then ignore the rest of the organisation in one entry, and any repo that appears
+there later is ignored too. It is stored as `OWNER/*`, but type the bare owner — an unquoted
+`OWNER/*` is a glob your shell tries to expand. Tracked beats ignored, so the repos you have added
+keep showing up, and per-repo entries under an ignored owner are simply redundant, not wrong.
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
