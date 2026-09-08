@@ -8,7 +8,7 @@ import pytest
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
     FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
-    is_ignored, load_config,
+    is_ignored, load_config, triage_order,
     milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
@@ -246,9 +246,13 @@ def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):
 
 
 def test_org_colors_only_colours_owners_with_more_than_one_repo():
-    colors = org_colors(["a/one", "b/only", "a/two", "c/x", "c/y"])
+    repos = ["a/one", "b/only", "a/two", "c/x", "c/y"]
+    colors = org_colors(repos)
     assert set(colors) == {"a", "c"}
-    assert colors["a"] != colors["c"]  # first-appearance order, distinct hues
+    assert colors["a"] != colors["c"]  # distinct hues
+    # The caller hands these over sorted by due date, so an owner must not change colour
+    # just because a milestone came or went.
+    assert org_colors(list(reversed(repos))) == colors
 
 
 def test_org_colors_honours_the_config_even_for_a_single_repo():
@@ -334,7 +338,8 @@ def test_load_config_resolves_colour_names_and_rejects_the_rest(tmp_path, monkey
 
     # A colour that can't resolve is fatal at load, rather than a stray escape sequence
     # in the middle of the table.
-    for bad in ('"chartreuse"', "256", "-1"):
+    # `true` included: isinstance(True, int) would otherwise make it colour 1.
+    for bad in ('"chartreuse"', "256", "-1", "true"):
         config.write_text(f'repos = ["gaurav/milestones"]\n[colors]\ngaurav = {bad}\n')
         with pytest.raises(SystemExit) as excinfo:
             load_config()
@@ -351,3 +356,15 @@ def test_load_config_defaults_focus_to_nothing_and_checks_its_names(tmp_path, mo
     with pytest.raises(SystemExit) as excinfo:
         load_config()
     assert str(excinfo.value).endswith("OWNER/NAME: gaurav")
+
+
+def test_triage_order_puts_focused_repos_first_without_reshuffling_the_rest():
+    issues = [{"repo": "a/one", "updated": "2026-09-01", "n": 1},
+              {"repo": "b/two", "updated": "2026-09-03", "n": 2},
+              {"repo": "a/one", "updated": "2026-09-05", "n": 3},
+              {"repo": "b/two", "updated": "2026-09-02", "n": 4}]
+    assert [i["n"] for i in triage_order(issues, [])] == [3, 2, 4, 1]
+    # b/two's two issues come first, and stay freshest-first among themselves; the rest
+    # keep the order they had. Sorting on one compound key with reverse=True would put
+    # the *unfocused* repos first instead.
+    assert [i["n"] for i in triage_order(issues, ["B/Two"])] == [2, 4, 3, 1]

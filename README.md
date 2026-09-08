@@ -82,17 +82,19 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --tracked-only stops after the first list,
                                          # --list-ignored spells out the ignored ones, and
                                          # --ignore-remaining ignores the ones suggested
-milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
+milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
                                          # roll over, and repos that use standing buckets
                                          # but have one missing or closed.
-                                         # -i then walks the list and applies your answers
+                                         # -i then walks the list and applies your answers;
+                                         # --json prints them for a script instead
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
 milestones remove REPO                   # stop tracking a repo, same syntax
 milestones focus [REPO ...]              # mark the repos you're working on right now, so
                                          # `status` stars their rows; no arguments lists them
-milestones unfocus REPO [...]            # stop marking them, once your attention moves on
+milestones unfocus REPO [...]            # stop marking them, once your attention moves on;
+                                         # focused repos also come first in `triage`
 milestones ignore REPO|OWNER [...]       # hide repos from discover without tracking them;
                                          # a bare OWNER hides everything of that owner's
                                          # you don't track; appends to the config
@@ -158,8 +160,10 @@ just one somebody has only started. An undated milestone stays plain, for the sa
 Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
 `milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a
 script — or a coding agent — `milestones status --json` prints the same data as JSON:
-`milestones` with `repo`, `title`, `due`, `open`, `closed`, `percent`, `flags` and `url`, plus
-`quiet_repos` for the tracked repos with no open milestone.
+`milestones` with `repo`, `title`, `due`, `open`, `closed`, `percent`, `flags`, `focus` and
+`url`; `quiet_repos` in the same shape for the tracked repos with no open milestone; and the
+configured `focus` list itself. `milestones check --json` does the same for the findings, with
+a `kinds` legend saying what each one's fix is.
 
 ## Development
 

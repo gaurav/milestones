@@ -60,7 +60,9 @@ def parse_color(path: Path, owner: str, value) -> int:
     """One `[colors]` entry: a name from COLOR_NAMES, or a 256-colour number."""
     if isinstance(value, str) and value in COLOR_NAMES:
         return COLOR_NAMES[value]
-    if isinstance(value, int) and 0 <= value <= 255:
+    # `isinstance(True, int)` is true, so a bare `owner = true` would resolve to colour 1
+    # rather than being rejected.
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
         return value
     sys.exit(f"Config {path}: colour {value!r} for {owner} is not one of "
              f"{', '.join(sorted(COLOR_NAMES))}, or a number from 0 to 255.")
@@ -233,6 +235,16 @@ def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
     return queries + [query(batch)]
 
 
+def triage_order(issues: list[dict], focus: list[str]) -> list[dict]:
+    """Freshest first, but the repos you're working on ahead of everything else."""
+    # Two passes rather than one compound key: `reverse` would flip the focus flag along
+    # with the date. Python's sort is stable, so the second pass keeps the first's order
+    # within each group.
+    issues = sorted(issues, key=lambda i: i["updated"], reverse=True)
+    issues.sort(key=lambda i: not is_focused(i["repo"], focus))
+    return issues
+
+
 def excerpt(body: str | None, width: int = 200) -> str:
     return textwrap.shorten(body or "", width, placeholder=" …")
 
@@ -303,18 +315,22 @@ def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> di
 
     Colouring a one-off owner would say "these rows go together" about a single row — but
     a colour someone has chosen by hand is worth honouring either way, and two owners can
-    share one to tie sibling organisations together. The rest are assigned in
-    first-appearance order, so a caller that has already sorted its rows gets the palette
-    running down the page.
+    share one to tie sibling organisations together.
+
+    The rest are assigned in alphabetical order rather than in the order the rows happen to
+    arrive: a caller sorts its rows by due date, so first-appearance order would repaint an
+    owner every time a milestone came or went. Adding an owner to the config can still shift
+    the ones after it, which is at least something you did on purpose.
     """
     configured = {o.lower(): c for o, c in (configured or {}).items()}
+    owners = {r.split("/")[0].lower(): r.split("/")[0] for r in repos}
     counts = Counter(r.split("/")[0].lower() for r in repos)
     colors, palette = {}, cycle(ORG_PALETTE)
-    for owner in dict.fromkeys(r.split("/")[0] for r in repos):
-        if owner.lower() in configured:
-            colors[owner] = fg(configured[owner.lower()])
-        elif counts[owner.lower()] > 1:
-            colors[owner] = next(palette)
+    for key in sorted(owners):
+        if key in configured:
+            colors[owners[key]] = fg(configured[key])
+        elif counts[key] > 1:
+            colors[owners[key]] = next(palette)
     return colors
 
 
@@ -430,10 +446,13 @@ def cmd_status(config, args):
                         "focus": is_focused(repo, config["focus"]),
                         "url": url})
     if args.json:
-        # The focus list as well as the per-milestone flag: a focused repo can be one of
-        # the quiet ones, with no milestone row to carry it.
-        json.dump({"milestones": records, "quiet_repos": quiet, "focus": config["focus"]},
-                  sys.stdout, indent=2)
+        # The quiet repos in the same shape as a milestone row, so a reader doesn't have to
+        # cross-reference to find out whether one is focused. The config's own list comes
+        # too: it is the only place an entry naming a repo you no longer track shows up.
+        json.dump({"milestones": records,
+                   "quiet_repos": [{"repo": r, "focus": is_focused(r, config["focus"]),
+                                    "url": repo_url(r)} for r in quiet],
+                   "focus": config["focus"]}, sys.stdout, indent=2)
         print()
         return
 
@@ -547,7 +566,7 @@ def cmd_triage(config, args):
             for item in gh.search_issues(query):
                 repo = "/".join(item["repository_url"].split("/")[-2:])
                 issues.append(_norm_issue(item, repo))
-        issues.sort(key=lambda i: i["updated"], reverse=True)
+        issues = triage_order(issues, config["focus"])
 
     if not issues:
         print("Nothing to triage.")
@@ -651,6 +670,12 @@ def print_findings(findings: list[dict]) -> None:
 
 def cmd_check(config, args):
     findings = collect_findings(config)
+    if args.json:
+        # `kind` keys into KINDS, which says what the fix is; the rest of a finding is
+        # already the flat shape it is printed from.
+        json.dump({"findings": findings, "kinds": KINDS}, sys.stdout, indent=2)
+        print()
+        return
     if not findings:
         print("Nothing to fix — every open milestone is named and dated sensibly.")
         return
@@ -1031,8 +1056,12 @@ def main():
     setup.set_defaults(func=cmd_setup)
     check = sub.add_parser("check",
                            help="milestones that need renaming, dating, closing or rolling over")
-    check.add_argument("-i", "--interactive", action="store_true",
-                       help="walk the findings one by one and fix them")
+    # Nothing to walk if the findings are going out as JSON.
+    how = check.add_mutually_exclusive_group()
+    how.add_argument("-i", "--interactive", action="store_true",
+                     help="walk the findings one by one and fix them")
+    how.add_argument("--json", action="store_true",
+                     help="print the findings as JSON instead of a report")
     check.set_defaults(func=cmd_check)
     add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
     add.add_argument("repo", metavar="REPO")
