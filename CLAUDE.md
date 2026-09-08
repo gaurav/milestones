@@ -47,6 +47,25 @@ and `milestone_problems` returns early for a bucket, so `check` never raises a `
 `rename` or `undated` finding against one); add the guard when you add a path that could close a
 milestone.
 
+`print_table` measures every cell in characters, and there are two ways to make that lie. Colour
+is one — `visible()` discounts the escapes, so a cell may carry its own, and `paint` is the only
+thing that should put them there. Glyph width is the other, and nothing in the code can detect
+it: a character whose East Asian Width is `A` (ambiguous) is drawn two columns wide in a
+CJK-configured terminal, which is why the focus marker is U+2726 and not the obvious U+2605, and
+why `★ ☆ ● ◆ ♥ •` are all unusable here. A glyph must be Neutral or Narrow *and* outside the emoji
+set, since an emoji-presentation character is double-width whatever its width property says
+(`⚔` and `✳` fail that second test while passing the first). `test_focus_marker_is_one_column_wide`
+guards the marker; anything else you add to a table needs the same two checks by hand.
+
+Colour is decided once at import (`COLOR`, from `sys.stdout.isatty()` and `NO_COLOR`), so a piped
+run is plain and you cannot see the escapes you are debugging. `script -q /dev/null milestones
+status` gives it a pty and shows the real thing; pipe that through `cat -v` to read the codes.
+
+`write_repo_list` puts a top-level key the config hasn't got above the first `[table]` header and
+above the comment block introducing it — a key appended to the end of the file would land *inside*
+whatever table came last, so `ignore` would read back as `colors.ignore`. Keep new config keys
+top-level and this keeps working; a new `[table]` of your own goes after every scalar key.
+
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
 

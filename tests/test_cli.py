@@ -321,3 +321,33 @@ def test_focus_marker_is_one_column_wide():
     # measures in characters and cannot see that happen.
     assert len(FOCUS_MARK) == 1
     assert unicodedata.east_asian_width(FOCUS_MARK) in ("N", "Na")
+
+
+def test_load_config_resolves_colour_names_and_rejects_the_rest(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config = tmp_path / "milestones.toml"
+    config.write_text('repos = ["gaurav/milestones"]\n'
+                      '[colors]\ngaurav = "purple"\nphyloref = 186\n')
+    # Names and raw 256-colour numbers both come back as numbers, so nothing downstream
+    # has to know which the config used.
+    assert load_config()["colors"] == {"gaurav": COLOR_NAMES["purple"], "phyloref": 186}
+
+    # A colour that can't resolve is fatal at load, rather than a stray escape sequence
+    # in the middle of the table.
+    for bad in ('"chartreuse"', "256", "-1"):
+        config.write_text(f'repos = ["gaurav/milestones"]\n[colors]\ngaurav = {bad}\n')
+        with pytest.raises(SystemExit) as excinfo:
+            load_config()
+        assert "gaurav" in str(excinfo.value) and "purple" in str(excinfo.value)
+
+
+def test_load_config_defaults_focus_to_nothing_and_checks_its_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config = tmp_path / "milestones.toml"
+    config.write_text('repos = ["gaurav/milestones"]\n')
+    assert load_config()["focus"] == []
+
+    config.write_text('repos = ["gaurav/milestones"]\nfocus = ["gaurav"]\n')
+    with pytest.raises(SystemExit) as excinfo:
+        load_config()
+    assert str(excinfo.value).endswith("OWNER/NAME: gaurav")
