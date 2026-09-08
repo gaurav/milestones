@@ -46,11 +46,13 @@ ignore = [
 ## Commands
 
 ```sh
-milestones status                        # the default command (bare `milestones` runs it):
+milestones status [--json]               # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
                                          # due date, with open/closed counts and % done;
                                          # flags !OVERDUE, (empty) and (done), links each,
-                                         # then names any tracked repo with nothing open
+                                         # then names any tracked repo with nothing open.
+                                         # Colour-coded on a terminal (see below); --json
+                                         # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
                                          # time and assign each to a milestone/bucket
 milestones rollover OWNER/NAME FROM TO [--close]
@@ -117,6 +119,21 @@ there later is a fresh suggestion rather than something the glob silently swallo
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
+
+### Reading the status table
+
+The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured
+only when several of your repos share it, so a run of rows from the same organisation lights up
+together; version numbers in a milestone title are bold; a due date runs red (overdue), orange
+(this week), yellow (this month) or grey (further out); and `%` runs red through orange and
+yellow to green as a milestone fills up, so the nearly-finished ones stand out. An undated
+milestone and one with nothing closed yet are both left plain — neither is a problem.
+
+Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
+`milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a
+script — or a coding agent — `milestones status --json` prints the same data as JSON:
+`milestones` with `repo`, `title`, `due`, `open`, `closed`, `percent`, `flags` and `url`, plus
+`quiet_repos` for the tracked repos with no open milestone.
 
 ## Development
 

@@ -2,6 +2,7 @@
 
 import argparse
 import datetime
+import json
 import os
 import re
 import sys
@@ -201,12 +202,78 @@ def excerpt(body: str | None, width: int = 200) -> str:
     return textwrap.shorten(body or "", width, placeholder=" …")
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Colour is for a person reading a terminal; a pipe, a file or NO_COLOR gets plain text.
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+# Whole SGR parameters, not bare colour numbers: `38;5;N` is 256-colour foreground N, where
+# a bare N would be one of the sixteen ANSI codes and mean something else entirely (39 is
+# "default foreground", 44 is a blue *background*). Bold is plain `1`.
+def fg(n: int) -> str:
+    return f"38;5;{n}"
+
+
+# The status table means something by red-orange-yellow-green — how late a milestone is, how
+# far along it is — so the org palette stays out of that range entirely and reads as "same
+# org", not as a rating.
+ORG_PALETTE = [fg(n) for n in (39, 170, 44, 141, 105, 212, 74, 183)]
+LATE, SOON, AHEAD, DISTANT, DONE = (fg(n) for n in (196, 208, 226, 244, 46))
+
+
+def visible(cell) -> int:
+    """Printed width of a cell: escape sequences take no columns."""
+    return len(ANSI_RE.sub("", str(cell)))
+
+
+def paint(text: str, code: str | None) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if code and COLOR else text
+
+
+def org_colors(repos: list[str]) -> dict[str, str]:
+    """A colour for each owner that owns more than one of these repos.
+
+    Colouring a one-off owner would say "these rows go together" about a single row.
+    Assigned in first-appearance order, so a caller that has already sorted its rows gets
+    the palette running down the page.
+    """
+    counts = Counter(r.split("/")[0] for r in repos)
+    repeated = dict.fromkeys(o for o in (r.split("/")[0] for r in repos) if counts[o] > 1)
+    return {owner: ORG_PALETTE[i % len(ORG_PALETTE)] for i, owner in enumerate(repeated)}
+
+
+def due_color(due: str | None, today: str) -> str | None:
+    """Overdue, this week, this month, later — undated milestones stay plain."""
+    if not due:
+        return None
+    days = (datetime.date.fromisoformat(due) - datetime.date.fromisoformat(today)).days
+    if days < 0:
+        return LATE
+    return SOON if days <= 7 else AHEAD if days <= 30 else DISTANT
+
+
+def pct_color(closed: int, total: int) -> str | None:
+    """How far along, so nearly-finished milestones catch the eye. Nothing closed is
+    plain rather than red: a milestone just filed is not in trouble."""
+    if not total or not closed:
+        return None
+    pct = 100 * closed / total
+    return LATE if pct <= 25 else SOON if pct <= 50 else AHEAD if pct <= 75 else DONE
+
+
 def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
-    """`right` names the headers whose column is right-aligned; the rest go left."""
-    widths = [max(len(str(r[i])) for r in [headers, *rows]) for i in range(len(headers))]
+    """`right` names the headers whose column is right-aligned; the rest go left.
+
+    Padded on the visible width, so a cell may carry colour of its own — `str.ljust`
+    counts escape sequences and would knock the column out of line.
+    """
+    widths = [max(visible(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
     for row in [headers, *rows]:
-        print("  ".join((str(cell).rjust(w) if h in right else str(cell).ljust(w))
-                        for cell, h, w in zip(row, headers, widths)).rstrip())
+        cells = []
+        for cell, header, width in zip(row, headers, widths):
+            pad = " " * (width - visible(cell))
+            cells.append(pad + str(cell) if header in right else str(cell) + pad)
+        print("  ".join(cells).rstrip())
 
 
 # --- commands ---------------------------------------------------------------
@@ -263,8 +330,11 @@ def cmd_status(config, args):
         milestones.append((repo, m["title"], due, m["open"]["totalCount"],
                            m["closed"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
+    # A tracked repo with no open milestone has no row of its own, and so is invisible
+    # here unless it is named; `discover` lists the config's repos in full.
+    quiet = sorted(set(tracked) - {m[0] for m in milestones})
 
-    rows = []
+    records = []
     for repo, title, due, count, closed, url in milestones:
         # `check` owns what is wrong with a milestone; status shows the three of its
         # kinds that read as a state the milestone is in rather than a fix to make,
@@ -273,18 +343,34 @@ def cmd_status(config, args):
         # not "all done".
         kinds = {kind for kind, _ in milestone_problems(title, due, count, closed,
                                                         config["buckets"], today)}
+        total = count + closed
+        records.append({"repo": repo, "title": title, "due": due, "open": count,
+                        "closed": closed,
+                        "percent": round(100 * closed / total) if total else None,
+                        "flags": [k for k in ("overdue", "empty", "done") if k in kinds],
+                        "url": url})
+    if args.json:
+        json.dump({"milestones": records, "quiet_repos": quiet}, sys.stdout, indent=2)
+        print()
+        return
+
+    orgs = org_colors([r["repo"] for r in records])
+    rows = []
+    for r in records:
+        owner, _, name = r["repo"].partition("/")
         flags = " ".join(flag for kind, flag in (("overdue", "!OVERDUE"),
                                                  ("empty", "(empty)"), ("done", "(done)"))
-                         if kind in kinds)
-        total = count + closed
-        pct = f"{round(100 * closed / total)}%" if total else "—"
-        rows.append((repo, title, due or "—", count, closed, pct, flags, url))
+                         if kind in r["flags"])
+        rows.append((f"{paint(owner, orgs.get(owner))}/{name}",
+                     VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
+                     paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
+                     r["open"], r["closed"],
+                     paint(f"{r['percent']}%", pct_color(r["closed"], r["open"] + r["closed"]))
+                     if r["percent"] is not None else "—",
+                     flags, r["url"]))
     if rows:
         print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
                     right=("OPEN", "DONE", "%"))
-    # A tracked repo with no open milestone has no row of its own, and so is invisible
-    # here unless it is named; `discover` lists the config's repos in full.
-    quiet = sorted(set(tracked) - {m[0] for m in milestones})
     if quiet:
         if rows:
             print()
@@ -792,10 +878,14 @@ def cmd_discover(config, args):
 def main():
     parser = argparse.ArgumentParser(prog="milestones", description=__doc__)
     sub = parser.add_subparsers()
-    parser.set_defaults(func=cmd_status)  # bare `milestones` is `milestones status`
+    # Bare `milestones` is `milestones status`, so it needs that command's defaults too.
+    parser.set_defaults(func=cmd_status, json=False)
 
-    sub.add_parser("status", help="all open milestones across configured repos, by due date"
-                   ).set_defaults(func=cmd_status)
+    status = sub.add_parser("status",
+                            help="all open milestones across configured repos, by due date")
+    status.add_argument("--json", action="store_true",
+                        help="print the milestones as JSON instead of a table")
+    status.set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
     triage.set_defaults(func=cmd_triage)

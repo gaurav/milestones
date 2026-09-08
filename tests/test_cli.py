@@ -4,9 +4,10 @@ import io
 import pytest
 
 from milestones.cli import (
-    KINDS, build_search_queries, date_choices, excerpt, favourite_date, issue_count,
-    is_ignored, load_config, milestone_problems, missing_buckets, parse_ignore, parse_repo,
-    print_findings, read_key, sort_key, write_repo_list,
+    AHEAD, DISTANT, DONE, KINDS, LATE, SOON, build_search_queries, date_choices, due_color,
+    excerpt, favourite_date, issue_count, is_ignored, load_config, milestone_problems,
+    missing_buckets, org_colors, parse_ignore, parse_repo, pct_color, print_findings,
+    print_table, read_key, sort_key, visible, write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -239,3 +240,39 @@ def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):
     assert len(rename_lines) == 2
     assert len({l.index("(") for l in rename_lines}) == 1
     assert "  https://github.com/owner/one/milestone/1" in out  # a URL under every finding
+
+
+def test_org_colors_only_colours_owners_with_more_than_one_repo():
+    colors = org_colors(["a/one", "b/only", "a/two", "c/x", "c/y"])
+    assert set(colors) == {"a", "c"}
+    assert colors["a"] != colors["c"]  # first-appearance order, distinct hues
+
+
+def test_due_color_bands():
+    today = "2026-09-08"
+    assert due_color(None, today) is None
+    assert due_color("2026-09-07", today) == LATE
+    assert due_color("2026-09-08", today) == SOON       # due today is still "this week"
+    assert due_color("2026-09-15", today) == SOON       # exactly 7 days
+    assert due_color("2026-09-16", today) == AHEAD
+    assert due_color("2026-10-08", today) == AHEAD      # exactly 30 days
+    assert due_color("2026-10-09", today) == DISTANT
+
+
+def test_pct_color_bands():
+    assert pct_color(0, 0) is None                      # nothing ever filed
+    assert pct_color(0, 10) is None                     # filed, none closed: not "in trouble"
+    assert pct_color(1, 4) == LATE                      # 25%
+    assert pct_color(26, 100) == SOON
+    assert pct_color(1, 2) == SOON                      # 50%
+    assert pct_color(3, 4) == AHEAD                     # 75%
+    assert pct_color(76, 100) == DONE
+    assert pct_color(4, 4) == DONE
+
+
+def test_print_table_aligns_around_escape_sequences(capsys):
+    print_table([("plain", 7), ("\x1b[38;5;196mabc\x1b[0m", 7)], ("NAME", "N"), right=("N",))
+    lines = capsys.readouterr().out.splitlines()
+    # The coloured cell pads out to the three characters you can see, not to the dozen
+    # bytes it takes to say them, so every row is the same width on screen.
+    assert {visible(line) for line in lines} == {len("plain  N")}
