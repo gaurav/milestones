@@ -291,11 +291,13 @@ def test_print_table_aligns_around_escape_sequences(capsys):
 
 def test_write_repo_list_adds_a_missing_key_above_any_table(tmp_path):
     config = tmp_path / "milestones.toml"
-    config.write_text('repos = ["a/one"]\n\n[colors]\ngaurav = "purple"\n')
+    config.write_text('repos = ["a/one"]\n\n# What the colours are.\n[colors]\n'
+                      'gaurav = "purple"\n')
     write_repo_list(config, "ignore", ["b/two"])
     text = config.read_text()
-    # Under the [colors] header it would have been read back as colors.ignore.
-    assert text.index("ignore = [") < text.index("[colors]")
+    # Under the [colors] header it would have been read back as colors.ignore — and
+    # between the comment and the header it would look like the comment described it.
+    assert text.index("ignore = [") < text.index("# What the colours are.")
     assert tomllib.loads(text)["ignore"] == ["b/two"]
 
 

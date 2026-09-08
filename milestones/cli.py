@@ -176,8 +176,10 @@ def write_repo_list(path: Path, key: str, repos: list[str]) -> None:
             sys.exit(f"Can't find a `{key} = [...]` list to edit in {path}; edit it by hand.")
         # A top-level key has to go above the first `[table]` header, not at the end of the
         # file: everything after a header belongs to that table, so appending `ignore` under
-        # `[colors]` would quietly turn it into `colors.ignore`.
-        header = re.search(r"^\[", text, re.M)
+        # `[colors]` would quietly turn it into `colors.ignore`. Above the comment block
+        # that introduces the table, too — landing between a comment and the thing it
+        # describes leaves the comment looking like it explains the new key.
+        header = re.search(r"(?:^[ \t]*#[^\n]*\n)*^\[", text, re.M)
         at = header.start() if header else len(text)
         text = f"{text[:at].rstrip(chr(10))}\n\n{block}\n\n{text[at:].lstrip(chr(10))}".rstrip(
             "\n") + "\n"
