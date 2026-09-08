@@ -57,13 +57,14 @@ milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
-milestones discover [--tracked-only|--list-ignored]
+milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # the repos you track, then repos owned by your
                                          # configured owners that have issues/milestones
                                          # but aren't in the config yet; ignored repos are
                                          # counted in one closing line rather than listed;
-                                         # --tracked-only stops after the first list, and
-                                         # --list-ignored spells out the ignored ones
+                                         # --tracked-only stops after the first list,
+                                         # --list-ignored spells out the ignored ones, and
+                                         # --ignore-remaining ignores the ones suggested
 milestones check [-i|--interactive]      # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
                                          # roll over, and repos that use standing buckets
@@ -106,6 +107,13 @@ keep showing up, and per-repo entries under an ignored owner are simply redundan
 `milestones discover --list-ignored` spells the hidden repos out in a table of their own instead of
 only counting them, busiest first, so reconsidering one is `milestones add` on the name in the first
 column — after which it moves up into the tracked list and stops being counted.
+
+The two kinds of entry answer different questions, and `discover --ignore-remaining` writes the
+second kind in bulk: it adds every repo it has just suggested to the ignore list, after confirming.
+Use `OWNER/*` for an organisation you will never triage, and the sweep for owners whose repos you do
+care about — you have looked at these and said no, so clear them off the list, but any repo created
+there later is a fresh suggestion rather than something the glob silently swallows. After a sweep
+`discover` reads as a change feed: "Nothing new" until something appears.
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
