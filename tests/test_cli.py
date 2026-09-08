@@ -6,7 +6,8 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
-    due_color, excerpt, favourite_date, fg, issue_count, is_ignored, load_config,
+    due_color, excerpt, favourite_date, fg, is_focused, issue_count, is_ignored,
+    load_config,
     milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
@@ -295,3 +296,17 @@ def test_write_repo_list_adds_a_missing_key_above_any_table(tmp_path):
     # Under the [colors] header it would have been read back as colors.ignore.
     assert text.index("ignore = [") < text.index("[colors]")
     assert tomllib.loads(text)["ignore"] == ["b/two"]
+
+
+def test_is_focused_folds_case_and_needs_the_whole_name():
+    focus = ["gaurav/Milestones"]
+    assert is_focused("gaurav/milestones", focus)   # GitHub's spelling vs the config's
+    assert not is_focused("gaurav/milestones-old", focus)
+    assert not is_focused("gaurav/other", focus)
+    assert not is_focused("gaurav/anything", [])
+
+
+def test_print_table_drops_a_column_that_is_empty_all_the_way_down(capsys):
+    # The focus column with nothing focused: it should cost no indent at all.
+    print_table([("", "a/one"), ("", "b/two")], ("", "REPO"))
+    assert [line[0] for line in capsys.readouterr().out.splitlines()] == ["R", "a", "b"]

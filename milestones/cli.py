@@ -40,11 +40,13 @@ def load_config() -> dict:
     except FileNotFoundError:
         sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
     config.setdefault("buckets", list(DEFAULT_BUCKETS))
-    # An empty ignore list is the normal state; an empty repos list is not.
+    # An empty ignore list is the normal state; an empty repos list is not. Focusing on
+    # nothing in particular is the normal state too.
     config.setdefault("ignore", [])
+    config.setdefault("focus", [])
     if not config.get("repos"):
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
-    bad = [r for r in config["repos"] + config["ignore"]
+    bad = [r for r in config["repos"] + config["ignore"] + config["focus"]
            if r.count("/") != 1 or not all(r.split("/"))]
     if bad:
         sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
@@ -144,6 +146,17 @@ def is_ignored(name: str, ignore: list[str]) -> bool:
     # canonical spelling.
     name = name.lower()
     return any(entry.lower() in (name, f"{name.split('/')[0]}/*") for entry in ignore)
+
+
+def is_focused(repo: str, focus: list[str]) -> bool:
+    """Whether OWNER/NAME is one of the repos you're currently working on.
+
+    No `OWNER/*` here, unlike the ignore list: focus is a handful of repos you name, and
+    a whole organisation at once has never been the thing anyone wanted. Folded case
+    either way — the list is typed by hand while GitHub answers with the canonical
+    spelling.
+    """
+    return repo.lower() in {f.lower() for f in focus}
 
 
 def write_repo_list(path: Path, key: str, repos: list[str]) -> None:
@@ -264,6 +277,17 @@ def paint(text: str, code: str | None) -> str:
     return f"\x1b[{code}m{text}\x1b[0m" if code and COLOR else text
 
 
+def star(focused: bool) -> str:
+    """The focus marker for a row, in a column of its own so the names stay aligned.
+
+    Not a colour: the whole point is that it survives a pipe and NO_COLOR, where the rest
+    of the table's meaning doesn't.
+    """
+    # ponytail: U+2605 is East Asian Ambiguous, so a CJK-configured terminal draws it two
+    # columns wide and shifts the row by one; swap in "*" if that ever comes up.
+    return paint("\u2605", "1") if focused else ""
+
+
 def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> dict[str, str]:
     """A colour for each owner the config names, and for each one that owns more than one
     of these repos.
@@ -310,11 +334,15 @@ def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
     counts escape sequences and would knock the column out of line.
     """
     widths = [max(visible(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
+    # A column empty from its header to the last row takes no space at all, rather than
+    # indenting everything past it: the flags column with nothing flagged, the focus
+    # column with nothing focused.
+    keep = [i for i, width in enumerate(widths) if width]
     for row in [headers, *rows]:
         cells = []
-        for cell, header, width in zip(row, headers, widths):
-            pad = " " * (width - visible(cell))
-            cells.append(pad + str(cell) if header in right else str(cell) + pad)
+        for i in keep:
+            pad = " " * (widths[i] - visible(row[i]))
+            cells.append(pad + str(row[i]) if headers[i] in right else str(row[i]) + pad)
         print("  ".join(cells).rstrip())
 
 
@@ -390,9 +418,13 @@ def cmd_status(config, args):
                         "closed": closed,
                         "percent": round(100 * closed / total) if total else None,
                         "flags": [k for k in ("overdue", "empty", "done") if k in kinds],
+                        "focus": is_focused(repo, config["focus"]),
                         "url": url})
     if args.json:
-        json.dump({"milestones": records, "quiet_repos": quiet}, sys.stdout, indent=2)
+        # The focus list as well as the per-milestone flag: a focused repo can be one of
+        # the quiet ones, with no milestone row to carry it.
+        json.dump({"milestones": records, "quiet_repos": quiet, "focus": config["focus"]},
+                  sys.stdout, indent=2)
         print()
         return
 
@@ -403,7 +435,8 @@ def cmd_status(config, args):
         flags = " ".join(flag for kind, flag in (("overdue", "!OVERDUE"),
                                                  ("empty", "(empty)"), ("done", "(done)"))
                          if kind in r["flags"])
-        rows.append((f"{paint(owner, orgs.get(owner))}/{name}",
+        rows.append((star(r["focus"]),
+                     f"{paint(owner, orgs.get(owner))}/{name}",
                      VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
                      paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
                      r["open"], r["closed"],
@@ -411,14 +444,15 @@ def cmd_status(config, args):
                      if r["percent"] is not None else "—",
                      flags, r["url"]))
     if rows:
-        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
+        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
                     right=("OPEN", "DONE", "%"))
     if quiet:
         if rows:
             print()
         print(f"{len(quiet)} tracked repo{'s' if len(quiet) != 1 else ''} "
               f"with no open milestones:")
-        print_table([(r, repo_url(r)) for r in quiet], ("REPO", "URL"))
+        print_table([(star(is_focused(r, config["focus"])), r, repo_url(r)) for r in quiet],
+                    ("", "REPO", "URL"))
     elif not rows:
         print("No open milestones in any configured repo.")
 
@@ -812,6 +846,52 @@ def cmd_remove(config, args):
         sys.exit(f"{repo} is the only tracked repo; a config with none is rejected on load.")
     write_repo_list(config_path(), "repos", keep)
     print(f"stopped tracking {repo}")
+    # An untracked repo has no rows to mark, so a focus entry left behind is one that can
+    # never match again.
+    if is_focused(repo, config["focus"]):
+        write_repo_list(config_path(), "focus",
+                        [r for r in config["focus"] if r.lower() != repo.lower()])
+        print("and stopped focusing on it")
+
+
+def cmd_focus(config, args):
+    """Name the repos you're working on right now, so `status` marks their rows."""
+    focus = list(config["focus"])
+    if not args.repos:
+        # Somewhere to look that isn't the config file.
+        if focus:
+            print_table([(star(True), r, repo_url(r)) for r in focus], ("", "REPO", "URL"))
+        else:
+            print("Not focused on anything; `milestones focus OWNER/NAME` picks a repo.")
+        return
+    tracked = {r.lower(): r for r in config["repos"]}
+    for text in args.repos:
+        repo = parse_repo(text)
+        # Focusing on an untracked repo would mark nothing, since `status` only ever lists
+        # the tracked ones — so say so rather than writing an entry that does nothing.
+        if repo.lower() not in tracked:
+            print(f"not tracked: {repo} — `milestones add {repo}` first")
+        elif is_focused(repo, focus):
+            print(f"already focused: {repo}")
+        else:
+            # The config's spelling, not the one just typed, so the list stays canonical.
+            focus.append(tracked[repo.lower()])
+            print(f"focusing on {tracked[repo.lower()]}")
+    if focus != config["focus"]:
+        write_repo_list(config_path(), "focus", focus)
+
+
+def cmd_unfocus(config, args):
+    focus = list(config["focus"])
+    for text in args.repos:
+        repo = parse_repo(text)
+        if not is_focused(repo, focus):
+            print(f"not focused: {repo}")
+            continue
+        focus = [r for r in focus if r.lower() != repo.lower()]
+        print(f"no longer focusing on {repo}")
+    if focus != config["focus"]:
+        write_repo_list(config_path(), "focus", focus)
 
 
 def cmd_ignore(config, args):
@@ -951,6 +1031,14 @@ def main():
     remove = sub.add_parser("remove", help="stop tracking a repo")
     remove.add_argument("repo", metavar="REPO")
     remove.set_defaults(func=cmd_remove)
+    focus = sub.add_parser("focus", help="mark repos you're working on right now; "
+                                        "`status` stars their rows")
+    focus.add_argument("repos", metavar="REPO", nargs="*",
+                       help="the repos to focus on; none, to list what's in focus")
+    focus.set_defaults(func=cmd_focus)
+    unfocus = sub.add_parser("unfocus", help="stop marking a repo you were working on")
+    unfocus.add_argument("repos", metavar="REPO", nargs="+")
+    unfocus.set_defaults(func=cmd_unfocus)
     ignore = sub.add_parser("ignore", help="hide repos from discover without tracking them")
     ignore.add_argument("repos", metavar="REPO", nargs="+")
     ignore.set_defaults(func=cmd_ignore)

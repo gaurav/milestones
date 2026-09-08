@@ -42,6 +42,10 @@ ignore = [
   "TranslatorSRI/*",
 ]
 
+# Optional: the repos you're working on right now. `status` stars their rows;
+# `milestones focus` and `unfocus` rewrite this list.
+focus = ["gaurav/milestones"]
+
 # Optional: fixed colours for an owner's rows in `status`. Any owner left out that
 # owns several tracked repos gets one from the palette. Sibling organisations can
 # share a colour to read as one.
@@ -86,6 +90,9 @@ milestones check [-i|--interactive]      # everything that needs fixing, grouped
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
 milestones remove REPO                   # stop tracking a repo, same syntax
+milestones focus [REPO ...]              # mark the repos you're working on right now, so
+                                         # `status` stars their rows; no arguments lists them
+milestones unfocus REPO [...]            # stop marking them, once your attention moves on
 milestones ignore REPO|OWNER [...]       # hide repos from discover without tracking them;
                                          # a bare OWNER hides everything of that owner's
                                          # you don't track; appends to the config
@@ -137,6 +144,12 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
+
+A repo you have said you are working on is starred, in a column of its own — a plain `★`, not
+colour, so it survives a pipe. The rows do **not** move: a repo's milestones include its
+standing buckets, and floating `Not urgent` above someone else's overdue release would make the
+table worse. The star says "this is mine right now" while the order goes on meaning "this is
+what's due next".
 
 `%` is grey up to halfway and then a lightening green, so the milestones near the end stand
 out. Nothing below halfway is coloured as a warning: a milestone at 10% is not one in trouble,
