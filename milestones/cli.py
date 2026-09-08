@@ -201,10 +201,12 @@ def excerpt(body: str | None, width: int = 200) -> str:
     return textwrap.shorten(body or "", width, placeholder=" …")
 
 
-def print_table(rows: list[tuple], headers: tuple):
+def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
+    """`right` names the headers whose column is right-aligned; the rest go left."""
     widths = [max(len(str(r[i])) for r in [headers, *rows]) for i in range(len(headers))]
     for row in [headers, *rows]:
-        print("  ".join(str(cell).ljust(w) for cell, w in zip(row, widths)).rstrip())
+        print("  ".join((str(cell).rjust(w) if h in right else str(cell).ljust(w))
+                        for cell, h, w in zip(row, headers, widths)).rstrip())
 
 
 # --- commands ---------------------------------------------------------------
@@ -274,9 +276,12 @@ def cmd_status(config, args):
         flags = " ".join(flag for kind, flag in (("overdue", "!OVERDUE"),
                                                  ("empty", "(empty)"), ("done", "(done)"))
                          if kind in kinds)
-        rows.append((repo, title, due or "—", count, closed, flags, url))
+        total = count + closed
+        pct = f"{round(100 * closed / total)}%" if total else "—"
+        rows.append((repo, title, due or "—", count, closed, pct, flags, url))
     if rows:
-        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "", "URL"))
+        print_table(rows, ("REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
+                    right=("OPEN", "DONE", "%"))
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.
     quiet = sorted(set(tracked) - {m[0] for m in milestones})
