@@ -48,7 +48,7 @@ ignore = [
 ```sh
 milestones status                        # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
-                                         # due date, with open and closed issue counts;
+                                         # due date, with open/closed counts and % done;
                                          # flags !OVERDUE, (empty) and (done), links each,
                                          # then names any tracked repo with nothing open
 milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
