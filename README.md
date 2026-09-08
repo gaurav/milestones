@@ -145,11 +145,11 @@ when the config names a colour for it, or when several of your repos share it, s
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
 
-A repo you have said you are working on is starred, in a column of its own — a plain `★`, not
-colour, so it survives a pipe. The rows do **not** move: a repo's milestones include its
-standing buckets, and floating `Not urgent` above someone else's overdue release would make the
-table worse. The star says "this is mine right now" while the order goes on meaning "this is
-what's due next".
+A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
+The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses
+nothing. The rows do **not** move: a repo's milestones include its standing buckets, and
+floating `Not urgent` above someone else's overdue release would make the table worse. The star
+says "this is mine right now" while the order goes on meaning "this is what's due next".
 
 `%` is grey up to halfway and then a lightening green, so the milestones near the end stand
 out. Nothing below halfway is coloured as a warning: a milestone at 10% is not one in trouble,

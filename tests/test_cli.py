@@ -1,13 +1,14 @@
 import datetime
 import io
 import tomllib
+import unicodedata
 
 import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
-    due_color, excerpt, favourite_date, fg, is_focused, issue_count, is_ignored,
-    load_config,
+    FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
+    is_ignored, load_config,
     milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
@@ -310,3 +311,11 @@ def test_print_table_drops_a_column_that_is_empty_all_the_way_down(capsys):
     # The focus column with nothing focused: it should cost no indent at all.
     print_table([("", "a/one"), ("", "b/two")], ("", "REPO"))
     assert [line[0] for line in capsys.readouterr().out.splitlines()] == ["R", "a", "b"]
+
+
+def test_focus_marker_is_one_column_wide():
+    # An East Asian Ambiguous glyph — U+2605 BLACK STAR, say — is drawn two columns wide
+    # in a CJK-configured terminal, which shifts every focused row by one. print_table
+    # measures in characters and cannot see that happen.
+    assert len(FOCUS_MARK) == 1
+    assert unicodedata.east_asian_width(FOCUS_MARK) in ("N", "Na")

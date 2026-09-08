@@ -261,7 +261,7 @@ PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 # the DUE and % columns for the eye.
 COLOR_NAMES = {"blue": 39, "cyan": 44, "teal": 74, "indigo": 105, "violet": 141,
                "magenta": 170, "purple": 183, "yellow": 186, "green": 114, "rose": 212,
-               "pink": 218, "grey": 250}
+               "pink": 218, "gold": 220, "grey": 250}
 
 # The cycle for owners the config says nothing about.
 ORG_PALETTE = [fg(COLOR_NAMES[n]) for n in ("blue", "magenta", "cyan", "violet", "indigo",
@@ -277,15 +277,22 @@ def paint(text: str, code: str | None) -> str:
     return f"\x1b[{code}m{text}\x1b[0m" if code and COLOR else text
 
 
+# U+2726 BLACK FOUR POINTED STAR, gold. A Dingbats star rather than the obvious U+2605:
+# that one is East Asian Ambiguous, so a CJK-configured terminal draws it two columns wide
+# and knocks the row out of line. This one is Neutral width, and is not in the emoji set
+# either, so no font can decide to render it as a double-width colour glyph. Keep both
+# properties if you ever swap it — test_focus_marker_is_one_column_wide checks the first.
+FOCUS_MARK = "\u2726"
+FOCUS_COLOR = "1;" + fg(COLOR_NAMES["gold"])
+
+
 def star(focused: bool) -> str:
     """The focus marker for a row, in a column of its own so the names stay aligned.
 
-    Not a colour: the whole point is that it survives a pipe and NO_COLOR, where the rest
-    of the table's meaning doesn't.
+    The glyph carries the meaning and the colour only makes it easier to find, so a pipe
+    or NO_COLOR loses nothing.
     """
-    # ponytail: U+2605 is East Asian Ambiguous, so a CJK-configured terminal draws it two
-    # columns wide and shifts the row by one; swap in "*" if that ever comes up.
-    return paint("\u2605", "1") if focused else ""
+    return paint(FOCUS_MARK, FOCUS_COLOR) if focused else ""
 
 
 def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> dict[str, str]:
