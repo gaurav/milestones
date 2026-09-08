@@ -751,13 +751,24 @@ def cmd_discover(config, args):
         print_table([(name, issues, ms, repo_url(name))
                      for issues, ms, name in sorted(rows, reverse=True)],
                     ("REPO NOT IN CONFIG", "OPEN ISSUES", "OPEN MILESTONES", "URL"))
-    elif not hidden:
-        # Only true if nothing was hidden either: repos left out on purpose are not repos
-        # the config covers.
-        print("Nothing new — the config covers every repo found.")
+    else:
+        # True of a repo left out on purpose as much as one already tracked, so this no
+        # longer waits on there being nothing hidden — a swept config is all hidden.
+        print("Nothing new — every repo found is already tracked or ignored.")
+    if args.ignore_remaining and rows:
+        # `rows` is already exactly the set to write: found, not archived, has issues or
+        # milestones, not tracked, and not ignored — so no dedupe and no is_ignored call
+        # here. Sorted, so the config groups them by owner.
+        names = sorted(name for _, _, name in rows)
+        if ask(f"\nIgnore {len(names)} suggested repos? [y/N] ").strip().lower() != "y":
+            sys.exit("Aborted.")
+        write_repo_list(config_path(), "ignore", config["ignore"] + names)
+        print(f"ignored {len(names)}; new repos under these owners will still show up.")
     if args.list_ignored and not hidden:
         print("\nNothing ignored — no repo found is on the ignore list.")
-    if hidden:
+    if hidden and not args.ignore_remaining:
+        # The count is of what was hidden *before* this run, so it is stale either side of
+        # a sweep that just changed it; the sweep reports its own total instead.
         if rows:
             print()
         if args.list_ignored:
@@ -814,6 +825,8 @@ def main():
                          help="just list the tracked repos; don't go looking for more")
     listing.add_argument("--list-ignored", action="store_true",
                          help="list the ignored repos found, rather than only counting them")
+    listing.add_argument("--ignore-remaining", action="store_true",
+                         help="add every repo suggested above to the ignore list")
     discover.set_defaults(func=cmd_discover)
 
     args = parser.parse_args()
