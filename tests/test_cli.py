@@ -1,13 +1,14 @@
 import datetime
 import io
+import tomllib
 
 import pytest
 
 from milestones.cli import (
-    AHEAD, DISTANT, DONE, KINDS, LATE, SOON, build_search_queries, date_choices, due_color,
-    excerpt, favourite_date, issue_count, is_ignored, load_config, milestone_problems,
-    missing_buckets, org_colors, parse_ignore, parse_repo, pct_color, print_findings,
-    print_table, read_key, sort_key, visible, write_repo_list,
+    AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
+    due_color, excerpt, favourite_date, fg, issue_count, is_ignored, load_config,
+    milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
+    print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -248,6 +249,14 @@ def test_org_colors_only_colours_owners_with_more_than_one_repo():
     assert colors["a"] != colors["c"]  # first-appearance order, distinct hues
 
 
+def test_org_colors_honours_the_config_even_for_a_single_repo():
+    colors = org_colors(["a/one", "b/only", "c/x", "c/y"],
+                        {"B": COLOR_NAMES["pink"], "c": COLOR_NAMES["pink"]})
+    # A hand-picked colour applies however few repos the owner has, and two owners may
+    # share one; "a" is left plain, owning only one repo and named by nobody.
+    assert colors == {"b": fg(COLOR_NAMES["pink"]), "c": fg(COLOR_NAMES["pink"])}
+
+
 def test_due_color_bands():
     today = "2026-09-08"
     assert due_color(None, today) is None
@@ -259,15 +268,15 @@ def test_due_color_bands():
     assert due_color("2026-10-09", today) == DISTANT
 
 
-def test_pct_color_bands():
+def test_pct_color_ramps_up_from_halfway():
     assert pct_color(0, 0) is None                      # nothing ever filed
-    assert pct_color(0, 10) is None                     # filed, none closed: not "in trouble"
-    assert pct_color(1, 4) == LATE                      # 25%
-    assert pct_color(26, 100) == SOON
-    assert pct_color(1, 2) == SOON                      # 50%
-    assert pct_color(3, 4) == AHEAD                     # 75%
-    assert pct_color(76, 100) == DONE
-    assert pct_color(4, 4) == DONE
+    # Nothing under halfway is coloured as progress, and none of it as a warning.
+    grey = pct_color(0, 10)
+    assert grey == pct_color(49, 100) == DISTANT
+    greens = [pct_color(n, 100) for n in (50, 65, 80, 95)]
+    assert len(set(greens)) == 4 and grey not in greens  # a four-step ramp above halfway
+    assert pct_color(64, 100) == greens[0]               # each band runs up to the next
+    assert pct_color(4, 4) == greens[-1]                 # everything closed is the brightest
 
 
 def test_print_table_aligns_around_escape_sequences(capsys):
@@ -276,3 +285,13 @@ def test_print_table_aligns_around_escape_sequences(capsys):
     # The coloured cell pads out to the three characters you can see, not to the dozen
     # bytes it takes to say them, so every row is the same width on screen.
     assert {visible(line) for line in lines} == {len("plain  N")}
+
+
+def test_write_repo_list_adds_a_missing_key_above_any_table(tmp_path):
+    config = tmp_path / "milestones.toml"
+    config.write_text('repos = ["a/one"]\n\n[colors]\ngaurav = "purple"\n')
+    write_repo_list(config, "ignore", ["b/two"])
+    text = config.read_text()
+    # Under the [colors] header it would have been read back as colors.ignore.
+    assert text.index("ignore = [") < text.index("[colors]")
+    assert tomllib.loads(text)["ignore"] == ["b/two"]

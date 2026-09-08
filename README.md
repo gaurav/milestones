@@ -41,7 +41,18 @@ ignore = [
   "NCATSTranslator/Planning-Committee",
   "TranslatorSRI/*",
 ]
+
+# Optional: fixed colours for an owner's rows in `status`. Any owner left out that
+# owns several tracked repos gets one from the palette. Sibling organisations can
+# share a colour to read as one.
+[colors]
+NCATSTranslator = "blue"
+TranslatorSRI = "blue"
+phyloref = "yellow"
 ```
+
+Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`, `yellow`,
+`green`, `rose`, `pink` and `grey`; a 256-colour number from 0 to 255 works too.
 
 ## Commands
 
@@ -123,11 +134,13 @@ release time, roll what didn't make it into the next milestone instead of re-tri
 ### Reading the status table
 
 The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured
-only when several of your repos share it, so a run of rows from the same organisation lights up
-together; version numbers in a milestone title are bold; a due date runs red (overdue), orange
-(this week), yellow (this month) or grey (further out); and `%` runs red through orange and
-yellow to green as a milestone fills up, so the nearly-finished ones stand out. An undated
-milestone and one with nothing closed yet are both left plain — neither is a problem.
+when the config names a colour for it, or when several of your repos share it, so a run of rows
+from the same organisation lights up together. Version numbers in a milestone title are bold. A
+due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
+
+`%` is grey up to halfway and then a lightening green, so the milestones near the end stand
+out. Nothing below halfway is coloured as a warning: a milestone at 10% is not one in trouble,
+just one somebody has only started. An undated milestone stays plain, for the same reason.
 
 Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
 `milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a

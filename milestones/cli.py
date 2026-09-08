@@ -12,6 +12,7 @@ import tomllib
 import tty
 import webbrowser
 from collections import Counter
+from itertools import cycle
 from pathlib import Path
 
 from . import gh
@@ -47,7 +48,20 @@ def load_config() -> dict:
            if r.count("/") != 1 or not all(r.split("/"))]
     if bad:
         sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
+    # Owner -> colour, resolved here so `status` can hand org_colors plain numbers.
+    config["colors"] = {owner: parse_color(path, owner, value)
+                        for owner, value in config.get("colors", {}).items()}
     return config
+
+
+def parse_color(path: Path, owner: str, value) -> int:
+    """One `[colors]` entry: a name from COLOR_NAMES, or a 256-colour number."""
+    if isinstance(value, str) and value in COLOR_NAMES:
+        return COLOR_NAMES[value]
+    if isinstance(value, int) and 0 <= value <= 255:
+        return value
+    sys.exit(f"Config {path}: colour {value!r} for {owner} is not one of "
+             f"{', '.join(sorted(COLOR_NAMES))}, or a number from 0 to 255.")
 
 
 REPO_RE = re.compile(r"(?:(?:https?://)?github\.com/)?([^/\s]+)/([^/\s]+?)(?:\.git)?/?$")
@@ -147,7 +161,13 @@ def write_repo_list(path: Path, key: str, repos: list[str]) -> None:
         # load_config, so it only ever takes the second branch.
         if re.search(rf"^{key}\s*=", text, re.M):
             sys.exit(f"Can't find a `{key} = [...]` list to edit in {path}; edit it by hand.")
-        text = text.rstrip("\n") + f"\n\n{block}\n"
+        # A top-level key has to go above the first `[table]` header, not at the end of the
+        # file: everything after a header belongs to that table, so appending `ignore` under
+        # `[colors]` would quietly turn it into `colors.ignore`.
+        header = re.search(r"^\[", text, re.M)
+        at = header.start() if header else len(text)
+        text = f"{text[:at].rstrip(chr(10))}\n\n{block}\n\n{text[at:].lstrip(chr(10))}".rstrip(
+            "\n") + "\n"
     path.write_text(text)
 
 
@@ -214,11 +234,25 @@ def fg(n: int) -> str:
     return f"38;5;{n}"
 
 
-# The status table means something by red-orange-yellow-green — how late a milestone is, how
-# far along it is — so the org palette stays out of that range entirely and reads as "same
-# org", not as a rating.
-ORG_PALETTE = [fg(n) for n in (39, 170, 44, 141, 105, 212, 74, 183)]
-LATE, SOON, AHEAD, DISTANT, DONE = (fg(n) for n in (196, 208, 226, 244, 46))
+# How late a milestone is: red, orange, yellow, then grey once it is far enough out to stop
+# being news.
+LATE, SOON, AHEAD, DISTANT = (fg(n) for n in (196, 208, 226, 244))
+
+# How far along it is, as an upward-biased green ramp: grey until halfway, then lightening
+# green. Being at 10% is not bad news — it is a milestone somebody just filed — so nothing
+# down there is coloured as a warning; the ramp is there to pick out the ones near the end.
+PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
+
+# Names for the org colours, so a config can say "pink" rather than 218. Pastels and mid
+# tones only: an owner's colour is an identity, not a rating, and it should not compete with
+# the DUE and % columns for the eye.
+COLOR_NAMES = {"blue": 39, "cyan": 44, "teal": 74, "indigo": 105, "violet": 141,
+               "magenta": 170, "purple": 183, "yellow": 186, "green": 114, "rose": 212,
+               "pink": 218, "grey": 250}
+
+# The cycle for owners the config says nothing about.
+ORG_PALETTE = [fg(COLOR_NAMES[n]) for n in ("blue", "magenta", "cyan", "violet", "indigo",
+                                            "rose", "teal", "purple")]
 
 
 def visible(cell) -> int:
@@ -230,16 +264,25 @@ def paint(text: str, code: str | None) -> str:
     return f"\x1b[{code}m{text}\x1b[0m" if code and COLOR else text
 
 
-def org_colors(repos: list[str]) -> dict[str, str]:
-    """A colour for each owner that owns more than one of these repos.
+def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> dict[str, str]:
+    """A colour for each owner the config names, and for each one that owns more than one
+    of these repos.
 
-    Colouring a one-off owner would say "these rows go together" about a single row.
-    Assigned in first-appearance order, so a caller that has already sorted its rows gets
-    the palette running down the page.
+    Colouring a one-off owner would say "these rows go together" about a single row — but
+    a colour someone has chosen by hand is worth honouring either way, and two owners can
+    share one to tie sibling organisations together. The rest are assigned in
+    first-appearance order, so a caller that has already sorted its rows gets the palette
+    running down the page.
     """
-    counts = Counter(r.split("/")[0] for r in repos)
-    repeated = dict.fromkeys(o for o in (r.split("/")[0] for r in repos) if counts[o] > 1)
-    return {owner: ORG_PALETTE[i % len(ORG_PALETTE)] for i, owner in enumerate(repeated)}
+    configured = {o.lower(): c for o, c in (configured or {}).items()}
+    counts = Counter(r.split("/")[0].lower() for r in repos)
+    colors, palette = {}, cycle(ORG_PALETTE)
+    for owner in dict.fromkeys(r.split("/")[0] for r in repos):
+        if owner.lower() in configured:
+            colors[owner] = fg(configured[owner.lower()])
+        elif counts[owner.lower()] > 1:
+            colors[owner] = next(palette)
+    return colors
 
 
 def due_color(due: str | None, today: str) -> str | None:
@@ -253,12 +296,11 @@ def due_color(due: str | None, today: str) -> str | None:
 
 
 def pct_color(closed: int, total: int) -> str | None:
-    """How far along, so nearly-finished milestones catch the eye. Nothing closed is
-    plain rather than red: a milestone just filed is not in trouble."""
-    if not total or not closed:
+    """How far along, so nearly-finished milestones catch the eye."""
+    if not total:  # nothing ever filed against it; the cell is a dash anyway
         return None
     pct = 100 * closed / total
-    return LATE if pct <= 25 else SOON if pct <= 50 else AHEAD if pct <= 75 else DONE
+    return next(fg(n) for limit, n in PCT_SCALE if pct < limit)
 
 
 def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
@@ -354,7 +396,7 @@ def cmd_status(config, args):
         print()
         return
 
-    orgs = org_colors([r["repo"] for r in records])
+    orgs = org_colors([r["repo"] for r in records], config.get("colors"))
     rows = []
     for r in records:
         owner, _, name = r["repo"].partition("/")
