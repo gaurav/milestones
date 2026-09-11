@@ -44,6 +44,8 @@ def test_build_search_queries_scope_to_configured_repos_only():
     assert " OR " in queries[0]  # advanced search ANDs bare qualifiers
     assert all("no:milestone" in q and "is:issue" in q for q in queries)
     assert all(len(q) < 256 for q in queries)  # GitHub search query length cap
+    assert all("is:pr" in q and "is:issue" not in q
+               for q in build_search_queries(repos, kind="pr"))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():

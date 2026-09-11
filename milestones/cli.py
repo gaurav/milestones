@@ -215,16 +215,17 @@ def sort_key(title: str, due_on: str | None, buckets: list[str]):
     return (2, "", title)
 
 
-def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
+def build_search_queries(repos: list[str], cap: int = 256, kind: str = "issue") -> list[str]:
     """Queries covering every configured repo, each under GitHub's 256-char cap.
 
     Scoped by repo rather than by owner: an owner's unconfigured repos would
     otherwise crowd real results out of the single page search_issues fetches.
+    `kind` is "issue" or "pr".
     """
     def query(batch):
         # Advanced search ANDs repeated qualifiers, so repos must be OR'd explicitly.
-        return "is:issue is:open no:milestone archived:false (%s)" % (
-            " OR ".join("repo:" + r for r in batch))
+        return "is:%s is:open no:milestone archived:false (%s)" % (
+            kind, " OR ".join("repo:" + r for r in batch))
 
     queries, batch = [], []
     for repo in sorted(set(repos)):
@@ -559,10 +560,11 @@ def cmd_triage(config, args):
     if args.repo:
         raw = gh.api(f"repos/{args.repo}/issues?milestone=none&state=open&per_page=100",
                      paginate=True)
-        issues = [_norm_issue(i, args.repo) for i in raw if "pull_request" not in i]
+        issues = [_norm_issue(i, args.repo) for i in raw
+                  if ("pull_request" in i) == args.prs]
     else:
         issues = []
-        for query in build_search_queries(config["repos"]):
+        for query in build_search_queries(config["repos"], kind="pr" if args.prs else "issue"):
             for item in gh.search_issues(query):
                 repo = "/".join(item["repository_url"].split("/")[-2:])
                 issues.append(_norm_issue(item, repo))
@@ -1044,6 +1046,8 @@ def main():
     status.set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
+    triage.add_argument("--prs", action="store_true",
+                        help="walk untriaged pull requests instead of issues")
     triage.set_defaults(func=cmd_triage)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
