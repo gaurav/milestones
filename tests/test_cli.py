@@ -6,7 +6,7 @@ import unicodedata
 import pytest
 
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
+    AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices, pr_group, prs_query,
     FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, load_config, triage_order,
     milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
@@ -370,3 +370,16 @@ def test_triage_order_puts_focused_repos_first_without_reshuffling_the_rest():
     # keep the order they had. Sorting on one compound key with reverse=True would put
     # the *unfocused* repos first instead.
     assert [i["n"] for i in triage_order(issues, ["B/Two"])] == [2, 4, 3, 1]
+
+
+def test_prs_query_is_authored_by_default_and_ors_in_the_rest():
+    assert prs_query() == "is:pr is:open (author:@me)"
+    assert prs_query(assigned=True, review_requested=True, mentions=True) == (
+        "is:pr is:open (author:@me OR assignee:@me OR review-requested:@me OR mentions:@me)")
+
+
+def test_pr_group_prefers_tracked_then_ignored():
+    config = {"repos": ["gaurav/milestones"], "ignore": ["gaurav/milestones", "phyloref/*"]}
+    assert pr_group("Gaurav/Milestones", config) == "tracked"
+    assert pr_group("phyloref/klados", config) == "ignored"
+    assert pr_group("rambaut/figtree", config) == "untracked"

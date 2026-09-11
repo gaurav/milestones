@@ -236,6 +236,23 @@ def build_search_queries(repos: list[str], cap: int = 256, kind: str = "issue") 
     return queries + [query(batch)]
 
 
+def prs_query(assigned: bool = False, review_requested: bool = False,
+              mentions: bool = False) -> str:
+    """Every open pull request that is yours: authored, and whatever else is asked for."""
+    who = ["author:@me"] + [q for flag, q in ((assigned, "assignee:@me"),
+                                              (review_requested, "review-requested:@me"),
+                                              (mentions, "mentions:@me")) if flag]
+    # Always parenthesised: advanced search ANDs bare repeated qualifiers.
+    return "is:pr is:open (%s)" % " OR ".join(who)
+
+
+def pr_group(repo: str, config: dict) -> str:
+    """Which table a PR's repo belongs in: tracked wins, then ignored, else untracked."""
+    if repo.lower() in {r.lower() for r in config["repos"]}:
+        return "tracked"
+    return "ignored" if is_ignored(repo, config["ignore"]) else "untracked"
+
+
 def triage_order(issues: list[dict], focus: list[str]) -> list[dict]:
     """Freshest first, but the repos you're working on ahead of everything else."""
     # Two passes rather than one compound key: `reverse` would flip the focus flag along
@@ -613,6 +630,55 @@ def cmd_triage(config, args):
                 print(f"  → {chosen['title']}")
                 break
             print(f"  Not one of: {assign}s, o, q.")
+
+
+def cmd_prs(config, args):
+    prs = []
+    for item in gh.search_issues(prs_query(args.assigned, args.review_requested, args.mentions)):
+        repo = "/".join(item["repository_url"].split("/")[-2:])
+        prs.append({"repo": repo, "number": item["number"], "title": item["title"],
+                    "draft": item["draft"], "updated": item["updated_at"],
+                    "milestone": item["milestone"] and item["milestone"]["title"],
+                    "url": item["html_url"], "group": pr_group(repo, config)})
+    if args.json:
+        json.dump({"prs": prs}, sys.stdout, indent=2)
+        print()
+        return
+    if not prs:
+        print("No open pull requests.")
+        return
+
+    def table(rows, heading):
+        # By repo, freshest first within it: the question is per repo, not per PR.
+        rows = sorted(rows, key=lambda p: p["updated"], reverse=True)
+        rows.sort(key=lambda p: p["repo"].lower())
+        print_table([(p["repo"], f"#{p['number']}", excerpt(p["title"], 60),
+                      "draft" if p["draft"] else "", p["updated"][:10], p["url"])
+                     for p in rows],
+                    (heading, "PR", "TITLE", "DRAFT", "UPDATED", "URL"), right=("PR",))
+
+    by = {g: [p for p in prs if p["group"] == g] for g in ("tracked", "untracked", "ignored")}
+    # Tracked repos only show what needs doing; a PR already on a milestone is in `status`.
+    todo = [p for p in by["tracked"] if not p["milestone"]]
+    done = len(by["tracked"]) - len(todo)
+    if todo:
+        print(f"{len(todo)} PR{'s' if len(todo) != 1 else ''} without a milestone in tracked "
+              f"repos ({done} more already {'have' if done != 1 else 'has'} one).")
+        table(todo, "TRACKED REPO")
+        print("run: milestones triage --prs")
+    elif by["tracked"]:
+        print(f"Every PR in a tracked repo is on a milestone ({done}).")
+    # ponytail: no split between repos you could track and upstream ones you can't set a
+    # milestone in. author_association would tell them apart for free on author:@me results,
+    # but it is the *author's* association, so it lies under --assigned and friends. Add
+    # when this list gets too long to eyeball.
+    if by["untracked"]:
+        print()
+        table(by["untracked"], "REPO NOT IN CONFIG")
+        print("`milestones add REPO` to track a repo; otherwise these are for your TODO list.")
+    if by["ignored"]:
+        print()
+        table(by["ignored"], "IGNORED REPO")
 
 
 def issue_count(issues: int | None) -> str:
@@ -1095,6 +1161,15 @@ def main():
     listing.add_argument("--ignore-remaining", action="store_true",
                          help="add every repo suggested above to the ignore list")
     discover.set_defaults(func=cmd_discover)
+    prs = sub.add_parser("prs", help="every open PR of yours, anywhere, grouped by whether "
+                                     "its repo is tracked, ignored, or neither")
+    prs.add_argument("--assigned", action="store_true", help="also PRs assigned to you")
+    prs.add_argument("--review-requested", action="store_true",
+                     help="also PRs waiting on your review")
+    prs.add_argument("--mentions", action="store_true", help="also PRs that mention you")
+    prs.add_argument("--json", action="store_true",
+                     help="print the PRs as JSON instead of tables")
+    prs.set_defaults(func=cmd_prs)
 
     args = parser.parse_args()
     args.func(load_config(), args)
