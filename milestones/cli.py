@@ -555,18 +555,32 @@ def _norm_issue(issue: dict, repo: str) -> dict:
             "updated": issue["updated_at"], "url": issue["html_url"]}
 
 
-def cmd_triage(config, args):
-    if args.repo:
-        raw = gh.api(f"repos/{args.repo}/issues?milestone=none&state=open&per_page=100",
+def fetch_untriaged(config, repo: str | None) -> list[dict]:
+    """Open issues with no milestone, in walk order: focused repos first, then freshest."""
+    if repo:
+        raw = gh.api(f"repos/{repo}/issues?milestone=none&state=open&per_page=100",
                      paginate=True)
-        issues = [_norm_issue(i, args.repo) for i in raw if "pull_request" not in i]
+        issues = [_norm_issue(i, repo) for i in raw if "pull_request" not in i]
     else:
         issues = []
         for query in build_search_queries(config["repos"]):
             for item in gh.search_issues(query):
-                repo = "/".join(item["repository_url"].split("/")[-2:])
-                issues.append(_norm_issue(item, repo))
-        issues = triage_order(issues, config["focus"])
+                issues.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
+    return triage_order(issues, config["focus"])
+
+
+def cmd_triage(config, args):
+    issues = fetch_untriaged(config, args.repo)
+    if args.json:
+        json.dump({"issues": issues}, sys.stdout, indent=2)
+        print()
+        return
+    if args.list:
+        # One ref per line, first, so a line can be piped straight into `assign`.
+        for i in issues:
+            labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
+            print(f"{i['repo']}#{i['number']}  {i['title']}{labels}")
+        return
 
     if not issues:
         print("Nothing to triage.")
@@ -1044,6 +1058,12 @@ def main():
     status.set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
+    # Nothing to walk if the issues are going out to a pipe.
+    how = triage.add_mutually_exclusive_group()
+    how.add_argument("--list", action="store_true",
+                     help="print the untriaged issues one per line instead of walking them")
+    how.add_argument("--json", action="store_true",
+                     help="print them as JSON instead")
     triage.set_defaults(func=cmd_triage)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")

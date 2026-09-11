@@ -69,7 +69,10 @@ milestones status [--json]               # the default command (bare `milestones
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket
+                                         # time and assign each to a milestone/bucket;
+                                         # --list prints them instead, one per line
+                                         # (OWNER/NAME#N  title  [labels]), focused repos
+                                         # first then freshest; --json likewise
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
