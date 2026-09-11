@@ -69,7 +69,16 @@ milestones status [--json]               # the default command (bare `milestones
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket
+                                         # time and assign each to a milestone/bucket;
+                                         # --list prints them instead, one per line
+                                         # (OWNER/NAME#N  title  [labels]), focused repos
+                                         # first then freshest; --json likewise
+milestones assign MILESTONE [REF ...]    # put issues on the milestone of that title in
+                                         # each of their repos; REF is OWNER/NAME#N or an
+                                         # issue URL, or read from stdin one per line — a
+                                         # `triage --list` line works as-is. Confirms on a
+                                         # terminal; a repo without that milestone is
+                                         # skipped, not fatal
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -139,6 +148,26 @@ there later is a fresh suggestion rather than something the glob silently swallo
 
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
+
+### Triaging in bulk
+
+The `triage` walk is one issue per keypress, which is fine for a week's arrivals and hopeless
+for a backlog of hundreds. For that, `triage --list` and `assign` are the two halves of a
+pipeline, and whatever sits between them does the choosing — `grep` on a label or a word in the
+title, `jq` over `triage --json`, `fzf -m` for picking by hand, or a coding agent reading the
+JSON and deciding:
+
+```sh
+milestones triage --list | grep 'new data source' | milestones assign "Needed later"
+milestones triage --list | fzf -m --no-sort | milestones assign "Needed soon"
+milestones triage --list --repo NCATSTranslator/Babel | grep -i duckdb | milestones assign "v1.20"
+```
+
+`assign` resolves the title in each issue's repo, so one command puts issues from several repos
+onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Given
+refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
+is the answer. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
+after an `assign` can still show what was just moved — re-running is harmless.
 
 ### Reading the status table
 

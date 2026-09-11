@@ -35,6 +35,15 @@ are collected once up front and one milestone can raise several, so anything a w
 milestone has to be carried across to its other findings by hand (`walk_findings`'s `rename` and
 `gone`) — the list is never re-fetched mid-run.
 
+`assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
+coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
+pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
+only write that never closes or deletes anything, which is what makes that safe. A PR ref is
+accepted on purpose — the issues endpoint sets a PR's milestone too — but `triage --list` never
+lists one. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
+"Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —
+it hands the program an EOF before the answer, so `ask()` aborts whatever you send.
+
 Buckets are per repo. `missing_buckets` is the one answer: the configured buckets a repo hasn't
 got, and nothing at all for a repo that has none of them, since using none is a choice rather than
 a gap. It feeds both the `buckets` finding and the walk's rename options — the buckets a repo
