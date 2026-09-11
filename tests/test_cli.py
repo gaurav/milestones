@@ -9,7 +9,8 @@ from milestones.cli import (
     AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
     FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, load_config, triage_order,
-    milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
+    milestone_problems, missing_buckets, org_colors, parse_ignore, parse_issue_ref, parse_repo,
+    pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
 
@@ -86,6 +87,18 @@ def test_parse_repo_accepts_urls_and_shorthand():
     for bad in ["translator-diagram", "https://github.com/NCATSTranslator/x/issues", ""]:
         with pytest.raises(SystemExit):
             parse_repo(bad)
+
+
+def test_parse_issue_ref_reads_refs_urls_and_whole_list_lines():
+    for text in ["NCATSTranslator/Babel#204",
+                 "https://github.com/NCATSTranslator/Babel/issues/204",
+                 "github.com/NCATSTranslator/Babel/pull/204/",
+                 # A `triage --list` line, title and labels included; only the ref is read.
+                 "NCATSTranslator/Babel#204  Fix the thing [again]  [bug, help wanted]"]:
+        assert parse_issue_ref(text) == ("NCATSTranslator/Babel", 204), text
+    for bad in ["NCATSTranslator/Babel", "#204", "a/b#x", "a/b#", "", "   "]:
+        with pytest.raises(SystemExit):
+            parse_issue_ref(bad)
 
 
 def test_parse_ignore_reads_a_bare_owner_as_the_whole_owner():

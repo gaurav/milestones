@@ -129,6 +129,22 @@ def parse_repo(text: str) -> str:
     return f"{match[1]}/{match[2]}"
 
 
+# "a/b#12", "https://github.com/a/b/issues/12" — and "/pull/12", since the issues endpoint
+# sets a PR's milestone the same way, as rollover already relies on.
+ISSUE_RE = re.compile(
+    r"(?:(?:https?://)?github\.com/)?([^/\s#]+)/([^/\s#]+)(?:#|/(?:issues|pull)/)(\d+)/?$")
+
+
+def parse_issue_ref(text: str) -> tuple[str, int]:
+    """(OWNER/NAME, number) from a ref, an issue URL, or a whole `triage --list` line."""
+    # The first token only: a --list line carries the title and labels after the ref.
+    tokens = text.split()
+    match = ISSUE_RE.fullmatch(tokens[0]) if tokens else None
+    if not match:
+        sys.exit(f"Not an issue: {text!r}. Give OWNER/NAME#123 or a github.com issue URL.")
+    return f"{match[1]}/{match[2]}", int(match[3])
+
+
 def parse_ignore(text: str) -> str:
     """One ignore-list entry: a repo, or `OWNER/*` for everything under one owner.
 
@@ -627,6 +643,41 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
+def cmd_assign(config, args):
+    """Put issues on the milestone of one title, resolved in each of their repos."""
+    if not args.refs and sys.stdin.isatty():
+        sys.exit("Give OWNER/NAME#N refs, or pipe `milestones triage --list` lines in.")
+    texts = args.refs or [line for line in sys.stdin.read().splitlines() if line.strip()]
+    refs = list(dict.fromkeys(parse_issue_ref(t) for t in texts))  # dedupe, keep order
+    by_repo: dict[str, list[int]] = {}
+    for repo, number in refs:
+        by_repo.setdefault(repo, []).append(number)
+    # One milestones call per repo, all before any write: a mistyped repo 404s here and
+    # nothing has been touched. A repo that lacks the title is skipped, not fatal — the
+    # standing buckets are opt-in per repo, so a mixed pipeline is the normal case.
+    targets = {}
+    for repo, numbers in by_repo.items():
+        milestone = _milestones_by_title(repo, state="open").get(args.milestone)
+        if milestone is None:
+            print(f"skipping {repo}: no open milestone '{args.milestone}' "
+                  f"({len(numbers)} issue{'s' if len(numbers) != 1 else ''})")
+        else:
+            targets[repo] = milestone["number"]
+    todo = [(r, n) for r, n in refs if r in targets]
+    if not todo:
+        sys.exit("Nothing to assign.")
+    print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
+          f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'")
+    # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
+    # script, there is no tty to answer from, and a milestone is a reversible field that
+    # never closes or deletes anything.
+    if sys.stdin.isatty() and ask("Proceed? [y/N] ").strip().lower() != "y":
+        sys.exit("Aborted.")
+    for repo, number in todo:
+        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        print(f"  {repo}#{number} → {args.milestone}")
+
+
 def issue_count(issues: int | None) -> str:
     """"(3 issues)", and nothing at all where a count makes no sense."""
     if issues is None:
@@ -1065,6 +1116,12 @@ def main():
     how.add_argument("--json", action="store_true",
                      help="print them as JSON instead")
     triage.set_defaults(func=cmd_triage)
+    assign = sub.add_parser("assign", help="put issues on a milestone by title, across repos")
+    assign.add_argument("milestone", metavar="MILESTONE",
+                        help="milestone title, resolved in each issue's repo")
+    assign.add_argument("refs", metavar="REF", nargs="*",
+                        help="OWNER/NAME#N or an issue URL; none, to read them from stdin")
+    assign.set_defaults(func=cmd_assign)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
     rollover.add_argument("src", metavar="FROM", help="source milestone title")
