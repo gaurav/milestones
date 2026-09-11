@@ -8,6 +8,10 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - Advanced search **ANDs** repeated qualifiers (legacy OR'd them); OR them explicitly:
   `(repo:a/b OR repo:c/d)`. Query strings cap at 256 chars, so `build_search_queries`
   splits the configured repos across as many queries as that takes.
+- `@me` works in REST advanced search, inside an OR group too (`(author:@me OR
+  assignee:@me)`), and a search item carries `draft` and `milestone`, so `prs` lists pull
+  requests from the one search with no second call. Unlike `triage`, it is not scoped to the
+  config — that is its point.
 - Milestone writes are REST-only; no GraphQL mutations exist. Reads are fine in GraphQL.
 - GraphQL `repositories` defaults `ownerAffiliations` to include collaborator repos — pass
   `ownerAffiliations: OWNER`. Transferred repos can still echo under their old owner; dedupe.

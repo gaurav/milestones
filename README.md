@@ -68,8 +68,10 @@ milestones status [--json]               # the default command (bare `milestones
                                          # then names any tracked repo with nothing open.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
-milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket
+milestones triage [--repo OWNER/NAME] [--prs]
+                                         # walk untriaged issues (no milestone) one at a
+                                         # time and assign each to a milestone/bucket;
+                                         # --prs walks the pull requests instead
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -82,6 +84,16 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --tracked-only stops after the first list,
                                          # --list-ignored spells out the ignored ones, and
                                          # --ignore-remaining ignores the ones suggested
+milestones prs [--assigned] [--review-requested] [--mentions] [--json]
+                                         # every open PR you authored, anywhere on GitHub,
+                                         # in three tables: PRs in tracked repos with no
+                                         # milestone (then run `triage --prs`), PRs in
+                                         # repos not in the config (`add` the repo, or
+                                         # put the PR on your TODO list), and PRs in
+                                         # ignored repos. Drafts and last-updated dates
+                                         # are marked, nothing is left out; the flags add
+                                         # PRs assigned to you, awaiting your review, or
+                                         # mentioning you
 milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
                                          # roll over, and repos that use standing buckets
