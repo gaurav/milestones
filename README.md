@@ -169,6 +169,23 @@ script — or a coding agent — `milestones status --json` prints the same data
 configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
 
+## Why not something else
+
+Nothing off the shelf manages milestones across repositories. `gh` itself declined milestone
+support ([cli/cli#1200](https://github.com/cli/cli/issues/1200)), the `gh-milestone` extensions
+are single-repo CRUD with no rollover, and ZenHub, Linear, Plane and Huly replace milestones with
+planning objects of their own. A GitHub Project could mirror them, but its auto-add can't filter on
+milestone, and it would be a second record that drifts from the first.
+
+What it deliberately leaves out:
+
+- **No local state or cache.** Every command reads GitHub fresh, so nothing can go stale except
+  GitHub's own listings, which lag writes by a few seconds.
+- **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
+- **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
+  `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would
+  only split it in two.
+
 ## Development
 
 ```sh
