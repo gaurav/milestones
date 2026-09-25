@@ -17,7 +17,12 @@ from pathlib import Path
 
 from . import gh
 
-DEFAULT_BUCKETS = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
+DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
+
+# Buckets a repo can do without: `check` never asks for one, and `status` hides one with
+# nothing open on it, so that a quiet "Critical" in every repo doesn't say "all is well" at
+# the top of every table. `setup` still creates it, so triage can reach it when it's needed.
+OPTIONAL_BUCKETS = {"Critical"}
 
 EXAMPLE_CONFIG = """\
 buckets = [%s]
@@ -115,10 +120,12 @@ def missing_buckets(buckets: list[str], titles: set[str]) -> list[str]:
     Using none of them is a choice — most repos don't need this much triage — so a
     missing bucket is only a gap once at least one of the others is there to be
     incomplete. Doubles as the list of titles a milestone can be renamed onto: the
-    buckets the repo already has are exactly the ones a rename would collide with.
+    buckets the repo already has are exactly the ones a rename would collide with. An
+    optional bucket is never a gap, so it is left out of both answers.
     """
-    missing = [b for b in buckets if b not in titles]
-    return missing if missing != buckets else []
+    required = [b for b in buckets if b not in OPTIONAL_BUCKETS]
+    missing = [b for b in required if b not in titles]
+    return missing if missing != required else []
 
 
 def parse_repo(text: str) -> str:
@@ -422,8 +429,10 @@ def cmd_status(config, args):
     tracked, entries = fetch_milestones(config["repos"])
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
-        milestones.append((repo, m["title"], due, m["open"]["totalCount"],
-                           m["closed"]["totalCount"], m["url"]))
+        count = m["open"]["totalCount"]
+        if m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"] and not count:
+            continue
+        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.

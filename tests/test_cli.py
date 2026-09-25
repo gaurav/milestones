@@ -180,6 +180,11 @@ def test_missing_buckets_only_counts_a_gap_in_a_repo_that_uses_them():
     assert missing_buckets(BUCKETS, {"Needed later", "v1.2"}) == ["Needed soon", "Not urgent"]
     assert missing_buckets(BUCKETS, set(BUCKETS)) == []
     assert missing_buckets([], {"v1.2"}) == []  # buckets switched off in the config entirely
+    # An optional bucket is never a gap, nor enough on its own to count as adopting the rest.
+    assert missing_buckets(["Critical", *BUCKETS], set(BUCKETS)) == []
+    assert missing_buckets(["Critical", *BUCKETS], {"Critical"}) == []
+    assert missing_buckets(["Critical", *BUCKETS], {"Not urgent"}) == [
+        "Needed soon", "Needed later"]
 
 
 def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():

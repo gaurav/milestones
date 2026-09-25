@@ -4,8 +4,8 @@ I have measured out my life with GitHub milestones
 
 A personal CLI for viewing and managing GitHub milestones across all my repositories.
 Milestones are the single source of truth: dated milestones for "this release"/"next release",
-plus standing undated buckets ("Needed soon", "Needed later", "Not urgent", "Upstream" — for
-work that belongs in someone else's tracker) that never close. Every issue's
+plus standing undated buckets ("Critical", "Needed soon", "Needed later", "Not urgent",
+"Upstream" — for work that belongs in someone else's tracker) that never close. Every issue's
 bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
 complain in a comment if they disagree.
 
@@ -28,7 +28,7 @@ Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write t
 and they rewrite just the `repos` list):
 
 ```toml
-buckets = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
+buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
 
 repos = [
   "gaurav/milestones",
@@ -146,6 +146,8 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
+`Critical` is an optional bucket — `check` never asks for it, and `status` leaves it out while
+nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
 The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses
