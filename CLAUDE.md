@@ -37,21 +37,21 @@ milestone has to be carried across to its other findings by hand (`walk_findings
 
 `MILESTONES.md` holds the conventions this tool encodes: what each bucket means, and how release
 milestones are used. It is written for agents working in *other* repos, so keep it free of CLI
-detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too; `test_milestones_md_lists_the_default_buckets` catches a table that has fallen behind the list.
+detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
+`test_milestones_md_lists_the_default_buckets` catches a table that has fallen behind the list.
 
-Buckets are per repo. `missing_buckets` is the one answer: the configured buckets a repo hasn't
-got, and nothing at all for a repo that has none of them, since using none is a choice rather than
-a gap. It feeds both the `buckets` finding and the walk's rename options — the buckets a repo
-already has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`,
-just "Critical") is never a gap, so it is left out of both, and `status` hides one with nothing
-open on it.
+Buckets are per repo, and a repo may use any subset of them: nothing here treats a missing
+bucket as a problem. `free_buckets` is the configured buckets a repo hasn't got, and nothing at all
+for a repo that has none of them. It is only the walk's rename targets — the buckets a repo already
+has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, just
+"Critical") is one `status` hides while nothing is open on it.
 
-A closed standing bucket is invisible to `status` and to the `triage` menu, and only `setup`
-brings it back — so nothing here may close or delete one. That invariant is enforced in four
-places (`setup` reopens, `rollover` refuses both a closed destination and `--close` on a bucket,
-and `milestone_problems` returns early for a bucket, so `check` never raises a `done`, `empty`,
-`rename` or `undated` finding against one); add the guard when you add a path that could close a
-milestone.
+A closed standing bucket is invisible to `status` and to the `triage` menu, `check` doesn't report
+it, and only `setup` brings it back — so nothing here may close or delete one. That invariant is
+enforced in four places (`setup` reopens, `rollover` refuses both a closed destination and
+`--close` on a bucket, and `milestone_problems` returns early for a bucket, so `check` never raises
+a `done`, `empty`, `rename` or `undated` finding against one); add the guard when you add a path
+that could close a milestone.
 
 `print_table` measures every cell in characters, and there are two ways to make that lie. Colour
 is one — `visible()` discounts the escapes, so a cell may carry its own, and `paint` is the only

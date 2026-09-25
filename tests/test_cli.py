@@ -11,7 +11,7 @@ from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, load_config, triage_order,
-    milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
+    free_buckets, milestone_problems, org_colors, parse_ignore, parse_repo, pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
 )
 
@@ -172,21 +172,18 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
 
 
-def test_missing_buckets_only_counts_a_gap_in_a_repo_that_uses_them():
-    # A repo using none of them has opted out of this much triage; one using some has
-    # probably lost the rest. Config order survives, so the walk numbers them the same
-    # way `setup` would create them.
-    assert missing_buckets(BUCKETS, set()) == []
-    assert missing_buckets(BUCKETS, {"v1.2", "Backlog"}) == []
-    assert missing_buckets(BUCKETS, {"Not urgent"}) == ["Needed soon", "Needed later"]
-    assert missing_buckets(BUCKETS, {"Needed later", "v1.2"}) == ["Needed soon", "Not urgent"]
-    assert missing_buckets(BUCKETS, set(BUCKETS)) == []
-    assert missing_buckets([], {"v1.2"}) == []  # buckets switched off in the config entirely
-    # An optional bucket is never a gap, nor enough on its own to count as adopting the rest.
-    assert missing_buckets(["Critical", *BUCKETS], set(BUCKETS)) == []
-    assert missing_buckets(["Critical", *BUCKETS], {"Critical"}) == []
-    assert missing_buckets(["Critical", *BUCKETS], {"Not urgent"}) == [
-        "Needed soon", "Needed later"]
+def test_free_buckets_offers_renames_only_in_a_repo_that_uses_buckets():
+    # A repo using none of them has opted out of this much triage, and a rename is no way
+    # to opt it back in. Config order survives, so the walk numbers them in config order.
+    assert free_buckets(BUCKETS, set()) == []
+    assert free_buckets(BUCKETS, {"v1.2", "Backlog"}) == []
+    assert free_buckets(BUCKETS, {"Not urgent"}) == ["Needed soon", "Needed later"]
+    assert free_buckets(BUCKETS, {"Needed later", "v1.2"}) == ["Needed soon", "Not urgent"]
+    assert free_buckets(BUCKETS, set(BUCKETS)) == []
+    assert free_buckets([], {"v1.2"}) == []  # buckets switched off in the config entirely
+    # Critical is a bucket like the others here: a target, and enough to count as using them.
+    assert free_buckets(["Critical", *BUCKETS], set(BUCKETS)) == ["Critical"]
+    assert free_buckets(["Critical", *BUCKETS], {"Critical"}) == BUCKETS
 
 
 def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():
@@ -218,9 +215,8 @@ def test_favourite_date_prefers_the_most_used_then_the_most_recent():
     assert favourite_date([a, b]) == b  # tie: whichever was typed last
 
 
-def test_issue_count_reads_naturally_and_stays_out_of_the_way():
+def test_issue_count_reads_naturally():
     assert [issue_count(n) for n in (0, 1, 42)] == ["(0 issues)", "(1 issue)", "(42 issues)"]
-    assert issue_count(None) == ""  # a whole-repo finding has no count to show
 
 
 def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):

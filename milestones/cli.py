@@ -89,7 +89,6 @@ KINDS = {
     "overdue": "Roll over or re-date — past due with work still open",
     "done": "Close — every issue on it is closed",
     "empty": "Delete or fill — nothing has ever been filed against it",
-    "buckets": "Run setup — the repo uses standing buckets but is missing these",
 }
 
 
@@ -115,18 +114,16 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
     return problems
 
 
-def missing_buckets(buckets: list[str], titles: set[str]) -> list[str]:
-    """The standing buckets a repo has adopted but does not have.
+def free_buckets(buckets: list[str], titles: set[str]) -> list[str]:
+    """The standing buckets a milestone in this repo could be renamed onto.
 
-    Using none of them is a choice — most repos don't need this much triage — so a
-    missing bucket is only a gap once at least one of the others is there to be
-    incomplete. Doubles as the list of titles a milestone can be renamed onto: the
-    buckets the repo already has are exactly the ones a rename would collide with. An
-    optional bucket is never a gap, so it is left out of both answers.
+    That is the ones it hasn't got, since a rename onto one it has would collide. A repo
+    using none of them gets none: most repos don't need this much triage, and a rename is
+    no way to opt one in. A repo is free to use any subset, so what is left over here is
+    not a gap to fill.
     """
-    required = [b for b in buckets if b not in OPTIONAL_BUCKETS]
-    missing = [b for b in required if b not in titles]
-    return missing if missing != required else []
+    free = [b for b in buckets if b not in titles]
+    return free if free != buckets else []
 
 
 def parse_repo(text: str) -> str:
@@ -633,10 +630,8 @@ def cmd_triage(config, args):
             print(f"  Not one of: {assign}s, o, q.")
 
 
-def issue_count(issues: int | None) -> str:
-    """"(3 issues)", and nothing at all where a count makes no sense."""
-    if issues is None:
-        return ""
+def issue_count(issues: int) -> str:
+    """"(3 issues)", "(1 issue)"."""
     return f"({issues} issue{'' if issues == 1 else 's'})"
 
 
@@ -647,8 +642,8 @@ def collect_findings(config) -> list[dict]:
     for repo, m in milestones:
         seen[repo].add(m["title"])
     # One answer per repo, settled before any finding is built: which standing buckets
-    # this repo is short of, and empty for a repo that uses none of them.
-    free = {repo: missing_buckets(config["buckets"], titles) for repo, titles in seen.items()}
+    # a milestone here could be renamed onto, and none for a repo that uses none of them.
+    free = {repo: free_buckets(config["buckets"], titles) for repo, titles in seen.items()}
 
     findings = []
     for repo, m in milestones:
@@ -659,12 +654,6 @@ def collect_findings(config) -> list[dict]:
                              "url": m["url"], "number": m["number"],
                              "free_buckets": free[repo],
                              "issues": m["open"]["totalCount"] + m["closed"]["totalCount"]})
-    for repo, missing in free.items():
-        if missing:
-            findings.append({"kind": "buckets", "repo": repo, "title": "(whole repo)",
-                             "detail": ", ".join(missing), "issues": None,
-                             "free_buckets": missing,
-                             "url": f"https://github.com/{repo}/milestones", "number": None})
     findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
     return findings
 
@@ -851,9 +840,6 @@ def walk_findings(config, findings: list[dict]) -> None:
             options.append(("c", "close it", close_it))
         if kind == "empty":
             options.append(("d", "delete it", delete_it))
-        if kind == "buckets":
-            options.append(("b", "create the missing buckets",
-                            lambda: cmd_setup(config, argparse.Namespace(repo=repo))))
         options += [("o", "open", open_it), ("s", "skip", lambda: None),
                     ("q", "quit", lambda: QUIT)]
 

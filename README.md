@@ -12,7 +12,7 @@ is for and how the dated milestones are used.
 
 The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
 a repo without them is simply left alone. Every command picks up whichever buckets a repo
-actually has, and `check` asks for a missing one only where the repo already uses the others.
+actually has, and a repo is free to use only some of them.
 
 ## Setup
 
@@ -85,8 +85,7 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --ignore-remaining ignores the ones suggested
 milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
-                                         # roll over, and repos that use standing buckets
-                                         # but have one missing or closed.
+                                         # roll over.
                                          # -i then walks the list and applies your answers;
                                          # --json prints them for a script instead
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
@@ -104,7 +103,7 @@ milestones ignore REPO|OWNER [...]       # hide repos from discover without trac
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
 to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
-the start of next month, close, delete, roll over, or run `setup` — plus open, skip and quit. Once
+the start of next month, close, delete or roll over — plus open, skip and quit. Once
 you type a date of your own, the fourth date slot offers that date back for the rest of the session
 (the one you have typed most often, most recent winning ties), since a run of milestones usually
 wants the same day — "after the project meeting" is one keypress each after the first. A single
