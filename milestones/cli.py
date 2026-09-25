@@ -277,6 +277,10 @@ LATE, SOON, AHEAD, DISTANT = (fg(n) for n in (196, 208, 226, 244))
 # down there is coloured as a warning; the ramp is there to pick out the ones near the end.
 PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 
+# A standing bucket's title, by how urgent the work on it is — coloured only while it holds
+# some, so an empty "Needed soon" doesn't look like an alarm.
+BUCKET_COLORS = {"Critical": "1;" + LATE, "Needed soon": SOON, "Needed later": fg(151)}
+
 # Names for the org colours, so a config can say "pink" rather than 218. Pastels and mid
 # tones only: an owner's colour is an identity, not a rating, and it should not compete with
 # the DUE and % columns for the eye.
@@ -339,6 +343,10 @@ def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> di
         elif counts[key] > 1:
             colors[owners[key]] = next(palette)
     return colors
+
+
+def bucket_color(title: str, open_issues: int) -> str | None:
+    return BUCKET_COLORS.get(title) if open_issues else None
 
 
 def due_color(due: str | None, today: str) -> str | None:
@@ -474,7 +482,8 @@ def cmd_status(config, args):
                          if kind in r["flags"])
         rows.append((star(r["focus"]),
                      f"{paint(owner, orgs.get(owner))}/{name}",
-                     VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
+                     paint(VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
+                           bucket_color(r["title"], r["open"])),
                      paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
                      r["open"], r["closed"],
                      paint(f"{r['percent']}%", pct_color(r["closed"], r["open"] + r["closed"]))
@@ -599,7 +608,8 @@ def cmd_triage(config, args):
             due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
             # REST open_issues counts PRs as well as issues, which is what we want here:
             # both are work sitting on that milestone.
-            print(f"  {i}) {m['title']} ({m['open_issues']} open{due})")
+            title = paint(m["title"], bucket_color(m["title"], m["open_issues"]))
+            print(f"  {i}) {title} ({m['open_issues']} open{due})")
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
 

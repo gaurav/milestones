@@ -146,8 +146,9 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
-`Critical` is an optional bucket — `check` never asks for it, and `status` leaves it out while
-nothing is open on it, so it only shows up when something is on fire.
+A bucket with work on it is coloured by urgency: `Critical` bold red, `Needed soon` orange,
+`Needed later` light green. `Critical` is optional — `check` never asks for it, and `status`
+leaves it out while nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
 The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses
