@@ -75,6 +75,8 @@ milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
+                                         # except Critical, which triage offers anyway and
+                                         # creates the first time you pick it
 milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # the repos you track, then repos owned by your
                                          # configured owners that have issues/milestones
@@ -147,8 +149,8 @@ when the config names a colour for it, or when several of your repos share it, s
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
 A bucket with work on it is coloured by urgency: `Critical` bold red, `Needed soon` orange,
-`Needed later` light green. `Critical` is optional — `check` never asks for it, and `status`
-leaves it out while nothing is open on it, so it only shows up when something is on fire.
+`Needed later` light green. `Critical` is optional — `setup` leaves it to `triage` to create, and
+`status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
 The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses

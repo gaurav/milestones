@@ -20,9 +20,9 @@ from . import gh
 # MILESTONES.md says what each of these is for; keep its table in step with this list.
 DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
 
-# Buckets a repo can do without: `check` never asks for one, and `status` hides one with
-# nothing open on it, so that a quiet "Critical" in every repo doesn't say "all is well" at
-# the top of every table. `setup` still creates it, so triage can reach it when it's needed.
+# Buckets that exist only once something needs them: `setup` doesn't create one, `triage`
+# offers it anyway and creates it when it's picked, and `status` hides one with nothing
+# open on it, so that a quiet "Critical" doesn't say "all is well" at the top of the table.
 OPTIONAL_BUCKETS = {"Critical"}
 
 EXAMPLE_CONFIG = """\
@@ -507,21 +507,31 @@ def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
                             paginate=True)}
 
 
+def _ensure_bucket(repo: str, title: str, existing: dict[str, dict]) -> dict:
+    """The open milestone called `title`, creating or reopening it as needed."""
+    milestone = existing.get(title)
+    if milestone is None:
+        milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
+        print(f"created:  {title}")
+    elif milestone["state"] != "open":
+        # A closed bucket is invisible to status and the triage menu, so
+        # "it exists" is not good enough for a repair command.
+        milestone = gh.api(f"repos/{repo}/milestones/{milestone['number']}", method="PATCH",
+                           state="open")
+        print(f"reopened: {title}")
+    else:
+        print(f"exists:   {title}")
+    return milestone
+
+
 def cmd_setup(config, args):
     existing = _milestones_by_title(args.repo)
     for bucket in config["buckets"]:
-        milestone = existing.get(bucket)
-        if milestone is None:
-            gh.api(f"repos/{args.repo}/milestones", method="POST", title=bucket)
-            print(f"created:  {bucket}")
-        elif milestone["state"] != "open":
-            # A closed bucket is invisible to status and the triage menu, so
-            # "it exists" is not good enough for a repair command.
-            gh.api(f"repos/{args.repo}/milestones/{milestone['number']}", method="PATCH",
-                   state="open")
-            print(f"reopened: {bucket}")
-        else:
-            print(f"exists:   {bucket}")
+        # An optional bucket waits until triage needs it, unless it was made once already.
+        if bucket in OPTIONAL_BUCKETS and bucket not in existing:
+            print(f"later:    {bucket} (made the first time triage picks it)")
+            continue
+        _ensure_bucket(args.repo, bucket, existing)
 
 
 def cmd_rollover(config, args):
@@ -594,6 +604,12 @@ def cmd_triage(config, args):
             menus[repo] = sorted(
                 _milestones_by_title(repo, state="open").values(),
                 key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
+            # An optional bucket the repo hasn't got yet is offered anyway, with no number
+            # until it's picked and made — but only where the repo uses buckets at all.
+            open_titles = {m["title"] for m in menus[repo]}
+            menus[repo] += [{"title": b, "number": None}
+                            for b in free_buckets(config["buckets"], open_titles)
+                            if b in OPTIONAL_BUCKETS]
         choices = menus[repo]
 
         print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  (updated {issue['updated'][:10]})")
@@ -603,6 +619,9 @@ def cmd_triage(config, args):
         if issue["body"]:
             print(f"  > {excerpt(issue['body'])}")
         for i, m in enumerate(choices, 1):
+            if m["number"] is None:
+                print(f"  {i}) {m['title']} (new)")
+                continue
             due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
             # REST open_issues counts PRs as well as issues, which is what we want here:
             # both are work sitting on that milestone.
@@ -623,6 +642,11 @@ def cmd_triage(config, args):
                 continue
             if answer.isdigit() and 1 <= int(answer) <= len(choices):
                 chosen = choices[int(answer) - 1]
+                if chosen["number"] is None:
+                    # Swap in the real milestone, so the next issue here sees it as one. A
+                    # closed one of that name is reopened rather than duplicated.
+                    choices[int(answer) - 1] = chosen = _ensure_bucket(
+                        repo, chosen["title"], _milestones_by_title(repo))
                 gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
