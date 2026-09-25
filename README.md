@@ -7,7 +7,8 @@ Milestones are the single source of truth: dated milestones for "this release"/"
 plus standing undated buckets ("Critical", "Needed soon", "Needed later", "Not urgent",
 "Upstream" — for work that belongs in someone else's tracker) that never close. Every issue's
 bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
-complain in a comment if they disagree.
+complain in a comment if they disagree. [MILESTONES.md](MILESTONES.md) says what each bucket
+is for and how the dated milestones are used.
 
 The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
 a repo without them is simply left alone. Every command picks up whichever buckets a repo

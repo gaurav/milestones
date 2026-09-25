@@ -35,6 +35,10 @@ are collected once up front and one milestone can raise several, so anything a w
 milestone has to be carried across to its other findings by hand (`walk_findings`'s `rename` and
 `gone`) — the list is never re-fetched mid-run.
 
+`MILESTONES.md` holds the conventions this tool encodes: what each bucket means, and how release
+milestones are used. It is written for agents working in *other* repos, so keep it free of CLI
+detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too.
+
 Buckets are per repo. `missing_buckets` is the one answer: the configured buckets a repo hasn't
 got, and nothing at all for a repo that has none of them, since using none is a choice rather than
 a gap. It feeds both the `buckets` finding and the walk's rename options — the buckets a repo
