@@ -4,11 +4,10 @@ I have measured out my life with GitHub milestones
 
 A personal CLI for viewing and managing GitHub milestones across all my repositories.
 Milestones are the single source of truth: dated milestones for "this release"/"next release",
-plus standing undated buckets ("Critical", "Needed soon", "Needed later", "Not urgent",
-"Upstream" — for work that belongs in someone else's tracker) that never close. Every issue's
-bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
-complain in a comment if they disagree. [MILESTONES.md](MILESTONES.md) says what each bucket
-is for and how the dated milestones are used.
+plus standing undated buckets such as "Needed soon" that never close.
+[MILESTONES.md](MILESTONES.md) lists the buckets and says what each one, and each kind of dated
+milestone, means. Every issue's bucket is publicly visible on its GitHub issue page, so anyone can
+see how it's triaged and complain in a comment if they disagree.
 
 The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
 a repo without them is simply left alone. Every command picks up whichever buckets a repo

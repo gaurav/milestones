@@ -30,9 +30,11 @@ means exactly that: an urgent thing has been missed.
 A bucket is never closed or deleted, even when it is empty. A closed bucket drops out of sight, and
 then nothing can be triaged into it.
 
-Buckets are per repository and opt-in. A repository with none of them has chosen not to triage that
-finely and is not missing anything. A repository that uses some of them should have all of them,
-except `Critical`: that one is optional, and it is expected to be empty most of the time.
+Buckets are per repository, and a repository can use any of them or none. None of them is
+required. What matters is that a bucket means the same thing wherever it exists, so its name alone
+says how urgent an issue on it is. `Critical` usually doesn't exist until something is critical, and
+is created then. A repository run by someone else may use the same names a little more loosely, and
+that is still close enough to read them by.
 
 ## Release and deadline milestones
 
