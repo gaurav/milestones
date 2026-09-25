@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import gh
 
+# MILESTONES.md says what each of these is for; keep its table in step with this list.
 DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
 
 # Buckets a repo can do without: `check` never asks for one, and `status` hides one with

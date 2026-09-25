@@ -37,7 +37,7 @@ milestone has to be carried across to its other findings by hand (`walk_findings
 
 `MILESTONES.md` holds the conventions this tool encodes: what each bucket means, and how release
 milestones are used. It is written for agents working in *other* repos, so keep it free of CLI
-detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too.
+detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too; `test_milestones_md_lists_the_default_buckets` catches a table that has fallen behind the list.
 
 Buckets are per repo. `missing_buckets` is the one answer: the configured buckets a repo hasn't
 got, and nothing at all for a repo that has none of them, since using none is a choice rather than

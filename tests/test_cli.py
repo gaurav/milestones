@@ -1,13 +1,15 @@
 import datetime
 import io
+import re
 import tomllib
 import unicodedata
+from pathlib import Path
 
 import pytest
 
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DISTANT, KINDS, LATE, SOON, build_search_queries, date_choices,
-    FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
+    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, load_config, triage_order,
     milestone_problems, missing_buckets, org_colors, parse_ignore, parse_repo, pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
@@ -373,3 +375,10 @@ def test_triage_order_puts_focused_repos_first_without_reshuffling_the_rest():
     # keep the order they had. Sorting on one compound key with reverse=True would put
     # the *unfocused* repos first instead.
     assert [i["n"] for i in triage_order(issues, ["B/Two"])] == [2, 4, 3, 1]
+
+
+def test_milestones_md_lists_the_default_buckets():
+    # MILESTONES.md is what agents in other repos read to learn the buckets, so its table
+    # has to name the same ones, in the same order, as the code creates.
+    doc = (Path(__file__).parent.parent / "MILESTONES.md").read_text()
+    assert re.findall(r"^\| `([^`]+)`", doc, re.M) == DEFAULT_BUCKETS
