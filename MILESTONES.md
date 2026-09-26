@@ -1,8 +1,7 @@
 # How milestones are used
 
 This is how my repositories use GitHub milestones. It is written for anyone working on one of them,
-human collaborators and coding agents alike. [`milestones`](README.md) is the tool that keeps it
-tidy across all of them, but nothing here depends on it.
+human collaborators and coding agents alike.
 
 A repository has two kinds of milestone: **standing buckets**, which say how urgent an issue is and
 are never closed, and **release or deadline milestones**, which say when an issue will ship and are
@@ -24,8 +23,8 @@ next release. `Upstream` is not a level of urgency. It is for issues that are on
 once someone else fixes their data or code.
 
 Buckets are undated. A bucket gets a due date only while it is urgent — say, when upstream sources
-need contacting by a certain day — and loses it again once that has passed. An overdue bucket
-means exactly that: an urgent thing has been missed.
+need contacting by a certain day — and loses it again once the urgent work is done. A bucket still
+past its date means exactly that: an urgent thing has been missed.
 
 A bucket is never closed or deleted, even when it is empty. A closed bucket drops out of sight, and
 then nothing can be triaged into it.
