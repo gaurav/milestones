@@ -4,8 +4,8 @@ This is how my repositories use GitHub milestones. It is written for anyone work
 human collaborators and coding agents alike.
 
 A repository has two kinds of milestone: **standing buckets**, which say how urgent an issue is and
-are never closed, and **release or deadline milestones**, which say when an issue will ship and are
-closed once it has. Every issue should end up on one or the other.
+are never closed, and **release or deadline milestones**, which say when an issue has to be done by
+and are closed once everything on them is. Every issue should end up on one or the other.
 
 ## Standing buckets
 
@@ -46,6 +46,10 @@ whenever that happens". That still ranks above `Needed soon`.
 Release milestones usually have a due date. Most of those dates are soft, so a milestone that is
 past its date is normal and not an alarm. A useful nudge is one that notices a milestone really has
 become urgent and suggests giving it a date that says so.
+
+A release milestone is closed when its release goes out (see [Releases](#releases)). A deadline
+milestone is closed once the work on it is done, whether that happens before its date or after it.
+The date passing doesn't close it.
 
 ## Releases
 
