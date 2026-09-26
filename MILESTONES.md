@@ -1,7 +1,8 @@
 # How milestones are used
 
 This is how my repositories use GitHub milestones. It is written for anyone working on one of them,
-human collaborators and coding agents alike.
+human collaborators and coding agents alike. [`milestones`](README.md) is the tool that keeps it
+tidy across all of them, but nothing here depends on it.
 
 A repository has two kinds of milestone: **standing buckets**, which say how urgent an issue is and
 are never closed, and **release or deadline milestones**, which say when an issue has to be done by
