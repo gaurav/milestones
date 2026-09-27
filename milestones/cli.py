@@ -483,6 +483,16 @@ def fetch_milestones(repos: list[str],
     return list(names.values()), milestones
 
 
+def untriaged_counts(items: list[dict]) -> list[dict]:
+    """Per repo, how many open issues and pull requests have no milestone — only the repos
+    that have any, by name. `repo` is GitHub's spelling, as fetch_milestones' names are."""
+    counts: dict[str, dict] = {}
+    for item in items:
+        row = counts.setdefault(item["repo"], {"repo": item["repo"], "issues": 0, "prs": 0})
+        row["prs" if item["pr"] else "issues"] += 1
+    return [counts[repo] for repo in sorted(counts, key=str.lower)]
+
+
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
@@ -505,6 +515,11 @@ def cmd_status(config, args):
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.
     quiet = sorted(set(tracked) - {m[0] for m in milestones})
+    # "Is everything triaged?" is the other half of the question status answers; one
+    # search over every tracked repo, issues and PRs together.
+    untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None))
+    for row in untriaged:
+        row["focus"] = is_focused(row["repo"], config["focus"])
 
     records = []
     for repo, title, due, count, closed, prs, closed_prs, url in milestones:
@@ -532,7 +547,7 @@ def cmd_status(config, args):
         json.dump({"milestones": records,
                    "quiet_repos": [{"repo": r, "focus": is_focused(r, config["focus"]),
                                     "url": repo_url(r)} for r in quiet],
-                   "stranded": stranded,
+                   "stranded": stranded, "untriaged": untriaged,
                    "focus": config["focus"]}, sys.stdout, indent=2)
         print()
         return
@@ -575,6 +590,18 @@ def cmd_status(config, args):
         print(f"\n{len(stranded)} closed milestone{'s' if len(stranded) != 1 else ''} still "
               f"hold{'s' if len(stranded) == 1 else ''} {items} open "
               f"item{'s' if items != 1 else ''} — run: milestones check")
+    if not untriaged:
+        print("\nEverything open in every tracked repo is on a milestone.")
+        return
+    issues, prs = sum(r["issues"] for r in untriaged), sum(r["prs"] for r in untriaged)
+    print(f"\n{issues} untriaged issue{'s' if issues != 1 else ''} and {prs} pull "
+          f"request{'s' if prs != 1 else ''} (no milestone):")
+    # A zero prints as blank so the column reads as "which repos have PRs waiting".
+    print_table([(star(r["focus"]), r["repo"], r["issues"] or "", r["prs"] or "")
+                 for r in untriaged],
+                ("", "REPO", "ISSUES", "PRS"), right=("ISSUES", "PRS"))
+    print("run: milestones triage --prs" + ("  (then: milestones triage)" if issues else "")
+          if prs else "run: milestones triage")
 
 
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:

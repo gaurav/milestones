@@ -14,7 +14,8 @@ from milestones.cli import (
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, visible, write_repo_list,
+    print_findings, print_table, read_key, sort_key, untriaged_counts, visible,
+    write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -50,6 +51,9 @@ def test_build_search_queries_scope_to_configured_repos_only():
     assert all(len(q) < 256 for q in queries)  # GitHub search query length cap
     assert all("is:pr" in q and "is:issue" not in q
                for q in build_search_queries(repos, kind="pr"))
+    # None asks for both at once, which is how status counts what is untriaged.
+    assert all("is:pr" not in q and "is:issue" not in q and "no:milestone" in q
+               for q in build_search_queries(repos, kind=None))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -437,3 +441,11 @@ def test_item_marker_names_prs_and_drafts_only():
     assert item_marker({"pr": False, "draft": False}) == ""
     assert item_marker({"pr": True, "draft": False}) == "(PR)"
     assert item_marker({"pr": True, "draft": True}) == "(PR, draft)"
+
+
+def test_untriaged_counts_splits_issues_from_prs_per_repo():
+    items = [{"repo": "b/two", "pr": True}, {"repo": "A/one", "pr": False},
+             {"repo": "b/two", "pr": False}, {"repo": "b/two", "pr": False}]
+    assert untriaged_counts(items) == [{"repo": "A/one", "issues": 1, "prs": 0},
+                                       {"repo": "b/two", "issues": 2, "prs": 1}]
+    assert untriaged_counts([]) == []

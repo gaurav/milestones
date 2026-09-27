@@ -61,7 +61,11 @@ def graphql(query: str) -> dict:
 def search_issues(query: str) -> list[dict]:
     # `gh search issues` uses the legacy search path and returns nothing anymore;
     # the REST endpoint needs advanced_search=true. Items are REST-shaped issues.
-    # ponytail: GitHub caps search itself at 1000 results per query; the caller
-    # splits by repo, so no single query has come near that.
+    # GitHub caps search itself at 1000 results per query, silently; the caller splits
+    # by repo, so no single query has come near that, but a count built on one would be
+    # a lower bound without a word said. Say the word.
     path = f"search/issues?q={quote(query)}&sort=updated&advanced_search=true&per_page=100"
-    return api(path, paginate=True) or []
+    items = api(path, paginate=True) or []
+    if len(items) >= 1000:
+        print(f"warning: search stops at 1000 results; more match {query!r}", file=sys.stderr)
+    return items
