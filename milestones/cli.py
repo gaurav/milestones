@@ -1241,10 +1241,11 @@ def issue_count(issues: int, prs: int = 0) -> str:
 def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
     repos, milestones = fetch_milestones(config["repos"], closed=True)
+    # Closed titles too: a title is unique across open and closed milestones, so a rename
+    # onto a closed bucket's title would 422 just as onto an open one's.
     seen: dict[str, set] = {r: set() for r in repos}
     for repo, m in milestones:
-        if m["state"] == "OPEN":
-            seen[repo].add(m["title"])
+        seen[repo].add(m["title"])
     # One answer per repo, settled before any finding is built: which standing buckets
     # a milestone here could be renamed onto, and none for a repo that uses none of them.
     free = {repo: free_buckets(config["buckets"], titles) for repo, titles in seen.items()}
