@@ -9,7 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
-    closes_line, complete_titles, parse_answer,
+    closes_line, complete_titles, parse_answer, priority_options,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -477,3 +477,20 @@ def test_parse_answer_splits_a_choice_from_its_one_modifier():
     assert parse_answer("c$") == ("c", "$")
     for other in ["s", "o", "q", "", "2!!", "!2", "x", "2 3"]:
         assert parse_answer(other) is None, other
+
+
+def test_priority_options_needs_the_whole_single_select_priority_field():
+    def field(name, options, kind="IssueFieldSingleSelect"):
+        return {"__typename": kind, "id": f"F_{name}", "name": name,
+                "options": [{"id": f"O_{o}", "name": o} for o in options]}
+    # NCATSTranslator's shape: Urgent/High/Medium/Low, alongside an Effort field.
+    fields = [field("Effort", ["High", "Medium", "Low"]),
+              field("Priority", ["Urgent", "High", "Medium", "Low"])]
+    assert priority_options(fields) == {"!": ("F_Priority", "O_Urgent"),
+                                        "+": ("F_Priority", "O_High"),
+                                        "-": ("F_Priority", "O_Low")}
+    assert priority_options([field("priority", ["urgent", "high", "low"])]) is not None
+    # Half a field is no field: a key that can't be honoured is not offered.
+    assert priority_options([field("Priority", ["High", "Low"])]) is None
+    assert priority_options([{"__typename": "IssueFieldText", "id": "F", "name": "Priority"}]) is None
+    assert priority_options([]) is None

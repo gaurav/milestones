@@ -735,8 +735,39 @@ def _norm_issue(issue: dict, repo: str) -> dict:
     # Both the REST listing and a search item carry `draft` on a pull request.
     return {"repo": repo, "number": issue["number"], "title": issue["title"],
             "body": issue["body"], "labels": [l["name"] for l in issue["labels"]],
-            "updated": issue["updated_at"], "url": issue["html_url"],
+            "updated": issue["updated_at"], "url": issue["html_url"], "id": issue["node_id"],
             "pr": "pull_request" in issue, "draft": bool(issue.get("draft"))}
+
+
+def priority_options(fields: list[dict]) -> dict[str, tuple[str, str]] | None:
+    """The walk's priority keys as (field id, option id), from an organisation's issue
+    fields — its single-select "Priority" with Urgent, High and Low options, names matched
+    ignoring case. None when it hasn't got all of that, so no key is offered by half."""
+    for field in fields:
+        if field.get("__typename") != "IssueFieldSingleSelect" or field["name"].lower() != "priority":
+            continue
+        by_name = {o["name"].lower(): o["id"] for o in field["options"]}
+        keyed = {key: (field["id"], by_name[name.lower()])
+                 for key, name in PRIORITY_KEYS.items() if name.lower() in by_name}
+        return keyed if len(keyed) == len(PRIORITY_KEYS) else None
+    return None
+
+
+def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
+    """`priority_options` for a repo owner. Issue fields are an organisation feature, so a
+    user account is answered without the GraphQL round trip (and its NOT_FOUND warning)."""
+    if gh.api(f"users/{owner}")["type"] != "Organization":
+        return None
+    data = gh.graphql(
+        f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
+        f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}")
+    return priority_options(data["organization"]["issueFields"]["nodes"])
+
+
+def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
+    gh.graphql(f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
+               f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
+               f"{{ clientMutationId }} }}")
 
 
 def item_marker(item: dict) -> str:
@@ -780,7 +811,7 @@ def fetch_closing_issues(items: list[dict]) -> None:
         aliases = " ".join(
             f'r{ri}: repository(owner: "{repo.split("/")[0]}", name: "{repo.split("/")[1]}") {{ '
             + " ".join(f"p{item['number']}: pullRequest(number: {item['number']}) {{ "
-                       "closingIssuesReferences(first: 20) { nodes { number title state "
+                       "closingIssuesReferences(first: 20) { nodes { id number title state "
                        "milestone { title } } } }" for item in repo_items)
             + " }"
             for ri, (repo, repo_items) in enumerate(by_repo.items()))
@@ -790,8 +821,8 @@ def fetch_closing_issues(items: list[dict]) -> None:
             for item in repo_items:
                 pr = node.get(f"p{item['number']}")
                 item["closes"] = [
-                    {"number": c["number"], "title": c["title"], "state": c["state"],
-                     "milestone": c["milestone"] and c["milestone"]["title"]}
+                    {"id": c["id"], "number": c["number"], "title": c["title"],
+                     "state": c["state"], "milestone": c["milestone"] and c["milestone"]["title"]}
                     for c in pr["closingIssuesReferences"]["nodes"]] if pr else []
 
 
@@ -828,9 +859,32 @@ def cmd_triage(config, args):
         return
     menus: dict[str, list[dict]] = {}
     known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
+    priorities: dict[str, dict | None] = {}  # owner -> the priority keys it can take, if any
     # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
     # run: the issue walk fetched its list before those writes, so it would offer them again.
     carried: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def set_priorities(owner: str, priority: dict | None, issue: dict, key: str) -> None:
+        """Priority is an organisation issue field, and pull requests haven't got fields:
+        a PR's priority goes onto the open issues it closes, which are the work."""
+        name = PRIORITY_KEYS[key]
+        if priority is None:
+            print(f"  (no Priority field for {owner}; milestone set, priority not)")
+            return
+        targets = ([(issue["number"], issue["id"])] if not issue["pr"] else
+                   [(c["number"], c["id"]) for c in issue.get("closes") or []
+                    if c["state"] == "OPEN"])
+        if not targets:
+            print("  (a PR has no fields, and this one closes no open issue; nothing to prioritise)")
+            return
+        field_id, option_id = priority[key]
+        for number, node_id in targets:
+            try:
+                set_priority(node_id, field_id, option_id)
+            except SystemExit as exit:
+                print(f"  {exit}")
+                continue
+            print(f"  → also #{number} priority {name}" if issue["pr"] else f"  → priority {name}")
 
     def custom(repo: str, choices: list[dict]) -> dict | None:
         """A milestone typed by name: an existing one, a closed one reopened, or a new one
@@ -879,6 +933,10 @@ def cmd_triage(config, args):
                             for b in free_buckets(config["buckets"], open_titles)
                             if b in OPTIONAL_BUCKETS]
         choices = menus[repo]
+        owner = repo.split("/")[0]
+        if owner not in priorities:
+            priorities[owner] = fetch_priority_field(owner)
+        priority = priorities[owner]
 
         marker = f"  {item_marker(issue)}" if issue["pr"] else ""
         print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}{marker}"
@@ -901,10 +959,13 @@ def cmd_triage(config, args):
             print(f"  {i}) {title} ({m['open_issues']} open{due})")
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
+        if priority:
+            print("  priority: " + "  ".join(f"{k} {name}" for k, name in PRIORITY_KEYS.items()))
 
         assign = f"[1-{len(choices)}] assign, " if choices else ""
+        hint = "  (add ! + - for priority)" if priority else ""
         while True:
-            answer = ask(f"  {assign}c custom, s skip, o open, q quit: ").strip().lower()
+            answer = ask(f"  {assign}c custom, s skip, o open, q quit:{hint} ").strip().lower()
             if answer == "q":
                 return
             if answer == "s" or (answer == "" and not choices):
@@ -934,6 +995,9 @@ def cmd_triage(config, args):
                     # Parsed on purpose, so the grammar is settled before the API exists.
                     print(f"  (not moved to the {ORDER_KEYS[suffix]}: GitHub has no API for "
                           f"a milestone's order — drag it at {chosen['html_url']})")
+                if suffix in PRIORITY_KEYS:
+                    # After the milestone, so a failed field write can't lose the assignment.
+                    set_priorities(owner, priority, issue, suffix)
                 # A PR is triaged for the issues it closes too: an open one with no
                 # milestone goes where the PR goes, and one already placed is left alone.
                 for c in issue.get("closes") or []:
