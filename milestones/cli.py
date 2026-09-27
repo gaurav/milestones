@@ -993,7 +993,9 @@ def cmd_triage(config, args):
             if ask(f"  no milestone '{title}' in {repo}; create it? [y/N] ").strip().lower() != "y":
                 return None
             milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
-            print(f"  created:  {title}  (undated — check will say so)")
+            # A bucket is undated by design; anything else will be `check`'s `undated`.
+            print(f"  created:  {title}" + ("" if title in config["buckets"]
+                                            else "  (undated — check will say so)"))
             done["created"].append((repo, title))
         elif milestone["state"] != "open":
             if ask(f"  '{title}' is closed; reopen it? [y/N] ").strip().lower() != "y":
