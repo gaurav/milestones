@@ -8,6 +8,10 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - Advanced search **ANDs** repeated qualifiers (legacy OR'd them); OR them explicitly:
   `(repo:a/b OR repo:c/d)`. Query strings cap at 256 chars, so `build_search_queries`
   splits the configured repos across as many queries as that takes.
+- `@me` works in REST advanced search, inside an OR group too (`(author:@me OR
+  assignee:@me)`), and a search item carries `draft` and `milestone`, so `prs` lists pull
+  requests from the one search with no second call. Unlike `triage`, it is not scoped to the
+  config — that is its point.
 - Milestone writes are REST-only; no GraphQL mutations exist. Reads are fine in GraphQL.
 - GraphQL `repositories` defaults `ownerAffiliations` to include collaborator repos — pass
   `ownerAffiliations: OWNER`. Transferred repos can still echo under their old owner; dedupe.
@@ -44,8 +48,8 @@ detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
 coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
 pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
 only write that never closes or deletes anything, which is what makes that safe. A PR ref is
-accepted on purpose — the issues endpoint sets a PR's milestone too — but `triage --list` never
-lists one. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
+accepted on purpose — the issues endpoint sets a PR's milestone too — and `triage --prs --list`
+lists them. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
 "Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —
 it hands the program an EOF before the answer, so `ask()` aborts whatever you send.
 

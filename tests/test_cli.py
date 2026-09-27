@@ -9,6 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
@@ -47,6 +48,8 @@ def test_build_search_queries_scope_to_configured_repos_only():
     assert " OR " in queries[0]  # advanced search ANDs bare qualifiers
     assert all("no:milestone" in q and "is:issue" in q for q in queries)
     assert all(len(q) < 256 for q in queries)  # GitHub search query length cap
+    assert all("is:pr" in q and "is:issue" not in q
+               for q in build_search_queries(repos, kind="pr"))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -391,3 +394,16 @@ def test_milestones_md_lists_the_default_buckets():
     # has to name the same ones, in the same order, as the code creates.
     doc = (Path(__file__).parent.parent / "MILESTONES.md").read_text()
     assert re.findall(r"^\| `([^`]+)`", doc, re.M) == DEFAULT_BUCKETS
+
+
+def test_prs_query_is_authored_by_default_and_ors_in_the_rest():
+    assert prs_query() == "is:pr is:open (author:@me)"
+    assert prs_query(assigned=True, review_requested=True, mentions=True) == (
+        "is:pr is:open (author:@me OR assignee:@me OR review-requested:@me OR mentions:@me)")
+
+
+def test_pr_group_prefers_tracked_then_ignored():
+    config = {"repos": ["gaurav/milestones"], "ignore": ["gaurav/milestones", "phyloref/*"]}
+    assert pr_group("Gaurav/Milestones", config) == "tracked"
+    assert pr_group("phyloref/klados", config) == "ignored"
+    assert pr_group("rambaut/figtree", config) == "untracked"
