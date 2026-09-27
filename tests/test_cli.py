@@ -157,8 +157,8 @@ def test_write_repo_list_refuses_a_list_it_cannot_rewrite(tmp_path):
         write_repo_list(path, "ignore", ["c/d", "e/f"])
 
 
-def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25"):
-    return milestone_problems(title, due, open_issues, closed_issues, BUCKETS, today)
+def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25", **prs):
+    return milestone_problems(title, due, open_issues, closed_issues, BUCKETS, today, **prs)
 
 
 def test_milestone_problems_accepts_versions_dates_and_buckets():
@@ -185,6 +185,16 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     # Buckets are meant to sit empty between triage rounds, and to outlive the
     # issues they held: closing one hides it from status and triage.
     assert problems("Needed later", None, open_issues=0) == []
+
+
+def test_milestone_problems_counts_pull_requests_as_work():
+    # GraphQL's issue counts leave PRs out, and a milestone holding only open PRs was
+    # read as done — and closed with the PRs still on it. Every decision is over both.
+    assert kinds("v2.0", "2026-09-01", open_issues=0, closed_issues=3, open_prs=2) == []
+    assert problems("v2.0", "2026-08-19", open_issues=1, open_prs=2) == [
+        ("overdue", "due 2026-08-19, 3 still open")]
+    assert problems("v2.0", "2026-09-01", open_issues=0, closed_prs=2) == [("done", "all 2 closed")]
+    assert kinds("v2.0", "2026-09-01", open_issues=0, open_prs=1) == []
     assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
 
 
@@ -233,6 +243,8 @@ def test_favourite_date_prefers_the_most_used_then_the_most_recent():
 
 def test_issue_count_reads_naturally():
     assert [issue_count(n) for n in (0, 1, 42)] == ["(0 issues)", "(1 issue)", "(42 issues)"]
+    assert issue_count(0, 1) == "(0 issues, 1 PR)"
+    assert issue_count(3, 2) == "(3 issues, 2 PRs)"
 
 
 def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
@@ -243,9 +255,9 @@ def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
         read_key("choose: ")
 
 
-def finding(kind, repo, title, detail="", issues=0):
+def finding(kind, repo, title, detail="", issues=0, prs=0):
     return {"kind": kind, "repo": repo, "title": title, "detail": detail, "issues": issues,
-            "url": f"https://github.com/{repo}/milestone/1", "number": 1}
+            "prs": prs, "url": f"https://github.com/{repo}/milestone/1", "number": 1}
 
 
 def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):

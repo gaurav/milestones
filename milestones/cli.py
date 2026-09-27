@@ -93,11 +93,17 @@ KINDS = {
 
 
 def milestone_problems(title: str, due: str | None, open_issues: int, closed_issues: int,
-                       buckets: list[str], today: str) -> list[tuple[str, str]]:
-    """(kind, detail) for everything wrong with one open milestone."""
+                       buckets: list[str], today: str,
+                       open_prs: int = 0, closed_prs: int = 0) -> list[tuple[str, str]]:
+    """(kind, detail) for everything wrong with one open milestone.
+
+    A pull request is work on the milestone as much as an issue is, so every
+    decision here is over both: a milestone holding only open PRs is not done.
+    """
+    open_work, closed_work = open_issues + open_prs, closed_issues + closed_prs
     problems = []
-    if due and due < today and open_issues:
-        problems.append(("overdue", f"due {due}, {open_issues} still open"))
+    if due and due < today and open_work:
+        problems.append(("overdue", f"due {due}, {open_work} still open"))
     if title in buckets:
         # A standing bucket is meant to be undated, named for itself, and empty
         # between triage rounds — and closing one would hide it from status and
@@ -107,9 +113,9 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
         problems.append(("rename", ""))
     if not due:
         problems.append(("undated", ""))
-    if closed_issues and not open_issues:
-        problems.append(("done", f"all {closed_issues} closed"))
-    if not closed_issues and not open_issues:
+    if closed_work and not open_work:
+        problems.append(("done", f"all {closed_work} closed"))
+    if not closed_work and not open_work:
         problems.append(("empty", ""))
     return problems
 
@@ -447,7 +453,10 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
             f"{{ pageInfo {{ hasNextPage endCursor }} "
             f"nodes {{ title url dueOn number "
             f"open: issues(states: OPEN) {{ totalCount }} "
-            f"closed: issues(states: CLOSED) {{ totalCount }} }} }} }}"
+            f"closed: issues(states: CLOSED) {{ totalCount }} "
+            # `issues` never counts pull requests; they are their own connection.
+            f"openPrs: pullRequests(states: OPEN) {{ totalCount }} "
+            f"closedPrs: pullRequests(states: [CLOSED, MERGED]) {{ totalCount }} }} }} }}"
             for alias, r in alias_of.items()
         )
         data = gh.graphql(f"query {{ {aliases} }}")
@@ -470,28 +479,33 @@ def cmd_status(config, args):
     tracked, entries = fetch_milestones(config["repos"])
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
-        count = m["open"]["totalCount"]
-        if m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"] and not count:
+        count, prs = m["open"]["totalCount"], m["openPrs"]["totalCount"]
+        if (m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"]
+                and not count + prs):
             continue
-        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"], m["url"]))
+        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"],
+                           prs, m["closedPrs"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.
     quiet = sorted(set(tracked) - {m[0] for m in milestones})
 
     records = []
-    for repo, title, due, count, closed, url in milestones:
+    for repo, title, due, count, closed, prs, closed_prs, url in milestones:
         # `check` owns what is wrong with a milestone; status shows the three of its
         # kinds that read as a state the milestone is in rather than a fix to make,
         # and so agrees with `check` about standing buckets and about a past-due
         # milestone with nothing left open. Empty means nothing was ever filed on it,
         # not "all done".
         kinds = {kind for kind, _ in milestone_problems(title, due, count, closed,
-                                                        config["buckets"], today)}
-        total = count + closed
+                                                        config["buckets"], today,
+                                                        prs, closed_prs)}
+        # `open` and `closed` are issues, as GitHub counts them; `percent` is over all the
+        # work, so a milestone that holds only PRs still says how far along it is.
+        done_work, total = closed + closed_prs, count + closed + prs + closed_prs
         records.append({"repo": repo, "title": title, "due": due, "open": count,
-                        "closed": closed,
-                        "percent": round(100 * closed / total) if total else None,
+                        "closed": closed, "open_prs": prs, "closed_prs": closed_prs,
+                        "percent": round(100 * done_work / total) if total else None,
                         "flags": [k for k in ("overdue", "empty", "done") if k in kinds],
                         "focus": is_focused(repo, config["focus"]),
                         "url": url})
@@ -516,15 +530,18 @@ def cmd_status(config, args):
         rows.append((star(r["focus"]),
                      f"{paint(owner, orgs.get(owner))}/{name}",
                      paint(VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
-                           bucket_color(r["title"], r["open"])),
+                           bucket_color(r["title"], r["open"] + r["open_prs"])),
                      paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
-                     r["open"], r["closed"],
-                     paint(f"{r['percent']}%", pct_color(r["closed"], r["open"] + r["closed"]))
+                     r["open"], r["closed"], r["open_prs"] or "",
+                     paint(f"{r['percent']}%",
+                           pct_color(r["closed"] + r["closed_prs"],
+                                     r["open"] + r["closed"] + r["open_prs"] + r["closed_prs"]))
                      if r["percent"] is not None else "—",
                      flags, r["url"]))
     if rows:
-        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
-                    right=("OPEN", "DONE", "%"))
+        # PRS is open pull requests; print_table drops it when no milestone has any.
+        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "PRS", "%", "", "URL"),
+                    right=("OPEN", "DONE", "PRS", "%"))
     if quiet:
         if rows:
             print()
@@ -803,9 +820,12 @@ def cmd_prs(config, args):
         table(by["ignored"], "IGNORED REPO")
 
 
-def issue_count(issues: int) -> str:
-    """"(3 issues)", "(1 issue)"."""
-    return f"({issues} issue{'' if issues == 1 else 's'})"
+def issue_count(issues: int, prs: int = 0) -> str:
+    """"(3 issues)", "(1 issue)", "(3 issues, 2 PRs)" — PRs only when there are any."""
+    count = f"{issues} issue{'' if issues == 1 else 's'}"
+    if prs:
+        count += f", {prs} PR{'' if prs == 1 else 's'}"
+    return f"({count})"
 
 
 def collect_findings(config) -> list[dict]:
@@ -822,11 +842,14 @@ def collect_findings(config) -> list[dict]:
     for repo, m in milestones:
         for kind, detail in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
                                                m["open"]["totalCount"], m["closed"]["totalCount"],
-                                               config["buckets"], today):
+                                               config["buckets"], today,
+                                               m["openPrs"]["totalCount"],
+                                               m["closedPrs"]["totalCount"]):
             findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
                              "url": m["url"], "number": m["number"],
                              "free_buckets": free[repo],
-                             "issues": m["open"]["totalCount"] + m["closed"]["totalCount"]})
+                             "issues": m["open"]["totalCount"] + m["closed"]["totalCount"],
+                             "prs": m["openPrs"]["totalCount"] + m["closedPrs"]["totalCount"]})
     findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
     return findings
 
@@ -842,7 +865,7 @@ def print_findings(findings: list[dict]) -> None:
         # Repo and title get their own column so a repeat offender is obvious at a glance.
         repo_w = max(len(f["repo"]) for f in group)
         title_w = max(len(f["title"]) for f in group)
-        counts = [issue_count(f["issues"]) for f in group]
+        counts = [issue_count(f["issues"], f["prs"]) for f in group]
         count_w = max(len(c) for c in counts)
         for count, f in zip(counts, group):
             line = "  • %s  %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
@@ -929,7 +952,7 @@ def walk_findings(config, findings: list[dict]) -> None:
         if (repo, number) in gone:
             continue
         detail = f"  ({f['detail']})" if f["detail"] else ""
-        count = issue_count(f["issues"])
+        count = issue_count(f["issues"], f["prs"])
         print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}"
               f"{'  ' + count if count else ''}{detail}")
         print(f"  {f['url']}")
