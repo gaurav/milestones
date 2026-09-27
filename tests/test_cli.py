@@ -9,10 +9,15 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    _norm_issue, carries, closes_line, complete_titles, parse_answer, priority_options,
+    pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
-    is_ignored, load_config, triage_order,
-    free_buckets, milestone_problems, org_colors, parse_ignore, parse_repo, pct_color,
-    print_findings, print_table, read_key, sort_key, visible, write_repo_list,
+    is_ignored, item_marker, load_config, triage_order,
+    free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
+    pct_color,
+    print_findings, print_table, read_key, sort_key, triage_scope, triage_summary,
+    untriaged_counts, visible,
+    write_repo_list,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -46,6 +51,11 @@ def test_build_search_queries_scope_to_configured_repos_only():
     assert " OR " in queries[0]  # advanced search ANDs bare qualifiers
     assert all("no:milestone" in q and "is:issue" in q for q in queries)
     assert all(len(q) < 256 for q in queries)  # GitHub search query length cap
+    assert all("is:pr" in q and "is:issue" not in q
+               for q in build_search_queries(repos, kind="pr"))
+    # None asks for both at once, which is how status counts what is untriaged.
+    assert all("is:pr" not in q and "is:issue" not in q and "no:milestone" in q
+               for q in build_search_queries(repos, kind=None))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -88,6 +98,18 @@ def test_parse_repo_accepts_urls_and_shorthand():
     for bad in ["translator-diagram", "https://github.com/NCATSTranslator/x/issues", ""]:
         with pytest.raises(SystemExit):
             parse_repo(bad)
+
+
+def test_parse_issue_ref_reads_refs_urls_and_whole_list_lines():
+    for text in ["NCATSTranslator/Babel#204",
+                 "https://github.com/NCATSTranslator/Babel/issues/204",
+                 "github.com/NCATSTranslator/Babel/pull/204/",
+                 # A `triage --list` line, title and labels included; only the ref is read.
+                 "NCATSTranslator/Babel#204  Fix the thing [again]  [bug, help wanted]"]:
+        assert parse_issue_ref(text) == ("NCATSTranslator/Babel", 204), text
+    for bad in ["NCATSTranslator/Babel", "#204", "a/b#x", "a/b#", "", "   "]:
+        with pytest.raises(SystemExit):
+            parse_issue_ref(bad)
 
 
 def test_parse_ignore_reads_a_bare_owner_as_the_whole_owner():
@@ -141,8 +163,8 @@ def test_write_repo_list_refuses_a_list_it_cannot_rewrite(tmp_path):
         write_repo_list(path, "ignore", ["c/d", "e/f"])
 
 
-def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25"):
-    return milestone_problems(title, due, open_issues, closed_issues, BUCKETS, today)
+def problems(title, due=None, open_issues=1, closed_issues=0, today="2026-08-25", **prs):
+    return milestone_problems(title, due, open_issues, closed_issues, BUCKETS, today, **prs)
 
 
 def test_milestone_problems_accepts_versions_dates_and_buckets():
@@ -169,6 +191,28 @@ def test_milestone_problems_flags_names_dates_and_stale_milestones():
     # Buckets are meant to sit empty between triage rounds, and to outlive the
     # issues they held: closing one hides it from status and triage.
     assert problems("Needed later", None, open_issues=0) == []
+
+
+def test_milestone_problems_counts_pull_requests_as_work():
+    # GraphQL's issue counts leave PRs out, and a milestone holding only open PRs was
+    # read as done — and closed with the PRs still on it. Every decision is over both.
+    assert kinds("v2.0", "2026-09-01", open_issues=0, closed_issues=3, open_prs=2) == []
+    assert problems("v2.0", "2026-08-19", open_issues=1, open_prs=2) == [
+        ("overdue", "due 2026-08-19, 3 still open")]
+    assert problems("v2.0", "2026-09-01", open_issues=0, closed_prs=2) == [("done", "all 2 closed")]
+    assert kinds("v2.0", "2026-09-01", open_issues=0, open_prs=1) == []
+
+
+def test_milestone_problems_reports_a_closed_milestone_only_as_stranded():
+    # Work on a closed milestone is invisible everywhere else, so it is the one thing
+    # check says about a closed milestone — whatever else is wrong with its name or date,
+    # and whether or not it is a bucket.
+    assert problems("Needs tests", None, open_issues=50, closed=True) == [
+        ("stranded", "closed with 50 still open")]
+    assert kinds("Improved testing", None, open_issues=0, open_prs=3, closed=True) == ["stranded"]
+    assert kinds("Needed soon", None, open_issues=2, closed=True) == ["stranded"]
+    assert kinds("Babel v1.18", "2026-07-20", open_issues=0, closed_issues=13, closed=True) == []
+    assert kinds("Old plans", None, open_issues=0, closed_issues=0, closed=True) == []
     assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
 
 
@@ -217,6 +261,8 @@ def test_favourite_date_prefers_the_most_used_then_the_most_recent():
 
 def test_issue_count_reads_naturally():
     assert [issue_count(n) for n in (0, 1, 42)] == ["(0 issues)", "(1 issue)", "(42 issues)"]
+    assert issue_count(0, 1) == "(0 issues, 1 PR)"
+    assert issue_count(3, 2) == "(3 issues, 2 PRs)"
 
 
 def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
@@ -227,9 +273,9 @@ def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
         read_key("choose: ")
 
 
-def finding(kind, repo, title, detail="", issues=0):
+def finding(kind, repo, title, detail="", issues=0, prs=0):
     return {"kind": kind, "repo": repo, "title": title, "detail": detail, "issues": issues,
-            "url": f"https://github.com/{repo}/milestone/1", "number": 1}
+            "prs": prs, "url": f"https://github.com/{repo}/milestone/1", "number": 1}
 
 
 def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):
@@ -378,3 +424,153 @@ def test_milestones_md_lists_the_default_buckets():
     # has to name the same ones, in the same order, as the code creates.
     doc = (Path(__file__).parent.parent / "MILESTONES.md").read_text()
     assert re.findall(r"^\| `([^`]+)`", doc, re.M) == DEFAULT_BUCKETS
+
+
+def test_prs_query_is_authored_by_default_and_ors_in_the_rest():
+    assert prs_query() == "is:pr is:open (author:@me)"
+    assert prs_query(assigned=True, review_requested=True, mentions=True) == (
+        "is:pr is:open (author:@me OR assignee:@me OR review-requested:@me OR mentions:@me)")
+
+
+def test_pr_group_prefers_tracked_then_ignored():
+    config = {"repos": ["gaurav/milestones"], "ignore": ["gaurav/milestones", "phyloref/*"]}
+    assert pr_group("Gaurav/Milestones", config) == "tracked"
+    assert pr_group("phyloref/klados", config) == "ignored"
+    assert pr_group("rambaut/figtree", config) == "untracked"
+
+
+def test_item_marker_names_prs_and_drafts_only():
+    assert item_marker({"pr": False, "draft": False}) == ""
+    assert item_marker({"pr": True, "draft": False}) == "(PR)"
+    assert item_marker({"pr": True, "draft": True}) == "(PR, draft)"
+
+
+def test_untriaged_counts_splits_issues_from_prs_per_repo():
+    items = [{"repo": "b/two", "pr": True}, {"repo": "A/one", "pr": False},
+             {"repo": "b/two", "pr": False}, {"repo": "b/two", "pr": False}]
+    assert untriaged_counts(items) == [{"repo": "A/one", "issues": 1, "prs": 0},
+                                       {"repo": "b/two", "issues": 2, "prs": 1}]
+    assert untriaged_counts([]) == []
+
+
+def test_closes_line_says_where_each_linked_issue_is():
+    assert closes_line([], "A/one") == ""
+    assert closes_line([{"number": 12, "state": "OPEN", "milestone": None, "repo": "A/one"},
+                        {"number": 7, "state": "OPEN", "milestone": "v1.2", "repo": "a/ONE"},
+                        {"number": 3, "state": "CLOSED", "milestone": None, "repo": "A/one"},
+                        {"number": 5, "state": "OPEN", "milestone": None, "repo": "B/two"}],
+                       "A/one") == (
+        "closes #12 (no milestone), #7 (v1.2), #3 (closed), B/two#5 (no milestone)")
+
+
+def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
+    def issue(state="OPEN", milestone=None, repo="A/one"):
+        return {"state": state, "milestone": milestone, "repo": repo}
+    assert carries(issue(), "A/one")
+    assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
+    assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    assert not carries(issue(state="CLOSED"), "A/one")
+    # Its milestone number here would name some other milestone there, or none.
+    assert not carries(issue(repo="B/two"), "A/one")
+
+
+def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():
+    titles = ["Babel v1.19", "Babel v1.20", "Needed soon", "Not urgent"]
+    assert complete_titles(titles, "babel v1.2") == ["Babel v1.20"]
+    # The whole line is the prefix, spaces included, so "n" is not two words.
+    assert complete_titles(titles, "N") == ["Needed soon", "Not urgent"]
+    assert complete_titles(titles, "") == titles
+    assert complete_titles(titles, "v1") == []
+
+
+def test_parse_answer_splits_a_choice_from_its_one_modifier():
+    assert parse_answer("2") == ("2", "")
+    assert parse_answer("12!") == ("12", "!")
+    assert parse_answer(" C- ") == ("c", "-")
+    assert parse_answer("2^") == ("2", "^")
+    assert parse_answer("c$") == ("c", "$")
+    for other in ["s", "o", "q", "", "2!!", "!2", "x", "2 3"]:
+        assert parse_answer(other) is None, other
+
+
+def test_priority_options_needs_the_whole_single_select_priority_field():
+    def field(name, options, kind="IssueFieldSingleSelect"):
+        return {"__typename": kind, "id": f"F_{name}", "name": name,
+                "options": [{"id": f"O_{o}", "name": o} for o in options]}
+    # NCATSTranslator's shape: Urgent/High/Medium/Low, alongside an Effort field.
+    fields = [field("Effort", ["High", "Medium", "Low"]),
+              field("Priority", ["Urgent", "High", "Medium", "Low"])]
+    assert priority_options(fields) == {"!": ("F_Priority", "O_Urgent"),
+                                        "+": ("F_Priority", "O_High"),
+                                        "-": ("F_Priority", "O_Low")}
+    assert priority_options([field("priority", ["urgent", "high", "low"])]) is not None
+    # Half a field is no field: a key that can't be honoured is not offered.
+    assert priority_options([field("Priority", ["High", "Low"])]) is None
+    assert priority_options([{"__typename": "IssueFieldText", "id": "F", "name": "Priority"}]) is None
+    assert priority_options([]) is None
+
+
+def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
+    base = {"number": 7, "title": "T", "body": None, "labels": [{"name": "bug"}],
+            "updated_at": "2026-09-27T00:00:00Z", "html_url": "u", "node_id": "I_x"}
+    issue = _norm_issue(base, "a/b")
+    assert (issue["pr"], issue["draft"], issue["labels"], issue["id"]) == (False, False, ["bug"], "I_x")
+    # A PR is the same record with a `pull_request` key; `draft` rides along on it.
+    assert _norm_issue({**base, "pull_request": {}, "draft": True}, "a/b")["draft"] is True
+    assert _norm_issue({**base, "pull_request": {}}, "a/b")["pr"] is True
+
+
+def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
+    items = [{"repo": "B/two"}, {"repo": "A/one"}, {"repo": "B/two"}]
+    assert triage_scope(items, "PR", "A/one", 9) == (
+        "3 PRs without a milestone in https://github.com/A/one", "")
+    assert triage_scope(items, "issue", None, 9) == (
+        "3 issues without a milestone in 2 of 9 tracked repos", "B/two (2), A/one (1)")
+    assert triage_scope([], "issue", None, 1) == (
+        "no issues without a milestone in 1 tracked repo", "")
+
+
+def _done(**entries):
+    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+                                "failed", "skipped", "created", "reopened", "unordered")}
+    return done | entries
+
+
+def test_triage_summary_counts_by_milestone_and_says_what_is_left():
+    done = _done(assigned=[("A/one#1", "Needed soon"), ("A/one#2", "v1.2"),
+                           ("A/one#3", "Needed soon")],
+                 carried=[("A/one#9", "v1.2")],
+                 priority=[("A/one#1", "Low"), ("A/one#3", "Urgent"), ("A/one#9", "Low")],
+                 skipped=["A/one#4"],
+                 created=[("A/one", "v1.2"), ("A/one", "Critical")],
+                 unordered=[("v1.2", "https://x/1", "top")])
+    assert triage_summary("7 PRs without a milestone in X", 7, done, ["Critical"],
+                          "milestones triage --prs") == [
+        "Of 7 PRs without a milestone in X:",
+        "  - Assigned 3: 2 to Needed soon, 1 to v1.2",
+        "  - Also assigned 1 issue they close to v1.2",
+        # In the keys' order, Urgent first, not in the order they were set.
+        "  - Set priority on 3: 1 Urgent, 2 Low",
+        "  - Skipped 1: A/one#4",
+        "  - Stopped at 5 of 7, with 3 left undecided",
+        "  - Created v1.2 in A/one (undated: `milestones check` will ask for a date)",
+        "  - Created Critical in A/one",
+        "  - Not moved 1 to the top of v1.2: GitHub has no API for that "
+        "(gaurav/milestones#25), so drag it at https://x/1",
+        "  - 4 still without a milestone: `milestones triage --prs` walks them again, "
+        "after ~10s for GitHub to catch up",
+    ]
+
+
+def test_triage_summary_of_a_walk_that_assigned_nothing_or_everything():
+    skipped = [f"A/one#{n}" for n in range(1, 8)]
+    assert triage_summary("7 issues", 7, _done(skipped=skipped), [], "milestones triage") == [
+        "Of 7 issues:",
+        "  - Assigned none",
+        "  - Skipped 7: A/one#1, A/one#2, A/one#3, A/one#4, A/one#5 and 2 more",
+        # No lag to wait out when nothing was written.
+        "  - 7 still without a milestone: `milestones triage` walks them again",
+    ]
+    done = _done(assigned=[("A/one#1", "Upstream"), ("A/one#2", "Upstream")])
+    assert triage_summary("2 issues", 2, done, [], "milestones triage") == [
+        "Of 2 issues:", "  - Assigned 2 to Upstream"]

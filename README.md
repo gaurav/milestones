@@ -63,13 +63,33 @@ Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`
 ```sh
 milestones status [--json]               # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
-                                         # due date, with open/closed counts and % done;
-                                         # flags !OVERDUE, (empty) and (done), links each,
-                                         # then names any tracked repo with nothing open.
+                                         # due date, with open/closed issue counts, open
+                                         # PRs and % done; flags !OVERDUE, (empty) and
+                                         # (done), links each, then names any tracked repo
+                                         # with nothing open, says how many closed
+                                         # milestones still hold open work, and counts the
+                                         # issues and PRs in each repo with no milestone.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
-milestones triage [--repo OWNER/NAME]    # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket
+milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
+                                         # walk untriaged issues (no milestone) one at a
+                                         # time and assign each to a milestone/bucket;
+                                         # --prs walks the pull requests instead;
+                                         # --list prints them instead, one per line
+                                         # (OWNER/NAME#N  title  [labels]), focused repos
+                                         # first then freshest; --json likewise. A walk
+                                         # opens with how many it found where, and ends —
+                                         # on q, ^C or an error too — on what it assigned,
+                                         # skipped, created and left to do
+milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
+                                         # put issues on the milestone of that title in
+                                         # each of their repos; REF is OWNER/NAME#N or an
+                                         # issue URL, or read from stdin one per line — a
+                                         # `triage --list` line works as-is. Confirms on a
+                                         # terminal; a repo without that milestone is
+                                         # skipped, not fatal. A PR takes the issues it
+                                         # closes along, as in the walk. --priority also sets
+                                         # the organisation's Priority field, where there is one
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -84,7 +104,18 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --tracked-only stops after the first list,
                                          # --list-ignored spells out the ignored ones, and
                                          # --ignore-remaining ignores the ones suggested
+milestones prs [--assigned] [--review-requested] [--mentions] [--json]
+                                         # every open PR you authored, anywhere on GitHub,
+                                         # in three tables: PRs in tracked repos with no
+                                         # milestone (then run `triage --prs`), PRs in
+                                         # repos not in the config (`add` the repo, or
+                                         # put the PR on your TODO list), and PRs in
+                                         # ignored repos. Drafts and last-updated dates
+                                         # are marked, nothing is left out; the flags add
+                                         # PRs assigned to you, awaiting your review, or
+                                         # mentioning you
 milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
+                                         # closed milestones with work still on them, and
                                          # milestones to rename, date, close, delete or
                                          # roll over.
                                          # -i then walks the list and applies your answers;
@@ -104,7 +135,7 @@ milestones ignore REPO|OWNER [...]       # hide repos from discover without trac
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
 to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
-the start of next month, close, delete or roll over — plus open, skip and quit. Once
+the start of next month, close, delete, roll over, or reopen — plus open, skip and quit. Once
 you type a date of your own, the fourth date slot offers that date back for the rest of the session
 (the one you have typed most often, most recent winning ties), since a run of milestones usually
 wants the same day — "after the project meeting" is one keypress each after the first. A single
@@ -112,7 +143,11 @@ keypress acts immediately; the fixes that need more (a new title, a typed date, 
 onto) then ask, and take blank as "skip". A milestone is well-formed if it is one of the repo's
 standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
-to roll over.
+to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
+else can see that work, since `status` shows open milestones and `triage` only what has no
+milestone at all, so `check` leads with those and offers to roll the work onto a milestone that is
+open, or to reopen the closed one. Pull requests count as work on a milestone throughout, so a
+milestone whose issues are all closed but whose PRs are still open is not `(done)`.
 
 Owning a repo is not the same as triaging it, and `discover` searches by owner, so most of what it
 turns up is someone else's to manage. `ignore` is the third state beside tracked and untracked:
@@ -141,6 +176,51 @@ there later is a fresh suggestion rather than something the glob silently swallo
 `rollover` asks for confirmation before touching anything, and is the point of the tool: at
 release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
 
+### Triaging in bulk
+
+The `triage` walk is one issue per keypress, which is fine for a week's arrivals and hopeless
+for a backlog of hundreds. For that, `triage --list` and `assign` are the two halves of a
+pipeline, and whatever sits between them does the choosing — `grep` on a label or a word in the
+title, `jq` over `triage --json`, `fzf -m` for picking by hand, or a coding agent reading the
+JSON and deciding:
+
+```sh
+milestones triage --list | grep 'new data source' | milestones assign "Needed later"
+milestones triage --list | fzf -m --no-sort | milestones assign "Needed soon"
+milestones triage --list --repo NCATSTranslator/Babel | grep -i duckdb | milestones assign "v1.20"
+```
+
+`assign` resolves the title in each issue's repo, so one command puts issues from several repos
+onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Given
+refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
+is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
+one item: the organisation's Priority field is set on each issue after its milestone, skipped with
+a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
+after an `assign` can still show what was just moved — re-running is harmless.
+
+### Triaging pull requests
+
+A pull request is work already under way, so every open one belongs on a milestone, and
+`triage --prs` walks the ones that haven't got one (`--list` and `--json` take `--prs` too).
+Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where they are:
+`closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
+closes that has no milestone on the same one, since the PR stands in for them; an issue already
+placed is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
+leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
+one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
+open one is used as it is, a closed one is reopened and a new one created, each after asking. A
+milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
+open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
+
+An answer takes one modifier after the number (or after `c`), regex-style. `2!` assigns milestone
+2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority is an organisation
+issue field, so the keys are offered only where the repo's owner has a single-select `Priority`
+field with those option names, and since a pull request has no fields a PR's priority goes onto
+the open issues it closes. `2^` and `2$`, for the top and bottom of the milestone's order, are
+parsed and refused: GitHub has no API that writes that order
+([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
+links to it for dragging by hand.
+
 ### Reading the status table
 
 The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured
@@ -164,9 +244,11 @@ just one somebody has only started. An undated milestone stays plain, for the sa
 Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
 `milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a
 script — or a coding agent — `milestones status --json` prints the same data as JSON:
-`milestones` with `repo`, `title`, `due`, `open`, `closed`, `percent`, `flags`, `focus` and
-`url`; `quiet_repos` in the same shape for the tracked repos with no open milestone; and the
-configured `focus` list itself. `milestones check --json` does the same for the findings, with
+`milestones` with `repo`, `title`, `due`, `open`, `closed`, `open_prs`, `closed_prs`,
+`percent`, `flags`, `focus` and `url` (`open` and `closed` are issues, as GitHub counts them, and
+`percent` is over issues and PRs together); `quiet_repos` in the same shape for the tracked repos
+with no open milestone; `stranded`, the closed milestones with open work still on them; `untriaged`,
+the per-repo counts of issues and PRs with no milestone; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
 
 ## Why not something else

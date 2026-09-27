@@ -84,6 +84,7 @@ DATE_RE = re.compile(r"\b\d{4}(-\d{2}-\d{2}|[a-z]{3}\d{1,2})\b", re.I)
 
 # Each kind is one shape of fix, and heads its own group in the report.
 KINDS = {
+    "stranded": "Roll over or reopen — closed, but work is still open on it",
     "rename": "Rename — no version or date in the title, and not a standing bucket",
     "undated": "Set a due date — however far out; an undated milestone never comes due",
     "overdue": "Roll over or re-date — past due with work still open",
@@ -93,11 +94,23 @@ KINDS = {
 
 
 def milestone_problems(title: str, due: str | None, open_issues: int, closed_issues: int,
-                       buckets: list[str], today: str) -> list[tuple[str, str]]:
-    """(kind, detail) for everything wrong with one open milestone."""
+                       buckets: list[str], today: str,
+                       open_prs: int = 0, closed_prs: int = 0,
+                       closed: bool = False) -> list[tuple[str, str]]:
+    """(kind, detail) for everything wrong with one milestone.
+
+    A pull request is work on the milestone as much as an issue is, so every
+    decision here is over both: a milestone holding only open PRs is not done.
+    """
+    open_work, closed_work = open_issues + open_prs, closed_issues + closed_prs
+    if closed:
+        # Work on a closed milestone is invisible to status and to triage, which only
+        # sees items with no milestone at all. Nothing else can be wrong with a closed
+        # milestone that matters, and this holds for a closed bucket too.
+        return [("stranded", f"closed with {open_work} still open")] if open_work else []
     problems = []
-    if due and due < today and open_issues:
-        problems.append(("overdue", f"due {due}, {open_issues} still open"))
+    if due and due < today and open_work:
+        problems.append(("overdue", f"due {due}, {open_work} still open"))
     if title in buckets:
         # A standing bucket is meant to be undated, named for itself, and empty
         # between triage rounds — and closing one would hide it from status and
@@ -107,9 +120,9 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
         problems.append(("rename", ""))
     if not due:
         problems.append(("undated", ""))
-    if closed_issues and not open_issues:
-        problems.append(("done", f"all {closed_issues} closed"))
-    if not closed_issues and not open_issues:
+    if closed_work and not open_work:
+        problems.append(("done", f"all {closed_work} closed"))
+    if not closed_work and not open_work:
         problems.append(("empty", ""))
     return problems
 
@@ -132,6 +145,22 @@ def parse_repo(text: str) -> str:
     if not match:
         sys.exit(f"Not a repo: {text!r}. Give OWNER/NAME or a github.com URL.")
     return f"{match[1]}/{match[2]}"
+
+
+# "a/b#12", "https://github.com/a/b/issues/12" — and "/pull/12", since the issues endpoint
+# sets a PR's milestone the same way, as rollover already relies on.
+ISSUE_RE = re.compile(
+    r"(?:(?:https?://)?github\.com/)?([^/\s#]+)/([^/\s#]+)(?:#|/(?:issues|pull)/)(\d+)/?$")
+
+
+def parse_issue_ref(text: str) -> tuple[str, int]:
+    """(OWNER/NAME, number) from a ref, an issue URL, or a whole `triage --list` line."""
+    # The first token only: a --list line carries the title and labels after the ref.
+    tokens = text.split()
+    match = ISSUE_RE.fullmatch(tokens[0]) if tokens else None
+    if not match:
+        sys.exit(f"Not an issue: {text!r}. Give OWNER/NAME#123 or a github.com issue URL.")
+    return f"{match[1]}/{match[2]}", int(match[3])
 
 
 def parse_ignore(text: str) -> str:
@@ -200,6 +229,59 @@ def ask(prompt: str) -> str:
         sys.exit("\nAborted.")
 
 
+# A walk answer: a menu number or `c`, then at most one modifier — "2", "12!", "c-".
+ANSWER_RE = re.compile(r"(\d+|c)([\^$!+-]?)")
+
+# What each modifier means. The order ones are parsed so the grammar is settled, but
+# GitHub has no API that writes a milestone's manual order, so they only say so.
+PRIORITY_KEYS = {"!": "Urgent", "+": "High", "-": "Low"}
+ORDER_KEYS = {"^": "top", "$": "bottom"}
+
+
+def parse_answer(text: str) -> tuple[str, str] | None:
+    """(choice, suffix) from a walk answer, or None for anything that isn't an assignment."""
+    match = ANSWER_RE.fullmatch(text.strip().lower())
+    return (match[1], match[2]) if match else None
+
+
+def complete_titles(titles: list[str], text: str) -> list[str]:
+    """The titles that start with what has been typed so far, ignoring case, in order."""
+    return [t for t in titles if t.lower().startswith(text.lower())]
+
+
+def ask_completing(prompt: str, titles: list[str]) -> str:
+    """`ask`, with Tab completing over `titles` for as long as the prompt is up.
+
+    readline only takes effect on a terminal; a piped answer is read as it is.
+    """
+    try:
+        import readline
+    except ImportError:  # pragma: no cover — no readline, no completion, same prompt
+        return ask(prompt)
+    matches: list[str] = []
+
+    def completer(text, state):
+        nonlocal matches
+        if state == 0:
+            matches = complete_titles(titles, readline.get_line_buffer())
+        # Completing the whole line: a title has spaces, and readline would otherwise
+        # treat "Needed" and "soon" as two words.
+        return matches[state] if state < len(matches) else None
+
+    saved = readline.get_completer()
+    saved_delims = readline.get_completer_delims()
+    readline.set_completer_delims("")
+    readline.set_completer(completer)
+    # macOS ships libedit under the readline name, and it wants its own binding.
+    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "")
+                            else "tab: complete")
+    try:
+        return ask(prompt)
+    finally:
+        readline.set_completer(saved)
+        readline.set_completer_delims(saved_delims)
+
+
 def owners_of(repos: list[str]) -> list[str]:
     return sorted({r.split("/")[0] for r in repos})
 
@@ -220,16 +302,18 @@ def sort_key(title: str, due_on: str | None, buckets: list[str]):
     return (2, "", title)
 
 
-def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
+def build_search_queries(repos: list[str], cap: int = 256,
+                         kind: str | None = "issue") -> list[str]:
     """Queries covering every configured repo, each under GitHub's 256-char cap.
 
     Scoped by repo rather than by owner: an owner's unconfigured repos would
     otherwise crowd real results out of the single page search_issues fetches.
+    `kind` is "issue", "pr", or None for both in one query.
     """
     def query(batch):
         # Advanced search ANDs repeated qualifiers, so repos must be OR'd explicitly.
-        return "is:issue is:open no:milestone archived:false (%s)" % (
-            " OR ".join("repo:" + r for r in batch))
+        return "%sis:open no:milestone archived:false (%s)" % (
+            f"is:{kind} " if kind else "", " OR ".join("repo:" + r for r in batch))
 
     queries, batch = [], []
     for repo in sorted(set(repos)):
@@ -238,6 +322,23 @@ def build_search_queries(repos: list[str], cap: int = 256) -> list[str]:
             batch = []
         batch.append(repo)
     return queries + [query(batch)]
+
+
+def prs_query(assigned: bool = False, review_requested: bool = False,
+              mentions: bool = False) -> str:
+    """Every open pull request that is yours: authored, and whatever else is asked for."""
+    who = ["author:@me"] + [q for flag, q in ((assigned, "assignee:@me"),
+                                              (review_requested, "review-requested:@me"),
+                                              (mentions, "mentions:@me")) if flag]
+    # Always parenthesised: advanced search ANDs bare repeated qualifiers.
+    return "is:pr is:open (%s)" % " OR ".join(who)
+
+
+def pr_group(repo: str, config: dict) -> str:
+    """Which table a PR's repo belongs in: tracked wins, then ignored, else untracked."""
+    if repo.lower() in {r.lower() for r in config["repos"]}:
+        return "tracked"
+    return "ignored" if is_ignored(repo, config["ignore"]) else "untracked"
 
 
 def triage_order(issues: list[dict], focus: list[str]) -> list[dict]:
@@ -392,10 +493,12 @@ def after(cursor: str | None) -> str:
     return f', after: "{cursor}"' if cursor else ""
 
 
-def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]]]:
+def fetch_milestones(repos: list[str],
+                     closed: bool = False) -> tuple[list[str], list[tuple[str, dict]]]:
     """GitHub's own name for each repo, and (repo, milestone) for every open
-    milestone. The names follow renames and fix up the config's capitalisation,
-    so callers should key off them, not off `repos`.
+    milestone — and every closed one too, with `closed`; each carries its `state`.
+    The names follow renames and fix up the config's capitalisation, so callers
+    should key off them, not off `repos`.
 
     One aliased round trip per page: every repo is queried together, and only the
     repos that still have milestones left go into the next trip, so the usual case
@@ -404,15 +507,19 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
     names: dict[str, str] = {}
     milestones = []
     pages: dict[str, str | None] = {r: None for r in repos}  # repo -> next page's cursor
+    states = "[OPEN, CLOSED]" if closed else "OPEN"
     while pages:
         alias_of = {f"r{i}": repo for i, repo in enumerate(pages)}
         aliases = " ".join(
             f'{alias}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") '
-            f"{{ nameWithOwner milestones(states: OPEN, first: 100{after(pages[r])}) "
+            f"{{ nameWithOwner milestones(states: {states}, first: 100{after(pages[r])}) "
             f"{{ pageInfo {{ hasNextPage endCursor }} "
-            f"nodes {{ title url dueOn number "
+            f"nodes {{ title url dueOn number state "
             f"open: issues(states: OPEN) {{ totalCount }} "
-            f"closed: issues(states: CLOSED) {{ totalCount }} }} }} }}"
+            f"closed: issues(states: CLOSED) {{ totalCount }} "
+            # `issues` never counts pull requests; they are their own connection.
+            f"openPrs: pullRequests(states: OPEN) {{ totalCount }} "
+            f"closedPrs: pullRequests(states: [CLOSED, MERGED]) {{ totalCount }} }} }} }}"
             for alias, r in alias_of.items()
         )
         data = gh.graphql(f"query {{ {aliases} }}")
@@ -429,34 +536,60 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
     return list(names.values()), milestones
 
 
+def untriaged_counts(items: list[dict]) -> list[dict]:
+    """Per repo, how many open issues and pull requests have no milestone — only the repos
+    that have any, by name. `repo` is GitHub's spelling, as fetch_milestones' names are."""
+    counts: dict[str, dict] = {}
+    for item in items:
+        row = counts.setdefault(item["repo"], {"repo": item["repo"], "issues": 0, "prs": 0})
+        row["prs" if item["pr"] else "issues"] += 1
+    return [counts[repo] for repo in sorted(counts, key=str.lower)]
+
+
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    tracked, entries = fetch_milestones(config["repos"])
+    stranded = []  # closed milestones with open work: not rows, but not silence either
+    tracked, entries = fetch_milestones(config["repos"], closed=True)
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
-        count = m["open"]["totalCount"]
-        if m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"] and not count:
+        count, prs = m["open"]["totalCount"], m["openPrs"]["totalCount"]
+        if m["state"] == "CLOSED":
+            if count + prs:
+                stranded.append({"repo": repo, "title": m["title"], "open": count,
+                                 "open_prs": prs, "url": m["url"]})
             continue
-        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"], m["url"]))
+        if (m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"]
+                and not count + prs):
+            continue
+        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"],
+                           prs, m["closedPrs"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.
     quiet = sorted(set(tracked) - {m[0] for m in milestones})
+    # "Is everything triaged?" is the other half of the question status answers; one
+    # search over every tracked repo, issues and PRs together.
+    untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None))
+    for row in untriaged:
+        row["focus"] = is_focused(row["repo"], config["focus"])
 
     records = []
-    for repo, title, due, count, closed, url in milestones:
+    for repo, title, due, count, closed, prs, closed_prs, url in milestones:
         # `check` owns what is wrong with a milestone; status shows the three of its
         # kinds that read as a state the milestone is in rather than a fix to make,
         # and so agrees with `check` about standing buckets and about a past-due
         # milestone with nothing left open. Empty means nothing was ever filed on it,
         # not "all done".
         kinds = {kind for kind, _ in milestone_problems(title, due, count, closed,
-                                                        config["buckets"], today)}
-        total = count + closed
+                                                        config["buckets"], today,
+                                                        prs, closed_prs)}
+        # `open` and `closed` are issues, as GitHub counts them; `percent` is over all the
+        # work, so a milestone that holds only PRs still says how far along it is.
+        done_work, total = closed + closed_prs, count + closed + prs + closed_prs
         records.append({"repo": repo, "title": title, "due": due, "open": count,
-                        "closed": closed,
-                        "percent": round(100 * closed / total) if total else None,
+                        "closed": closed, "open_prs": prs, "closed_prs": closed_prs,
+                        "percent": round(100 * done_work / total) if total else None,
                         "flags": [k for k in ("overdue", "empty", "done") if k in kinds],
                         "focus": is_focused(repo, config["focus"]),
                         "url": url})
@@ -467,6 +600,7 @@ def cmd_status(config, args):
         json.dump({"milestones": records,
                    "quiet_repos": [{"repo": r, "focus": is_focused(r, config["focus"]),
                                     "url": repo_url(r)} for r in quiet],
+                   "stranded": stranded, "untriaged": untriaged,
                    "focus": config["focus"]}, sys.stdout, indent=2)
         print()
         return
@@ -481,15 +615,18 @@ def cmd_status(config, args):
         rows.append((star(r["focus"]),
                      f"{paint(owner, orgs.get(owner))}/{name}",
                      paint(VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
-                           bucket_color(r["title"], r["open"])),
+                           bucket_color(r["title"], r["open"] + r["open_prs"])),
                      paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
-                     r["open"], r["closed"],
-                     paint(f"{r['percent']}%", pct_color(r["closed"], r["open"] + r["closed"]))
+                     r["open"], r["closed"], r["open_prs"] or "",
+                     paint(f"{r['percent']}%",
+                           pct_color(r["closed"] + r["closed_prs"],
+                                     r["open"] + r["closed"] + r["open_prs"] + r["closed_prs"]))
                      if r["percent"] is not None else "—",
                      flags, r["url"]))
     if rows:
-        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "%", "", "URL"),
-                    right=("OPEN", "DONE", "%"))
+        # PRS is open pull requests; print_table drops it when no milestone has any.
+        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "PRS", "%", "", "URL"),
+                    right=("OPEN", "DONE", "PRS", "%"))
     if quiet:
         if rows:
             print()
@@ -499,6 +636,25 @@ def cmd_status(config, args):
                     ("", "REPO", "URL"))
     elif not rows:
         print("No open milestones in any configured repo.")
+    if stranded:
+        # One line, not rows: `check` owns the fix, and a closed milestone is not a state
+        # of the work so much as a place it has been lost.
+        items = sum(s["open"] + s["open_prs"] for s in stranded)
+        print(f"\n{len(stranded)} closed milestone{'s' if len(stranded) != 1 else ''} still "
+              f"hold{'s' if len(stranded) == 1 else ''} {items} open "
+              f"item{'s' if items != 1 else ''} — run: milestones check")
+    if not untriaged:
+        print("\nEverything open in every tracked repo is on a milestone.")
+        return
+    issues, prs = sum(r["issues"] for r in untriaged), sum(r["prs"] for r in untriaged)
+    print(f"\n{issues} untriaged issue{'s' if issues != 1 else ''} and {prs} pull "
+          f"request{'s' if prs != 1 else ''} (no milestone):")
+    # A zero prints as blank so the column reads as "which repos have PRs waiting".
+    print_table([(star(r["focus"]), r["repo"], r["issues"] or "", r["prs"] or "")
+                 for r in untriaged],
+                ("", "REPO", "ISSUES", "PRS"), right=("ISSUES", "PRS"))
+    print("run: milestones triage --prs" + ("  (then: milestones triage)" if issues else "")
+          if prs else "run: milestones triage")
 
 
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
@@ -576,92 +732,570 @@ def cmd_rollover(config, args):
 
 
 def _norm_issue(issue: dict, repo: str) -> dict:
+    # Both the REST listing and a search item carry `draft` on a pull request.
     return {"repo": repo, "number": issue["number"], "title": issue["title"],
             "body": issue["body"], "labels": [l["name"] for l in issue["labels"]],
-            "updated": issue["updated_at"], "url": issue["html_url"]}
+            "updated": issue["updated_at"], "url": issue["html_url"], "id": issue["node_id"],
+            "pr": "pull_request" in issue, "draft": bool(issue.get("draft"))}
+
+
+def priority_options(fields: list[dict]) -> dict[str, tuple[str, str]] | None:
+    """The walk's priority keys as (field id, option id), from an organisation's issue
+    fields — its single-select "Priority" with Urgent, High and Low options, names matched
+    ignoring case. None when it hasn't got all of that, so no key is offered by half."""
+    for field in fields:
+        if field.get("__typename") != "IssueFieldSingleSelect" or field["name"].lower() != "priority":
+            continue
+        by_name = {o["name"].lower(): o["id"] for o in field["options"]}
+        keyed = {key: (field["id"], by_name[name.lower()])
+                 for key, name in PRIORITY_KEYS.items() if name.lower() in by_name}
+        return keyed if len(keyed) == len(PRIORITY_KEYS) else None
+    return None
+
+
+def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
+    """`priority_options` for a repo owner. Issue fields are an organisation feature, so a
+    user account is answered without the GraphQL round trip (and its NOT_FOUND warning)."""
+    if gh.api(f"users/{owner}")["type"] != "Organization":
+        return None
+    data = gh.graphql(
+        f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
+        f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}")
+    return priority_options(data["organization"]["issueFields"]["nodes"])
+
+
+def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
+    gh.graphql(f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
+               f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
+               f"{{ clientMutationId }} }}")
+
+
+def item_marker(item: dict) -> str:
+    """"(PR, draft)", "(PR)", or nothing for an issue — what a walk or a list shows after the ref."""
+    if not item["pr"]:
+        return ""
+    return "(PR, draft)" if item["draft"] else "(PR)"
+
+
+def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> list[dict]:
+    """Open items with no milestone, in walk order: focused repos first, then freshest.
+
+    `kind` is "issue", "pr", or None for both at once.
+    """
+    if repo:
+        raw = gh.api(f"repos/{repo}/issues?milestone=none&state=open&per_page=100",
+                     paginate=True)
+        issues = [_norm_issue(i, repo) for i in raw
+                  if kind is None or ("pull_request" in i) == (kind == "pr")]
+    else:
+        issues = []
+        for query in build_search_queries(config["repos"], kind=kind):
+            for item in gh.search_issues(query):
+                issues.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
+    return triage_order(issues, config["focus"])
+
+
+def fetch_closing_issues(items: list[dict]) -> None:
+    """Give each pull request in `items` a `closes` list: the issues its body closes, as
+    {id, number, title, state, milestone, repo}, milestone being a title or None and repo
+    the issue's own, since a PR can close an issue in another repository.
+
+    One aliased GraphQL round trip per fifty PRs, whatever repos they span. A PR that has
+    vanished since the search comes back null with a partial error; it gets no `closes`.
+    The first hundred closing issues are fetched, with a warning for a PR that has more.
+    An item marked `pr` that turns out to be an issue — `assign` can't tell from a ref —
+    gets an empty `closes`, since `issueOrPullRequest` answers for either.
+    """
+    prs = [i for i in items if i["pr"]]
+    for start in range(0, len(prs), 50):
+        batch = prs[start:start + 50]
+        by_repo: dict[str, list[dict]] = {}
+        for item in batch:
+            by_repo.setdefault(item["repo"], []).append(item)
+        aliases = " ".join(
+            f'r{ri}: repository(owner: "{repo.split("/")[0]}", name: "{repo.split("/")[1]}") {{ '
+            + " ".join(f"p{item['number']}: issueOrPullRequest(number: {item['number']}) {{ "
+                       "... on PullRequest { closingIssuesReferences(first: 100) { totalCount "
+                       "nodes { id number title state milestone { title } "
+                       "repository { nameWithOwner } } } } }"
+                       for item in repo_items)
+            + " }"
+            for ri, (repo, repo_items) in enumerate(by_repo.items()))
+        data = gh.graphql(f"query {{ {aliases} }}")
+        for ri, (repo, repo_items) in enumerate(by_repo.items()):
+            node = data.get(f"r{ri}") or {}
+            for item in repo_items:
+                refs = (node.get(f"p{item['number']}") or {}).get("closingIssuesReferences")
+                if refs and refs["totalCount"] > len(refs["nodes"]):
+                    print(f"warning: {item['repo']}#{item['number']} closes "
+                          f"{refs['totalCount']} issues; only the first {len(refs['nodes'])} "
+                          "are shown or carried", file=sys.stderr)
+                item["closes"] = [
+                    {"id": c["id"], "number": c["number"], "title": c["title"],
+                     "state": c["state"], "milestone": c["milestone"] and c["milestone"]["title"],
+                     "repo": c["repository"]["nameWithOwner"]}
+                    for c in refs["nodes"]] if refs else []
+
+
+def carries(closed: dict, repo: str) -> bool:
+    """Whether a PR in `repo` takes this issue it closes onto its own milestone: open, on no
+    milestone yet, and in the same repo — milestone numbers are per repo, so one elsewhere
+    is shown but left alone."""
+    return (closed["state"] == "OPEN" and not closed["milestone"]
+            and closed["repo"].lower() == repo.lower())
+
+
+def closes_line(closes: list[dict], repo: str) -> str:
+    """"closes #12 (no milestone), #7 (v1.2), #3 (closed)" for a PR in `repo`, with an issue
+    elsewhere given its repo, "o/other#5 (…)"; nothing for a PR closing none."""
+    if not closes:
+        return ""
+    def where(c):
+        if c["state"] != "OPEN":
+            return "closed"
+        return c["milestone"] or "no milestone"
+    def ref(c):
+        same = c["repo"].lower() == repo.lower()
+        return f"#{c['number']}" if same else f"{c['repo']}#{c['number']}"
+    return "closes " + ", ".join(f"{ref(c)} ({where(c)})" for c in closes)
+
+
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def triage_scope(items: list[dict], noun: str, repo: str | None,
+                 tracked: int) -> tuple[str, str]:
+    """What a walk covers, as (the phrase the summary repeats, the per-repo counts only the
+    opening line adds): ("11 PRs without a milestone in https://github.com/a/b", "")."""
+    what = f"{plural(len(items), noun) if items else 'no ' + noun + 's'} without a milestone"
+    if repo:
+        return f"{what} in {repo_url(repo)}", ""
+    counts = Counter(i["repo"] for i in items)  # first-seen order, which is the walk's
+    if not counts:
+        return f"{what} in {plural(tracked, 'tracked repo')}", ""
+    return (f"{what} in {len(counts)} of {plural(tracked, 'tracked repo')}",
+            ", ".join(f"{r} ({c})" for r, c in counts.items()))
+
+
+def by_title(entries: list[tuple[str, str]]) -> str:
+    """" to Needed soon" for (ref, title) pairs on one milestone, ": 4 to Needed soon, 2 to
+    v1.2" for several, most first — what follows "Assigned 6"."""
+    counts = Counter(title for _, title in entries).most_common()
+    if len(counts) == 1:
+        return f" to {counts[0][0]}"
+    return ": " + ", ".join(f"{c} to {t}" for t, c in counts)
+
+
+def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[str],
+                   rerun: str) -> list[str]:
+    """The lines a walk ends on, however it ends: what it covered, what it wrote, and what
+    is still to do. `done` is the walk's log, a list per kind of thing that happened."""
+    lines = [f"Of {scope}:"]
+    assigned = done["assigned"]
+    lines.append(f"Assigned {len(assigned)}{by_title(assigned)}" if assigned else "Assigned none")
+    if done["carried"]:
+        lines.append(f"Also assigned {plural(len(done['carried']), 'issue')} they close"
+                     f"{by_title(done['carried'])}")
+    if done["passed"]:
+        lines.append(f"Passed over {len(done['passed'])} already assigned with the PR "
+                     "that closes them")
+    if done["priority"]:
+        counts = Counter(name for _, name in done["priority"])
+        lines.append(f"Set priority on {len(done['priority'])}: " + ", ".join(
+            f"{counts[name]} {name}" for name in PRIORITY_KEYS.values() if name in counts))
+    for ref, reason in done["unprioritised"]:
+        lines.append(f"Priority not set on {ref}: {reason}")
+    shown = 5
+    if done["skipped"]:
+        refs = done["skipped"]
+        lines.append(f"Skipped {len(refs)}: " + ", ".join(refs[:shown])
+                     + (f" and {len(refs) - shown} more" if len(refs) > shown else ""))
+    decided = len(assigned) + len(done["skipped"]) + len(done["passed"])
+    if decided < total:
+        lines.append(f"Stopped at {decided + 1} of {total}, "
+                     f"with {total - decided} left undecided")
+    for repo, title in done["created"]:
+        # A bucket needs no date; anything else created here will be `check`'s `undated`.
+        undated = "" if title in buckets else " (undated: `milestones check` will ask for a date)"
+        lines.append(f"Created {title} in {repo}{undated}")
+    for repo, title in done["reopened"]:
+        lines.append(f"Reopened {title} in {repo}")
+    for (title, url, where), count in Counter(done["unordered"]).items():
+        lines.append(f"Not moved {count} to the {where} of {title}: GitHub has no API for "
+                     f"that (gaurav/milestones#25), so drag {'it' if count == 1 else 'them'} "
+                     f"at {url}")
+    lines += [f"Priority failed on {ref}: {message}" for ref, message in done["failed"]]
+    left = total - len(assigned) - len(done["passed"])
+    if left:
+        # Listings lag writes by up to ~10s, so a rerun straight away can offer again
+        # what this one just assigned.
+        lag = ", after ~10s for GitHub to catch up" if assigned else ""
+        lines.append(f"{left} still without a milestone: `{rerun}` walks them again{lag}")
+    return [lines[0]] + [f"  - {line}" for line in lines[1:]]
 
 
 def cmd_triage(config, args):
-    if args.repo:
-        raw = gh.api(f"repos/{args.repo}/issues?milestone=none&state=open&per_page=100",
-                     paginate=True)
-        issues = [_norm_issue(i, args.repo) for i in raw if "pull_request" not in i]
-    else:
-        issues = []
-        for query in build_search_queries(config["repos"]):
-            for item in gh.search_issues(query):
-                repo = "/".join(item["repository_url"].split("/")[-2:])
-                issues.append(_norm_issue(item, repo))
-        issues = triage_order(issues, config["focus"])
-
-    if not issues:
-        print("Nothing to triage.")
+    issues = fetch_untriaged(config, args.repo, "pr" if args.prs else "issue")
+    if args.prs:
+        fetch_closing_issues(issues)
+    if args.json:
+        json.dump({"issues": issues}, sys.stdout, indent=2)
+        print()
         return
+    if args.list:
+        # One ref per line, first, so a line can be piped straight into `assign`.
+        for i in issues:
+            marker = f"  {item_marker(i)}" if i["pr"] else ""
+            labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
+            closes = f"  {closes_line(i['closes'], i['repo'])}" if i.get("closes") else ""
+            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}{closes}")
+        return
+
+    noun = "PR" if args.prs else "issue"
+    scope, per_repo = triage_scope(issues, noun, args.repo, len(config["repos"]))
+    if not issues:
+        print(f"Nothing to triage: {scope}.")
+        return
+    print(f"Found {scope}" + (f": {per_repo}" if per_repo else ""))
+    rerun = "milestones triage" + (" --prs" if args.prs else "") + (
+        f" --repo {args.repo}" if args.repo else "")
+    # Everything the walk does, for the summary it ends on: (ref, milestone title) for
+    # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
+    # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
+    # (title, url, "top" or "bottom") for "unordered"; "skipped" is bare refs.
+    done: dict[str, list] = {key: [] for key in (
+        "assigned", "carried", "passed", "priority", "unprioritised", "failed", "skipped",
+        "created", "reopened", "unordered")}
     menus: dict[str, list[dict]] = {}
-    for n, issue in enumerate(issues, 1):
-        repo = issue["repo"]
-        if repo not in menus:
-            menus[repo] = sorted(
-                _milestones_by_title(repo, state="open").values(),
-                key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
-            # An optional bucket the repo hasn't got yet is offered anyway, with no number
-            # until it's picked and made — but only where the repo uses buckets at all.
-            open_titles = {m["title"] for m in menus[repo]}
-            menus[repo] += [{"title": b, "number": None}
-                            for b in free_buckets(config["buckets"], open_titles)
-                            if b in OPTIONAL_BUCKETS]
-        choices = menus[repo]
+    known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
+    priorities: dict[str, dict | None] = {}  # owner -> the priority keys it can take, if any
+    # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
+    # run: the issue walk fetched its list before those writes, so it would offer them again.
+    carried: dict[tuple[str, int], tuple[str, int]] = {}
 
-        print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  (updated {issue['updated'][:10]})")
-        print(f"  {issue['title']}")
-        if issue["labels"]:
-            print(f"  labels: {', '.join(issue['labels'])}")
-        if issue["body"]:
-            print(f"  > {excerpt(issue['body'])}")
-        for i, m in enumerate(choices, 1):
-            if m["number"] is None:
-                print(f"  {i}) {m['title']} (new)")
+    def set_priorities(owner: str, priority: dict | None, issue: dict, key: str) -> None:
+        """Priority is an organisation issue field, and pull requests haven't got fields:
+        a PR's priority goes onto the open issues it closes, which are the work."""
+        name = PRIORITY_KEYS[key]
+        ref = f"{issue['repo']}#{issue['number']}"
+        if priority is None:
+            print(f"  (no Priority field for {owner}; milestone set, priority not)")
+            done["unprioritised"].append((ref, f"no Priority field for {owner}"))
+            return
+        # The field and its option ids are the organisation's, so only an issue of the same
+        # owner can take them.
+        targets = ([(ref, issue["id"])] if not issue["pr"] else
+                   [(f"{c['repo']}#{c['number']}", c["id"]) for c in issue.get("closes") or []
+                    if c["state"] == "OPEN" and c["repo"].split("/")[0].lower() == owner.lower()])
+        if not targets:
+            print(f"  (a PR has no fields, and this one closes no open issue of {owner}'s; "
+                  "nothing to prioritise)")
+            done["unprioritised"].append(
+                (ref, f"a PR has no fields, and it closes no open issue of {owner}'s"))
+            return
+        field_id, option_id = priority[key]
+        for target, node_id in targets:
+            try:
+                set_priority(node_id, field_id, option_id)
+            except SystemExit as exit:
+                print(f"  {exit}")
+                # Its first line: the rest is gh's stderr, already printed above.
+                done["failed"].append((target, str(exit).splitlines()[0]))
                 continue
-            due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
-            # REST open_issues counts PRs as well as issues, which is what we want here:
-            # both are work sitting on that milestone.
-            title = paint(m["title"], bucket_color(m["title"], m["open_issues"]))
-            print(f"  {i}) {title} ({m['open_issues']} open{due})")
-        if not choices:
-            print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
+            print(f"  → also {target} priority {name}" if issue["pr"]
+                  else f"  → priority {name}")
+            done["priority"].append((target, name))
 
-        assign = f"[1-{len(choices)}] assign, " if choices else ""
-        while True:
-            answer = ask(f"  {assign}s skip, o open, q quit: ").strip().lower()
-            if answer == "q":
-                return
-            if answer == "s" or (answer == "" and not choices):
+    def custom(repo: str, choices: list[dict]) -> dict | None:
+        """A milestone typed by name: an existing one, a closed one reopened, or a new one
+        created — each after asking — and on this repo's menu for the rest of the run."""
+        if repo not in known:
+            known[repo] = _milestones_by_title(repo)
+        title = ask_completing("  milestone (Tab completes, blank to skip): ",
+                               sorted(known[repo], key=str.lower)).strip()
+        if not title:
+            return None
+        milestone = known[repo].get(title)
+        if milestone is None:
+            if ask(f"  no milestone '{title}' in {repo}; create it? [y/N] ").strip().lower() != "y":
+                return None
+            milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
+            # A bucket is undated by design; anything else will be `check`'s `undated`.
+            print(f"  created:  {title}" + ("" if title in config["buckets"]
+                                            else "  (undated — check will say so)"))
+            done["created"].append((repo, title))
+        elif milestone["state"] != "open":
+            if ask(f"  '{title}' is closed; reopen it? [y/N] ").strip().lower() != "y":
+                return None
+            milestone = gh.api(f"repos/{repo}/milestones/{milestone['number']}",
+                               method="PATCH", state="open")
+            print(f"  reopened: {title}")
+            done["reopened"].append((repo, title))
+        known[repo][title] = milestone
+        for i, m in enumerate(choices):
+            if m["title"] == title:
+                choices[i] = milestone  # a (new) placeholder, or the same one re-picked
                 break
-            if answer == "o":
-                webbrowser.open(issue["url"])
+        else:
+            choices.append(milestone)
+        return milestone
+    # try/finally, so the summary comes however the walk ends: q, ^C or ^D in `ask`, or a
+    # failed write — the last is when knowing what did get written matters most.
+    try:
+        for n, issue in enumerate(issues, 1):
+            repo = issue["repo"]
+            if (repo, issue["number"]) in carried:
+                title, pr = carried[repo, issue["number"]]
+                print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  already on {title}, "
+                      f"with PR #{pr} that closes it")
+                done["passed"].append((f"{repo}#{issue['number']}", title))
                 continue
-            if answer.isdigit() and 1 <= int(answer) <= len(choices):
-                chosen = choices[int(answer) - 1]
-                if chosen["number"] is None:
-                    # Swap in the real milestone, so the next issue here sees it as one. A
-                    # closed one of that name is reopened rather than duplicated.
-                    choices[int(answer) - 1] = chosen = _ensure_bucket(
-                        repo, chosen["title"], _milestones_by_title(repo))
-                gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
-                       milestone=chosen["number"])
-                print(f"  → {chosen['title']}")
-                break
-            print(f"  Not one of: {assign}s, o, q.")
+            if repo not in menus:
+                menus[repo] = sorted(
+                    _milestones_by_title(repo, state="open").values(),
+                    key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
+                # An optional bucket the repo hasn't got yet is offered anyway, with no number
+                # until it's picked and made — but only where the repo uses buckets at all.
+                open_titles = {m["title"] for m in menus[repo]}
+                menus[repo] += [{"title": b, "number": None}
+                                for b in free_buckets(config["buckets"], open_titles)
+                                if b in OPTIONAL_BUCKETS]
+            choices = menus[repo]
+            owner = repo.split("/")[0]
+            if owner not in priorities:
+                priorities[owner] = fetch_priority_field(owner)
+            priority = priorities[owner]
+
+            marker = f"  {item_marker(issue)}" if issue["pr"] else ""
+            print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}{marker}"
+                  f"  (updated {issue['updated'][:10]})")
+            print(f"  {issue['title']}")
+            if issue.get("closes"):
+                print(f"  {closes_line(issue['closes'], repo)}")
+            if issue["labels"]:
+                print(f"  labels: {', '.join(issue['labels'])}")
+            if issue["body"]:
+                print(f"  > {excerpt(issue['body'])}")
+            for i, m in enumerate(choices, 1):
+                if m["number"] is None:
+                    print(f"  {i}) {m['title']} (new)")
+                    continue
+                due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
+                # REST open_issues counts PRs as well as issues, which is what we want here:
+                # both are work sitting on that milestone.
+                title = paint(m["title"], bucket_color(m["title"], m["open_issues"]))
+                print(f"  {i}) {title} ({m['open_issues']} open{due})")
+            if not choices:
+                print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
+            if priority:
+                print("  priority: " + "  ".join(f"{k} {name}"
+                                                 for k, name in PRIORITY_KEYS.items()))
+
+            assign = f"[1-{len(choices)}] assign, " if choices else ""
+            hint = "  (add ! + - for priority)" if priority else ""
+            while True:
+                answer = ask(f"  {assign}c custom, s skip, o open, q quit:{hint} ").strip().lower()
+                if answer == "q":
+                    return
+                if answer == "s" or (answer == "" and not choices):
+                    done["skipped"].append(f"{repo}#{issue['number']}")
+                    break
+                if answer == "o":
+                    webbrowser.open(issue["url"])
+                    continue
+                chosen = None
+                parsed = parse_answer(answer)
+                choice, suffix = parsed if parsed else ("", "")
+                if choice == "c":
+                    chosen = custom(repo, choices)
+                    if chosen is None:
+                        continue
+                elif choice.isdigit() and 1 <= int(choice) <= len(choices):
+                    chosen = choices[int(choice) - 1]
+                    if chosen["number"] is None:
+                        # Swap in the real milestone, so the next issue here sees it as one. A
+                        # closed one of that name is reopened rather than duplicated.
+                        existing = _milestones_by_title(repo)
+                        choices[int(choice) - 1] = chosen = _ensure_bucket(
+                            repo, chosen["title"], existing)
+                        done["reopened" if chosen["title"] in existing else "created"].append(
+                            (repo, chosen["title"]))
+                if chosen is not None:
+                    gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
+                           milestone=chosen["number"])
+                    print(f"  → {chosen['title']}")
+                    done["assigned"].append((f"{repo}#{issue['number']}", chosen["title"]))
+                    if suffix in ORDER_KEYS:
+                        # Parsed on purpose, so the grammar is settled before the API exists.
+                        print(f"  (not moved to the {ORDER_KEYS[suffix]}: GitHub has no API for "
+                              f"a milestone's order, gaurav/milestones#25 — drag it at "
+                              f"{chosen['html_url']})")
+                        done["unordered"].append(
+                            (chosen["title"], chosen["html_url"], ORDER_KEYS[suffix]))
+                    if suffix in PRIORITY_KEYS:
+                        # After the milestone, so a failed field write can't lose the assignment.
+                        set_priorities(owner, priority, issue, suffix)
+                    # A PR is triaged for the issues it closes too: an open one with no
+                    # milestone goes where the PR goes, and one already placed is left alone.
+                    for c in issue.get("closes") or []:
+                        if carries(c, repo):
+                            gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
+                                   milestone=chosen["number"])
+                            print(f"  → also #{c['number']} → {chosen['title']} "
+                                  "(closed by this PR)")
+                            c["milestone"] = chosen["title"]
+                            carried[repo, c["number"]] = (chosen["title"], issue["number"])
+                            done["carried"].append((f"{repo}#{c['number']}", chosen["title"]))
+                    break
+                print(f"  Not one of: {assign}c, s, o, q.")
+    finally:
+        print()
+        print("\n".join(triage_summary(scope, len(issues), done, config["buckets"], rerun)))
 
 
-def issue_count(issues: int) -> str:
-    """"(3 issues)", "(1 issue)"."""
-    return f"({issues} issue{'' if issues == 1 else 's'})"
+def cmd_assign(config, args):
+    """Put issues on the milestone of one title, resolved in each of their repos."""
+    if not args.refs and sys.stdin.isatty():
+        sys.exit("Give OWNER/NAME#N refs, or pipe `milestones triage --list` lines in.")
+    texts = args.refs or [line for line in sys.stdin.read().splitlines() if line.strip()]
+    refs = list(dict.fromkeys(parse_issue_ref(t) for t in texts))  # dedupe, keep order
+    by_repo: dict[str, list[int]] = {}
+    for repo, number in refs:
+        by_repo.setdefault(repo, []).append(number)
+    # One milestones call per repo, all before any write: a mistyped repo 404s here and
+    # nothing has been touched. A repo that lacks the title is skipped, not fatal — the
+    # standing buckets are opt-in per repo, so a mixed pipeline is the normal case.
+    targets = {}
+    for repo, numbers in by_repo.items():
+        milestone = _milestones_by_title(repo, state="open").get(args.milestone)
+        if milestone is None:
+            print(f"skipping {repo}: no open milestone '{args.milestone}' "
+                  f"({len(numbers)} issue{'s' if len(numbers) != 1 else ''})")
+        else:
+            targets[repo] = milestone["number"]
+    todo = [(r, n) for r, n in refs if r in targets]
+    if not todo:
+        sys.exit("Nothing to assign.")
+    # --priority is the walk's ! + - for a pipeline: the organisation's Priority field,
+    # resolved per owner before any write, and skipped with a word where there is none.
+    priority: dict[str, tuple[str, str] | None] = {}
+    if args.priority:
+        key = {name.lower(): k for k, name in PRIORITY_KEYS.items()}[args.priority]
+        for owner in {repo.split("/")[0] for repo in targets}:
+            options = fetch_priority_field(owner)
+            priority[owner] = options and options[key]
+            if not options:
+                print(f"skipping priority for {owner}: no Priority field with Urgent, High "
+                      f"and Low options")
+    # A PR stands in for the issues it closes, as in the walk: `carries` says which go onto
+    # its milestone with it, and its priority lands on the open ones its owner can take.
+    # Resolved before the prompt, so the count asked about is the count written.
+    items = [{"repo": r, "number": n, "pr": True} for r, n in todo]
+    fetch_closing_issues(items)
+    closes = {(i["repo"], i["number"]): i["closes"] for i in items}
+    carry: dict[tuple[str, int], int] = {}  # (repo, issue) -> the PR that closes it
+    for (repo, number), linked in closes.items():
+        for c in linked:
+            if carries(c, repo) and (repo, c["number"]) not in closes:
+                carry.setdefault((repo, c["number"]), number)
+    print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
+          f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
+          + (f", and {plural(len(carry), 'issue')} their PRs close" if carry else "")
+          + (f", priority {PRIORITY_KEYS[key]}" if args.priority else ""))
+    # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
+    # script, there is no tty to answer from, and a milestone is a reversible field that
+    # never closes or deletes anything.
+    if sys.stdin.isatty() and ask("Proceed? [y/N] ").strip().lower() != "y":
+        sys.exit("Aborted.")
+    for repo, number in todo:
+        issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        owner = repo.split("/")[0]
+        field = priority.get(owner)
+        # After the milestone, so a failed field write can't lose the assignment.
+        if field and "pull_request" not in issue:
+            set_priority(issue["node_id"], *field)
+            print(f"  {repo}#{number} → {args.milestone}, priority {PRIORITY_KEYS[key]}")
+            continue
+        print(f"  {repo}#{number} → {args.milestone}")
+        if field:
+            # A PR has no fields: its priority goes onto the open issues it closes.
+            prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
+                           and c["repo"].split("/")[0].lower() == owner.lower()]
+            for c in prioritised:
+                set_priority(c["id"], *field)
+                print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
+                      f"(closed by #{number})")
+            if not prioritised:
+                print(f"    (a PR has no fields, and #{number} closes no open issue of "
+                      f"{owner}'s; priority not set)")
+    for (repo, number), pr in carry.items():
+        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
+
+
+def cmd_prs(config, args):
+    prs = []
+    for item in gh.search_issues(prs_query(args.assigned, args.review_requested, args.mentions)):
+        repo = "/".join(item["repository_url"].split("/")[-2:])
+        prs.append({"repo": repo, "number": item["number"], "title": item["title"],
+                    "draft": item["draft"], "updated": item["updated_at"],
+                    "milestone": item["milestone"] and item["milestone"]["title"],
+                    "url": item["html_url"], "group": pr_group(repo, config)})
+    if args.json:
+        json.dump({"prs": prs}, sys.stdout, indent=2)
+        print()
+        return
+    if not prs:
+        print("No open pull requests.")
+        return
+
+    def table(rows, heading):
+        # By repo, freshest first within it: the question is per repo, not per PR.
+        rows = sorted(rows, key=lambda p: p["updated"], reverse=True)
+        rows.sort(key=lambda p: p["repo"].lower())
+        print_table([(p["repo"], f"#{p['number']}", excerpt(p["title"], 60),
+                      "draft" if p["draft"] else "", p["updated"][:10], p["url"])
+                     for p in rows],
+                    (heading, "PR", "TITLE", "DRAFT", "UPDATED", "URL"), right=("PR",))
+
+    by = {g: [p for p in prs if p["group"] == g] for g in ("tracked", "untracked", "ignored")}
+    # Tracked repos only show what needs doing; a PR already on a milestone is in `status`.
+    todo = [p for p in by["tracked"] if not p["milestone"]]
+    done = len(by["tracked"]) - len(todo)
+    if todo:
+        print(f"{len(todo)} PR{'s' if len(todo) != 1 else ''} without a milestone in tracked "
+              f"repos ({done} more already {'have' if done != 1 else 'has'} one).")
+        table(todo, "TRACKED REPO")
+        print("run: milestones triage --prs")
+    elif by["tracked"]:
+        print(f"Every PR in a tracked repo is on a milestone ({done}).")
+    # ponytail: no split between repos you could track and upstream ones you can't set a
+    # milestone in. author_association would tell them apart for free on author:@me results,
+    # but it is the *author's* association, so it lies under --assigned and friends. Add
+    # when this list gets too long to eyeball.
+    if by["untracked"]:
+        print()
+        table(by["untracked"], "REPO NOT IN CONFIG")
+        print("`milestones add REPO` to track a repo; otherwise these are for your TODO list.")
+    if by["ignored"]:
+        print()
+        table(by["ignored"], "IGNORED REPO")
+
+
+def issue_count(issues: int, prs: int = 0) -> str:
+    """"(3 issues)", "(1 issue)", "(3 issues, 2 PRs)" — PRs only when there are any."""
+    count = f"{issues} issue{'' if issues == 1 else 's'}"
+    if prs:
+        count += f", {prs} PR{'' if prs == 1 else 's'}"
+    return f"({count})"
 
 
 def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
-    repos, milestones = fetch_milestones(config["repos"])
+    repos, milestones = fetch_milestones(config["repos"], closed=True)
+    # Closed titles too: a title is unique across open and closed milestones, so a rename
+    # onto a closed bucket's title would 422 just as onto an open one's.
     seen: dict[str, set] = {r: set() for r in repos}
     for repo, m in milestones:
         seen[repo].add(m["title"])
@@ -673,11 +1307,15 @@ def collect_findings(config) -> list[dict]:
     for repo, m in milestones:
         for kind, detail in milestone_problems(m["title"], m["dueOn"] and m["dueOn"][:10],
                                                m["open"]["totalCount"], m["closed"]["totalCount"],
-                                               config["buckets"], today):
+                                               config["buckets"], today,
+                                               m["openPrs"]["totalCount"],
+                                               m["closedPrs"]["totalCount"],
+                                               closed=m["state"] == "CLOSED"):
             findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
                              "url": m["url"], "number": m["number"],
                              "free_buckets": free[repo],
-                             "issues": m["open"]["totalCount"] + m["closed"]["totalCount"]})
+                             "issues": m["open"]["totalCount"] + m["closed"]["totalCount"],
+                             "prs": m["openPrs"]["totalCount"] + m["closedPrs"]["totalCount"]})
     findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
     return findings
 
@@ -693,7 +1331,7 @@ def print_findings(findings: list[dict]) -> None:
         # Repo and title get their own column so a repeat offender is obvious at a glance.
         repo_w = max(len(f["repo"]) for f in group)
         title_w = max(len(f["title"]) for f in group)
-        counts = [issue_count(f["issues"]) for f in group]
+        counts = [issue_count(f["issues"], f["prs"]) for f in group]
         count_w = max(len(c) for c in counts)
         for count, f in zip(counts, group):
             line = "  • %s  %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
@@ -710,7 +1348,7 @@ def cmd_check(config, args):
         print()
         return
     if not findings:
-        print("Nothing to fix — every open milestone is named and dated sensibly.")
+        print("Nothing to fix — every milestone is named, dated and closed sensibly.")
         return
     print_findings(findings)
     if args.interactive:
@@ -780,7 +1418,7 @@ def walk_findings(config, findings: list[dict]) -> None:
         if (repo, number) in gone:
             continue
         detail = f"  ({f['detail']})" if f["detail"] else ""
-        count = issue_count(f["issues"])
+        count = issue_count(f["issues"], f["prs"])
         print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}"
               f"{'  ' + count if count else ''}{detail}")
         print(f"  {f['url']}")
@@ -839,6 +1477,13 @@ def walk_findings(config, findings: list[dict]) -> None:
             print("  → closed")
             gone.add((repo, number))
 
+        def reopen_it():
+            # Reopening is the one state change that can't hide anything, so a bucket
+            # gets it too; setup would have done the same.
+            patch(state="open")
+            print("  → reopened" + (" (setup would also have done this)"
+                                   if f["title"] in config["buckets"] else ""))
+
         def open_it():
             webbrowser.open(f["url"])
             return STAY
@@ -860,6 +1505,9 @@ def walk_findings(config, findings: list[dict]) -> None:
             options.append(("e", "another date…", type_date))
         if kind == "overdue":
             options.append(("r", "roll its issues over…", roll_over))
+        if kind == "stranded":
+            # rollover takes a closed source as it is; only the destination must be open.
+            options += [("r", "roll its work over…", roll_over), ("p", "reopen it", reopen_it)]
         if kind == "done":
             options.append(("c", "close it", close_it))
         if kind == "empty":
@@ -1074,7 +1722,23 @@ def main():
     status.set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
+    # Nothing to walk if the issues are going out to a pipe.
+    how = triage.add_mutually_exclusive_group()
+    how.add_argument("--list", action="store_true",
+                     help="print the untriaged issues one per line instead of walking them")
+    how.add_argument("--json", action="store_true",
+                     help="print them as JSON instead")
+    triage.add_argument("--prs", action="store_true",
+                        help="walk untriaged pull requests instead of issues")
     triage.set_defaults(func=cmd_triage)
+    assign = sub.add_parser("assign", help="put issues on a milestone by title, across repos")
+    assign.add_argument("milestone", metavar="MILESTONE",
+                        help="milestone title, resolved in each issue's repo")
+    assign.add_argument("refs", metavar="REF", nargs="*",
+                        help="OWNER/NAME#N or an issue URL; none, to read them from stdin")
+    assign.add_argument("--priority", choices=[n.lower() for n in PRIORITY_KEYS.values()],
+                        help="also set the organisation's Priority field on each issue")
+    assign.set_defaults(func=cmd_assign)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
     rollover.add_argument("src", metavar="FROM", help="source milestone title")
@@ -1121,6 +1785,15 @@ def main():
     listing.add_argument("--ignore-remaining", action="store_true",
                          help="add every repo suggested above to the ignore list")
     discover.set_defaults(func=cmd_discover)
+    prs = sub.add_parser("prs", help="every open PR of yours, anywhere, grouped by whether "
+                                     "its repo is tracked, ignored, or neither")
+    prs.add_argument("--assigned", action="store_true", help="also PRs assigned to you")
+    prs.add_argument("--review-requested", action="store_true",
+                     help="also PRs waiting on your review")
+    prs.add_argument("--mentions", action="store_true", help="also PRs that mention you")
+    prs.add_argument("--json", action="store_true",
+                     help="print the PRs as JSON instead of tables")
+    prs.set_defaults(func=cmd_prs)
 
     args = parser.parse_args()
     args.func(load_config(), args)
