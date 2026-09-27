@@ -229,6 +229,44 @@ def ask(prompt: str) -> str:
         sys.exit("\nAborted.")
 
 
+def complete_titles(titles: list[str], text: str) -> list[str]:
+    """The titles that start with what has been typed so far, ignoring case, in order."""
+    return [t for t in titles if t.lower().startswith(text.lower())]
+
+
+def ask_completing(prompt: str, titles: list[str]) -> str:
+    """`ask`, with Tab completing over `titles` for as long as the prompt is up.
+
+    readline only takes effect on a terminal; a piped answer is read as it is.
+    """
+    try:
+        import readline
+    except ImportError:  # pragma: no cover — no readline, no completion, same prompt
+        return ask(prompt)
+    matches: list[str] = []
+
+    def completer(text, state):
+        nonlocal matches
+        if state == 0:
+            matches = complete_titles(titles, readline.get_line_buffer())
+        # Completing the whole line: a title has spaces, and readline would otherwise
+        # treat "Needed" and "soon" as two words.
+        return matches[state] if state < len(matches) else None
+
+    saved = readline.get_completer()
+    saved_delims = readline.get_completer_delims()
+    readline.set_completer_delims("")
+    readline.set_completer(completer)
+    # macOS ships libedit under the readline name, and it wants its own binding.
+    readline.parse_and_bind("bind ^I rl_complete" if "libedit" in (readline.__doc__ or "")
+                            else "tab: complete")
+    try:
+        return ask(prompt)
+    finally:
+        readline.set_completer(saved)
+        readline.set_completer_delims(saved_delims)
+
+
 def owners_of(repos: list[str]) -> list[str]:
     return sorted({r.split("/")[0] for r in repos})
 
@@ -774,9 +812,40 @@ def cmd_triage(config, args):
         print("Nothing to triage.")
         return
     menus: dict[str, list[dict]] = {}
+    known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
     # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
     # run: the issue walk fetched its list before those writes, so it would offer them again.
     carried: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def custom(repo: str, choices: list[dict]) -> dict | None:
+        """A milestone typed by name: an existing one, a closed one reopened, or a new one
+        created — each after asking — and on this repo's menu for the rest of the run."""
+        if repo not in known:
+            known[repo] = _milestones_by_title(repo)
+        title = ask_completing("  milestone (Tab completes, blank to skip): ",
+                               sorted(known[repo], key=str.lower)).strip()
+        if not title:
+            return None
+        milestone = known[repo].get(title)
+        if milestone is None:
+            if ask(f"  no milestone '{title}' in {repo}; create it? [y/N] ").strip().lower() != "y":
+                return None
+            milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
+            print(f"  created:  {title}  (undated — check will say so)")
+        elif milestone["state"] != "open":
+            if ask(f"  '{title}' is closed; reopen it? [y/N] ").strip().lower() != "y":
+                return None
+            milestone = gh.api(f"repos/{repo}/milestones/{milestone['number']}",
+                               method="PATCH", state="open")
+            print(f"  reopened: {title}")
+        known[repo][title] = milestone
+        for i, m in enumerate(choices):
+            if m["title"] == title:
+                choices[i] = milestone  # a (new) placeholder, or the same one re-picked
+                break
+        else:
+            choices.append(milestone)
+        return milestone
     for n, issue in enumerate(issues, 1):
         repo = issue["repo"]
         if (repo, issue["number"]) in carried:
@@ -820,7 +889,7 @@ def cmd_triage(config, args):
 
         assign = f"[1-{len(choices)}] assign, " if choices else ""
         while True:
-            answer = ask(f"  {assign}s skip, o open, q quit: ").strip().lower()
+            answer = ask(f"  {assign}c custom, s skip, o open, q quit: ").strip().lower()
             if answer == "q":
                 return
             if answer == "s" or (answer == "" and not choices):
@@ -828,13 +897,19 @@ def cmd_triage(config, args):
             if answer == "o":
                 webbrowser.open(issue["url"])
                 continue
-            if answer.isdigit() and 1 <= int(answer) <= len(choices):
+            chosen = None
+            if answer == "c":
+                chosen = custom(repo, choices)
+                if chosen is None:
+                    continue
+            elif answer.isdigit() and 1 <= int(answer) <= len(choices):
                 chosen = choices[int(answer) - 1]
                 if chosen["number"] is None:
                     # Swap in the real milestone, so the next issue here sees it as one. A
                     # closed one of that name is reopened rather than duplicated.
                     choices[int(answer) - 1] = chosen = _ensure_bucket(
                         repo, chosen["title"], _milestones_by_title(repo))
+            if chosen is not None:
                 gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
@@ -848,7 +923,7 @@ def cmd_triage(config, args):
                         c["milestone"] = chosen["title"]
                         carried[repo, c["number"]] = (chosen["title"], issue["number"])
                 break
-            print(f"  Not one of: {assign}s, o, q.")
+            print(f"  Not one of: {assign}c, s, o, q.")
 
 
 def cmd_assign(config, args):

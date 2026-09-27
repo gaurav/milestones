@@ -42,6 +42,12 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - Issue listings lag writes by up to ~10s: a rollover straight after another, or a triage run
   straight after filing an issue, can see a stale list. Rerunning works; not worth retry logic.
 
+`triage`'s `c` prompt completes milestone titles with `readline`, which on macOS is libedit under
+the same module name: `parse_and_bind("tab: complete")` does nothing there, so `ask_completing`
+checks `readline.__doc__` for "libedit" and binds `^I rl_complete` instead. The completer works on
+the whole line buffer (delimiters set to none), since titles have spaces. Nothing of this reaches a
+piped run, which `input()` reads plainly.
+
 `check -i` reads single keypresses, but falls back to whole lines when stdin is not a tty, so
 `printf 's\ns\ne\n2026-09-03\nq\n' | milestones check -i` drives it end to end. Its findings
 are collected once up front and one milestone can raise several, so anything a walk does to a

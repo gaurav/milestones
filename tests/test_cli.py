@@ -9,7 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
-    closes_line,
+    closes_line, complete_titles,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -458,3 +458,12 @@ def test_closes_line_says_where_each_linked_issue_is():
                         {"number": 7, "state": "OPEN", "milestone": "v1.2"},
                         {"number": 3, "state": "CLOSED", "milestone": None}]) == (
         "closes #12 (no milestone), #7 (v1.2), #3 (closed)")
+
+
+def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():
+    titles = ["Babel v1.19", "Babel v1.20", "Needed soon", "Not urgent"]
+    assert complete_titles(titles, "babel v1.2") == ["Babel v1.20"]
+    # The whole line is the prefix, spaces included, so "n" is not two words.
+    assert complete_titles(titles, "N") == ["Needed soon", "Not urgent"]
+    assert complete_titles(titles, "") == titles
+    assert complete_titles(titles, "v1") == []

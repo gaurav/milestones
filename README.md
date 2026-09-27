@@ -198,7 +198,10 @@ Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where
 `closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
 closes that has no milestone on the same one, since the PR stands in for them; an issue already
 placed is left where it is. For a PR that needs a closer look, `o` opens it in the browser and `s`
-leaves it untriaged, so it comes round again next run. `milestones prs` is the wider view: every
+leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
+one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
+open one is used as it is, a closed one is reopened and a new one created, each after asking. A
+milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
 open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
 ### Reading the status table
