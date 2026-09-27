@@ -9,6 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    closes_line,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -449,3 +450,11 @@ def test_untriaged_counts_splits_issues_from_prs_per_repo():
     assert untriaged_counts(items) == [{"repo": "A/one", "issues": 1, "prs": 0},
                                        {"repo": "b/two", "issues": 2, "prs": 1}]
     assert untriaged_counts([]) == []
+
+
+def test_closes_line_says_where_each_linked_issue_is():
+    assert closes_line([]) == ""
+    assert closes_line([{"number": 12, "state": "OPEN", "milestone": None},
+                        {"number": 7, "state": "OPEN", "milestone": "v1.2"},
+                        {"number": 3, "state": "CLOSED", "milestone": None}]) == (
+        "closes #12 (no milestone), #7 (v1.2), #3 (closed)")

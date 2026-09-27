@@ -711,8 +711,52 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> lis
     return triage_order(issues, config["focus"])
 
 
+def fetch_closing_issues(items: list[dict]) -> None:
+    """Give each pull request in `items` a `closes` list: the issues its body closes, as
+    {number, title, state, milestone}, milestone being a title or None.
+
+    One aliased GraphQL round trip per fifty PRs, whatever repos they span. A PR that has
+    vanished since the search comes back null with a partial error; it gets no `closes`.
+    """
+    prs = [i for i in items if i["pr"]]
+    for start in range(0, len(prs), 50):
+        batch = prs[start:start + 50]
+        by_repo: dict[str, list[dict]] = {}
+        for item in batch:
+            by_repo.setdefault(item["repo"], []).append(item)
+        aliases = " ".join(
+            f'r{ri}: repository(owner: "{repo.split("/")[0]}", name: "{repo.split("/")[1]}") {{ '
+            + " ".join(f"p{item['number']}: pullRequest(number: {item['number']}) {{ "
+                       "closingIssuesReferences(first: 20) { nodes { number title state "
+                       "milestone { title } } } }" for item in repo_items)
+            + " }"
+            for ri, (repo, repo_items) in enumerate(by_repo.items()))
+        data = gh.graphql(f"query {{ {aliases} }}")
+        for ri, (repo, repo_items) in enumerate(by_repo.items()):
+            node = data.get(f"r{ri}") or {}
+            for item in repo_items:
+                pr = node.get(f"p{item['number']}")
+                item["closes"] = [
+                    {"number": c["number"], "title": c["title"], "state": c["state"],
+                     "milestone": c["milestone"] and c["milestone"]["title"]}
+                    for c in pr["closingIssuesReferences"]["nodes"]] if pr else []
+
+
+def closes_line(closes: list[dict]) -> str:
+    """"closes #12 (no milestone), #7 (v1.2), #3 (closed)", or nothing for a PR closing none."""
+    if not closes:
+        return ""
+    def where(c):
+        if c["state"] != "OPEN":
+            return "closed"
+        return c["milestone"] or "no milestone"
+    return "closes " + ", ".join(f"#{c['number']} ({where(c)})" for c in closes)
+
+
 def cmd_triage(config, args):
     issues = fetch_untriaged(config, args.repo, "pr" if args.prs else "issue")
+    if args.prs:
+        fetch_closing_issues(issues)
     if args.json:
         json.dump({"issues": issues}, sys.stdout, indent=2)
         print()
@@ -722,15 +766,24 @@ def cmd_triage(config, args):
         for i in issues:
             marker = f"  {item_marker(i)}" if i["pr"] else ""
             labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
-            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}")
+            closes = f"  {closes_line(i['closes'])}" if i.get("closes") else ""
+            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}{closes}")
         return
 
     if not issues:
         print("Nothing to triage.")
         return
     menus: dict[str, list[dict]] = {}
+    # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
+    # run: the issue walk fetched its list before those writes, so it would offer them again.
+    carried: dict[tuple[str, int], tuple[str, int]] = {}
     for n, issue in enumerate(issues, 1):
         repo = issue["repo"]
+        if (repo, issue["number"]) in carried:
+            title, pr = carried[repo, issue["number"]]
+            print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  already on {title}, "
+                  f"with PR #{pr} that closes it")
+            continue
         if repo not in menus:
             menus[repo] = sorted(
                 _milestones_by_title(repo, state="open").values(),
@@ -747,6 +800,8 @@ def cmd_triage(config, args):
         print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}{marker}"
               f"  (updated {issue['updated'][:10]})")
         print(f"  {issue['title']}")
+        if issue.get("closes"):
+            print(f"  {closes_line(issue['closes'])}")
         if issue["labels"]:
             print(f"  labels: {', '.join(issue['labels'])}")
         if issue["body"]:
@@ -783,6 +838,15 @@ def cmd_triage(config, args):
                 gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
+                # A PR is triaged for the issues it closes too: an open one with no
+                # milestone goes where the PR goes, and one already placed is left alone.
+                for c in issue.get("closes") or []:
+                    if c["state"] == "OPEN" and not c["milestone"]:
+                        gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
+                               milestone=chosen["number"])
+                        print(f"  → also #{c['number']} → {chosen['title']} (closed by this PR)")
+                        c["milestone"] = chosen["title"]
+                        carried[repo, c["number"]] = (chosen["title"], issue["number"])
                 break
             print(f"  Not one of: {assign}s, o, q.")
 
