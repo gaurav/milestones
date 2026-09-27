@@ -84,6 +84,7 @@ DATE_RE = re.compile(r"\b\d{4}(-\d{2}-\d{2}|[a-z]{3}\d{1,2})\b", re.I)
 
 # Each kind is one shape of fix, and heads its own group in the report.
 KINDS = {
+    "stranded": "Roll over or reopen — closed, but work is still open on it",
     "rename": "Rename — no version or date in the title, and not a standing bucket",
     "undated": "Set a due date — however far out; an undated milestone never comes due",
     "overdue": "Roll over or re-date — past due with work still open",
@@ -94,13 +95,19 @@ KINDS = {
 
 def milestone_problems(title: str, due: str | None, open_issues: int, closed_issues: int,
                        buckets: list[str], today: str,
-                       open_prs: int = 0, closed_prs: int = 0) -> list[tuple[str, str]]:
-    """(kind, detail) for everything wrong with one open milestone.
+                       open_prs: int = 0, closed_prs: int = 0,
+                       closed: bool = False) -> list[tuple[str, str]]:
+    """(kind, detail) for everything wrong with one milestone.
 
     A pull request is work on the milestone as much as an issue is, so every
     decision here is over both: a milestone holding only open PRs is not done.
     """
     open_work, closed_work = open_issues + open_prs, closed_issues + closed_prs
+    if closed:
+        # Work on a closed milestone is invisible to status and to triage, which only
+        # sees items with no milestone at all. Nothing else can be wrong with a closed
+        # milestone that matters, and this holds for a closed bucket too.
+        return [("stranded", f"closed with {open_work} still open")] if open_work else []
     problems = []
     if due and due < today and open_work:
         problems.append(("overdue", f"due {due}, {open_work} still open"))
@@ -433,10 +440,12 @@ def after(cursor: str | None) -> str:
     return f', after: "{cursor}"' if cursor else ""
 
 
-def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]]]:
+def fetch_milestones(repos: list[str],
+                     closed: bool = False) -> tuple[list[str], list[tuple[str, dict]]]:
     """GitHub's own name for each repo, and (repo, milestone) for every open
-    milestone. The names follow renames and fix up the config's capitalisation,
-    so callers should key off them, not off `repos`.
+    milestone — and every closed one too, with `closed`; each carries its `state`.
+    The names follow renames and fix up the config's capitalisation, so callers
+    should key off them, not off `repos`.
 
     One aliased round trip per page: every repo is queried together, and only the
     repos that still have milestones left go into the next trip, so the usual case
@@ -445,13 +454,14 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
     names: dict[str, str] = {}
     milestones = []
     pages: dict[str, str | None] = {r: None for r in repos}  # repo -> next page's cursor
+    states = "[OPEN, CLOSED]" if closed else "OPEN"
     while pages:
         alias_of = {f"r{i}": repo for i, repo in enumerate(pages)}
         aliases = " ".join(
             f'{alias}: repository(owner: "{r.split("/")[0]}", name: "{r.split("/")[1]}") '
-            f"{{ nameWithOwner milestones(states: OPEN, first: 100{after(pages[r])}) "
+            f"{{ nameWithOwner milestones(states: {states}, first: 100{after(pages[r])}) "
             f"{{ pageInfo {{ hasNextPage endCursor }} "
-            f"nodes {{ title url dueOn number "
+            f"nodes {{ title url dueOn number state "
             f"open: issues(states: OPEN) {{ totalCount }} "
             f"closed: issues(states: CLOSED) {{ totalCount }} "
             # `issues` never counts pull requests; they are their own connection.
@@ -476,10 +486,16 @@ def fetch_milestones(repos: list[str]) -> tuple[list[str], list[tuple[str, dict]
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
-    tracked, entries = fetch_milestones(config["repos"])
+    stranded = []  # closed milestones with open work: not rows, but not silence either
+    tracked, entries = fetch_milestones(config["repos"], closed=True)
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
         count, prs = m["open"]["totalCount"], m["openPrs"]["totalCount"]
+        if m["state"] == "CLOSED":
+            if count + prs:
+                stranded.append({"repo": repo, "title": m["title"], "open": count,
+                                 "open_prs": prs, "url": m["url"]})
+            continue
         if (m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"]
                 and not count + prs):
             continue
@@ -516,6 +532,7 @@ def cmd_status(config, args):
         json.dump({"milestones": records,
                    "quiet_repos": [{"repo": r, "focus": is_focused(r, config["focus"]),
                                     "url": repo_url(r)} for r in quiet],
+                   "stranded": stranded,
                    "focus": config["focus"]}, sys.stdout, indent=2)
         print()
         return
@@ -551,6 +568,13 @@ def cmd_status(config, args):
                     ("", "REPO", "URL"))
     elif not rows:
         print("No open milestones in any configured repo.")
+    if stranded:
+        # One line, not rows: `check` owns the fix, and a closed milestone is not a state
+        # of the work so much as a place it has been lost.
+        items = sum(s["open"] + s["open_prs"] for s in stranded)
+        print(f"\n{len(stranded)} closed milestone{'s' if len(stranded) != 1 else ''} still "
+              f"hold{'s' if len(stranded) == 1 else ''} {items} open "
+              f"item{'s' if items != 1 else ''} — run: milestones check")
 
 
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
@@ -830,10 +854,11 @@ def issue_count(issues: int, prs: int = 0) -> str:
 
 def collect_findings(config) -> list[dict]:
     today = datetime.date.today().isoformat()
-    repos, milestones = fetch_milestones(config["repos"])
+    repos, milestones = fetch_milestones(config["repos"], closed=True)
     seen: dict[str, set] = {r: set() for r in repos}
     for repo, m in milestones:
-        seen[repo].add(m["title"])
+        if m["state"] == "OPEN":
+            seen[repo].add(m["title"])
     # One answer per repo, settled before any finding is built: which standing buckets
     # a milestone here could be renamed onto, and none for a repo that uses none of them.
     free = {repo: free_buckets(config["buckets"], titles) for repo, titles in seen.items()}
@@ -844,7 +869,8 @@ def collect_findings(config) -> list[dict]:
                                                m["open"]["totalCount"], m["closed"]["totalCount"],
                                                config["buckets"], today,
                                                m["openPrs"]["totalCount"],
-                                               m["closedPrs"]["totalCount"]):
+                                               m["closedPrs"]["totalCount"],
+                                               closed=m["state"] == "CLOSED"):
             findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
                              "url": m["url"], "number": m["number"],
                              "free_buckets": free[repo],
@@ -882,7 +908,7 @@ def cmd_check(config, args):
         print()
         return
     if not findings:
-        print("Nothing to fix — every open milestone is named and dated sensibly.")
+        print("Nothing to fix — every milestone is named, dated and closed sensibly.")
         return
     print_findings(findings)
     if args.interactive:
@@ -1011,6 +1037,13 @@ def walk_findings(config, findings: list[dict]) -> None:
             print("  → closed")
             gone.add((repo, number))
 
+        def reopen_it():
+            # Reopening is the one state change that can't hide anything, so a bucket
+            # gets it too; setup would have done the same.
+            patch(state="open")
+            print("  → reopened" + (" (setup would also have done this)"
+                                   if f["title"] in config["buckets"] else ""))
+
         def open_it():
             webbrowser.open(f["url"])
             return STAY
@@ -1032,6 +1065,9 @@ def walk_findings(config, findings: list[dict]) -> None:
             options.append(("e", "another date…", type_date))
         if kind == "overdue":
             options.append(("r", "roll its issues over…", roll_over))
+        if kind == "stranded":
+            # rollover takes a closed source as it is; only the destination must be open.
+            options += [("r", "roll its work over…", roll_over), ("p", "reopen it", reopen_it)]
         if kind == "done":
             options.append(("c", "close it", close_it))
         if kind == "empty":

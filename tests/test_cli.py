@@ -195,6 +195,18 @@ def test_milestone_problems_counts_pull_requests_as_work():
         ("overdue", "due 2026-08-19, 3 still open")]
     assert problems("v2.0", "2026-09-01", open_issues=0, closed_prs=2) == [("done", "all 2 closed")]
     assert kinds("v2.0", "2026-09-01", open_issues=0, open_prs=1) == []
+
+
+def test_milestone_problems_reports_a_closed_milestone_only_as_stranded():
+    # Work on a closed milestone is invisible everywhere else, so it is the one thing
+    # check says about a closed milestone — whatever else is wrong with its name or date,
+    # and whether or not it is a bucket.
+    assert problems("Needs tests", None, open_issues=50, closed=True) == [
+        ("stranded", "closed with 50 still open")]
+    assert kinds("Improved testing", None, open_issues=0, open_prs=3, closed=True) == ["stranded"]
+    assert kinds("Needed soon", None, open_issues=2, closed=True) == ["stranded"]
+    assert kinds("Babel v1.18", "2026-07-20", open_issues=0, closed_issues=13, closed=True) == []
+    assert kinds("Old plans", None, open_issues=0, closed_issues=0, closed=True) == []
     assert problems("Needed later", None, open_issues=0, closed_issues=3) == []
 
 

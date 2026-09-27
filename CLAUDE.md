@@ -21,6 +21,10 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - A milestone's `open_issues` counts **pull requests** too, so it never agrees with an
   issues-only listing; don't use it as an "is this empty" check. The `triage` menu shows it
   anyway, on purpose — a PR on a milestone is work sitting on that milestone.
+- GraphQL is the other way round: `Milestone.issues` **excludes** pull requests, which are their
+  own `pullRequests` connection, so `fetch_milestones` asks for both and every decision over
+  "is there work on this" adds them. And `milestones(states:)` defaults to open ones; CLOSED
+  has to be asked for by name.
 - `gh api graphql` exits **nonzero on any GraphQL error**, including a partial one, but still
   prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
@@ -60,12 +64,14 @@ for a repo that has none of them. It is only the walk's rename targets — the b
 has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, just
 "Critical") is one `status` hides while nothing is open on it.
 
-A closed standing bucket is invisible to `status` and to the `triage` menu, `check` doesn't report
-it, and only `setup` brings it back — so nothing here may close or delete one. That invariant is
-enforced in four places (`setup` reopens, `rollover` refuses both a closed destination and
-`--close` on a bucket, and `milestone_problems` returns early for a bucket, so `check` never raises
-a `done`, `empty`, `rename` or `undated` finding against one); add the guard when you add a path
-that could close a milestone.
+A closed standing bucket is invisible to `status` and to the `triage` menu, so nothing here may
+close or delete one. That invariant is enforced in four places (`setup` reopens, `rollover` refuses
+both a closed destination and `--close` on a bucket, and `milestone_problems` returns early for a
+bucket, so `check` never raises a `done`, `empty`, `rename` or `undated` finding against one); add
+the guard when you add a path that could close a milestone. A closed milestone of any kind with
+work still on it is `check`'s `stranded` finding — the only one raised against a closed milestone,
+buckets included — and `check -i`'s `[p]` reopens it, as `setup` would for a bucket. `status`
+fetches closed milestones too, purely to count what is stranded in one closing line.
 
 `print_table` measures every cell in characters, and there are two ways to make that lie. Colour
 is one — `visible()` discounts the escapes, so a cell may carry its own, and `paint` is the only
