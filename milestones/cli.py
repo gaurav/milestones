@@ -797,10 +797,12 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> lis
 
 def fetch_closing_issues(items: list[dict]) -> None:
     """Give each pull request in `items` a `closes` list: the issues its body closes, as
-    {number, title, state, milestone}, milestone being a title or None.
+    {id, number, title, state, milestone, repo}, milestone being a title or None and repo
+    the issue's own, since a PR can close an issue in another repository.
 
     One aliased GraphQL round trip per fifty PRs, whatever repos they span. A PR that has
     vanished since the search comes back null with a partial error; it gets no `closes`.
+    The first hundred closing issues are fetched, with a warning for a PR that has more.
     """
     prs = [i for i in items if i["pr"]]
     for start in range(0, len(prs), 50):
@@ -811,30 +813,48 @@ def fetch_closing_issues(items: list[dict]) -> None:
         aliases = " ".join(
             f'r{ri}: repository(owner: "{repo.split("/")[0]}", name: "{repo.split("/")[1]}") {{ '
             + " ".join(f"p{item['number']}: pullRequest(number: {item['number']}) {{ "
-                       "closingIssuesReferences(first: 20) { nodes { id number title state "
-                       "milestone { title } } } }" for item in repo_items)
+                       "closingIssuesReferences(first: 100) { totalCount nodes { id number "
+                       "title state milestone { title } repository { nameWithOwner } } } }"
+                       for item in repo_items)
             + " }"
             for ri, (repo, repo_items) in enumerate(by_repo.items()))
         data = gh.graphql(f"query {{ {aliases} }}")
         for ri, (repo, repo_items) in enumerate(by_repo.items()):
             node = data.get(f"r{ri}") or {}
             for item in repo_items:
-                pr = node.get(f"p{item['number']}")
+                refs = (node.get(f"p{item['number']}") or {}).get("closingIssuesReferences")
+                if refs and refs["totalCount"] > len(refs["nodes"]):
+                    print(f"warning: {item['repo']}#{item['number']} closes "
+                          f"{refs['totalCount']} issues; only the first {len(refs['nodes'])} "
+                          "are shown or carried", file=sys.stderr)
                 item["closes"] = [
                     {"id": c["id"], "number": c["number"], "title": c["title"],
-                     "state": c["state"], "milestone": c["milestone"] and c["milestone"]["title"]}
-                    for c in pr["closingIssuesReferences"]["nodes"]] if pr else []
+                     "state": c["state"], "milestone": c["milestone"] and c["milestone"]["title"],
+                     "repo": c["repository"]["nameWithOwner"]}
+                    for c in refs["nodes"]] if refs else []
 
 
-def closes_line(closes: list[dict]) -> str:
-    """"closes #12 (no milestone), #7 (v1.2), #3 (closed)", or nothing for a PR closing none."""
+def carries(closed: dict, repo: str) -> bool:
+    """Whether a PR in `repo` takes this issue it closes onto its own milestone: open, on no
+    milestone yet, and in the same repo — milestone numbers are per repo, so one elsewhere
+    is shown but left alone."""
+    return (closed["state"] == "OPEN" and not closed["milestone"]
+            and closed["repo"].lower() == repo.lower())
+
+
+def closes_line(closes: list[dict], repo: str) -> str:
+    """"closes #12 (no milestone), #7 (v1.2), #3 (closed)" for a PR in `repo`, with an issue
+    elsewhere given its repo, "o/other#5 (…)"; nothing for a PR closing none."""
     if not closes:
         return ""
     def where(c):
         if c["state"] != "OPEN":
             return "closed"
         return c["milestone"] or "no milestone"
-    return "closes " + ", ".join(f"#{c['number']} ({where(c)})" for c in closes)
+    def ref(c):
+        same = c["repo"].lower() == repo.lower()
+        return f"#{c['number']}" if same else f"{c['repo']}#{c['number']}"
+    return "closes " + ", ".join(f"{ref(c)} ({where(c)})" for c in closes)
 
 
 def plural(n: int, noun: str) -> str:
@@ -925,7 +945,7 @@ def cmd_triage(config, args):
         for i in issues:
             marker = f"  {item_marker(i)}" if i["pr"] else ""
             labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
-            closes = f"  {closes_line(i['closes'])}" if i.get("closes") else ""
+            closes = f"  {closes_line(i['closes'], i['repo'])}" if i.get("closes") else ""
             print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}{closes}")
         return
 
@@ -960,24 +980,29 @@ def cmd_triage(config, args):
             print(f"  (no Priority field for {owner}; milestone set, priority not)")
             done["unprioritised"].append((ref, f"no Priority field for {owner}"))
             return
-        targets = ([(issue["number"], issue["id"])] if not issue["pr"] else
-                   [(c["number"], c["id"]) for c in issue.get("closes") or []
-                    if c["state"] == "OPEN"])
+        # The field and its option ids are the organisation's, so only an issue of the same
+        # owner can take them.
+        targets = ([(ref, issue["id"])] if not issue["pr"] else
+                   [(f"{c['repo']}#{c['number']}", c["id"]) for c in issue.get("closes") or []
+                    if c["state"] == "OPEN" and c["repo"].split("/")[0].lower() == owner.lower()])
         if not targets:
-            print("  (a PR has no fields, and this one closes no open issue; nothing to prioritise)")
-            done["unprioritised"].append((ref, "a PR has no fields, and it closes no open issue"))
+            print(f"  (a PR has no fields, and this one closes no open issue of {owner}'s; "
+                  "nothing to prioritise)")
+            done["unprioritised"].append(
+                (ref, f"a PR has no fields, and it closes no open issue of {owner}'s"))
             return
         field_id, option_id = priority[key]
-        for number, node_id in targets:
+        for target, node_id in targets:
             try:
                 set_priority(node_id, field_id, option_id)
             except SystemExit as exit:
                 print(f"  {exit}")
                 # Its first line: the rest is gh's stderr, already printed above.
-                done["failed"].append((f"{issue['repo']}#{number}", str(exit).splitlines()[0]))
+                done["failed"].append((target, str(exit).splitlines()[0]))
                 continue
-            print(f"  → also #{number} priority {name}" if issue["pr"] else f"  → priority {name}")
-            done["priority"].append((f"{issue['repo']}#{number}", name))
+            print(f"  → also {target} priority {name}" if issue["pr"]
+                  else f"  → priority {name}")
+            done["priority"].append((target, name))
 
     def custom(repo: str, choices: list[dict]) -> dict | None:
         """A milestone typed by name: an existing one, a closed one reopened, or a new one
@@ -1044,7 +1069,7 @@ def cmd_triage(config, args):
                   f"  (updated {issue['updated'][:10]})")
             print(f"  {issue['title']}")
             if issue.get("closes"):
-                print(f"  {closes_line(issue['closes'])}")
+                print(f"  {closes_line(issue['closes'], repo)}")
             if issue["labels"]:
                 print(f"  labels: {', '.join(issue['labels'])}")
             if issue["body"]:
@@ -1111,7 +1136,7 @@ def cmd_triage(config, args):
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
                     for c in issue.get("closes") or []:
-                        if c["state"] == "OPEN" and not c["milestone"]:
+                        if carries(c, repo):
                             gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
                                    milestone=chosen["number"])
                             print(f"  → also #{c['number']} → {chosen['title']} "

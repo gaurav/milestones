@@ -9,7 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
-    _norm_issue, closes_line, complete_titles, parse_answer, priority_options,
+    _norm_issue, carries, closes_line, complete_titles, parse_answer, priority_options,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -454,11 +454,24 @@ def test_untriaged_counts_splits_issues_from_prs_per_repo():
 
 
 def test_closes_line_says_where_each_linked_issue_is():
-    assert closes_line([]) == ""
-    assert closes_line([{"number": 12, "state": "OPEN", "milestone": None},
-                        {"number": 7, "state": "OPEN", "milestone": "v1.2"},
-                        {"number": 3, "state": "CLOSED", "milestone": None}]) == (
-        "closes #12 (no milestone), #7 (v1.2), #3 (closed)")
+    assert closes_line([], "A/one") == ""
+    assert closes_line([{"number": 12, "state": "OPEN", "milestone": None, "repo": "A/one"},
+                        {"number": 7, "state": "OPEN", "milestone": "v1.2", "repo": "a/ONE"},
+                        {"number": 3, "state": "CLOSED", "milestone": None, "repo": "A/one"},
+                        {"number": 5, "state": "OPEN", "milestone": None, "repo": "B/two"}],
+                       "A/one") == (
+        "closes #12 (no milestone), #7 (v1.2), #3 (closed), B/two#5 (no milestone)")
+
+
+def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
+    def issue(state="OPEN", milestone=None, repo="A/one"):
+        return {"state": state, "milestone": milestone, "repo": repo}
+    assert carries(issue(), "A/one")
+    assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
+    assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    assert not carries(issue(state="CLOSED"), "A/one")
+    # Its milestone number here would name some other milestone there, or none.
+    assert not carries(issue(repo="B/two"), "A/one")
 
 
 def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():
