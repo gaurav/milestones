@@ -87,8 +87,9 @@ milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
                                          # issue URL, or read from stdin one per line — a
                                          # `triage --list` line works as-is. Confirms on a
                                          # terminal; a repo without that milestone is
-                                         # skipped, not fatal. --priority also sets the
-                                         # organisation's Priority field, where there is one
+                                         # skipped, not fatal. A PR takes the issues it
+                                         # closes along, as in the walk. --priority also sets
+                                         # the organisation's Priority field, where there is one
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -204,7 +205,7 @@ A pull request is work already under way, so every open one belongs on a milesto
 Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where they are:
 `closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
 closes that has no milestone on the same one, since the PR stands in for them; an issue already
-placed is left where it is. For a PR that needs a closer look, `o` opens it in the browser and `s`
+placed is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
 leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
 one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
 open one is used as it is, a closed one is reopened and a new one created, each after asking. A

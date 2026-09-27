@@ -30,8 +30,11 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
   `gh.graphql`'s `partial_ok`.
 - A PR's `closingIssuesReferences` is GraphQL-only, so the PR walk fetches it in one aliased
-  query per fifty PRs, `pN: pullRequest(number: N)` under each repo alias; a PR that has gone
-  since the search comes back null with a partial error, which `gh.graphql` keeps. Editing a PR
+  query per fifty PRs, `pN: issueOrPullRequest(number: N)` under each repo alias — that field
+  rather than `pullRequest`, so `assign` can ask about a ref it can't tell is a PR; a number
+  that has gone since the search comes back null with a partial error, which `gh.graphql` keeps.
+  The references can name an issue in **another repo**: each carries its own `repository`, and
+  only one in the PR's own repo is carried (`carries`), since milestone numbers are per repo. Editing a PR
   body updates its references within seconds, but bumps its `updated_at`, which reorders a
   freshest-first walk — mind that when driving one from a pipe.
 - A milestone's manual (drag) order is readable — GraphQL `Milestone.issues` returns it by
@@ -79,7 +82,7 @@ coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on
 pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
 only write that never closes or deletes anything, which is what makes that safe. A PR ref is
 accepted on purpose — the issues endpoint sets a PR's milestone too — and `triage --prs --list`
-lists them. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
+lists them; like the walk, it carries the issues a PR closes, counted before the prompt. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
 "Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —
 it hands the program an EOF before the answer, so `ask()` aborts whatever you send.
 

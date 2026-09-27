@@ -803,6 +803,8 @@ def fetch_closing_issues(items: list[dict]) -> None:
     One aliased GraphQL round trip per fifty PRs, whatever repos they span. A PR that has
     vanished since the search comes back null with a partial error; it gets no `closes`.
     The first hundred closing issues are fetched, with a warning for a PR that has more.
+    An item marked `pr` that turns out to be an issue — `assign` can't tell from a ref —
+    gets an empty `closes`, since `issueOrPullRequest` answers for either.
     """
     prs = [i for i in items if i["pr"]]
     for start in range(0, len(prs), 50):
@@ -812,9 +814,10 @@ def fetch_closing_issues(items: list[dict]) -> None:
             by_repo.setdefault(item["repo"], []).append(item)
         aliases = " ".join(
             f'r{ri}: repository(owner: "{repo.split("/")[0]}", name: "{repo.split("/")[1]}") {{ '
-            + " ".join(f"p{item['number']}: pullRequest(number: {item['number']}) {{ "
-                       "closingIssuesReferences(first: 100) { totalCount nodes { id number "
-                       "title state milestone { title } repository { nameWithOwner } } } }"
+            + " ".join(f"p{item['number']}: issueOrPullRequest(number: {item['number']}) {{ "
+                       "... on PullRequest { closingIssuesReferences(first: 100) { totalCount "
+                       "nodes { id number title state milestone { title } "
+                       "repository { nameWithOwner } } } } }"
                        for item in repo_items)
             + " }"
             for ri, (repo, repo_items) in enumerate(by_repo.items()))
@@ -1185,8 +1188,20 @@ def cmd_assign(config, args):
             if not options:
                 print(f"skipping priority for {owner}: no Priority field with Urgent, High "
                       f"and Low options")
+    # A PR stands in for the issues it closes, as in the walk: `carries` says which go onto
+    # its milestone with it, and its priority lands on the open ones its owner can take.
+    # Resolved before the prompt, so the count asked about is the count written.
+    items = [{"repo": r, "number": n, "pr": True} for r, n in todo]
+    fetch_closing_issues(items)
+    closes = {(i["repo"], i["number"]): i["closes"] for i in items}
+    carry: dict[tuple[str, int], int] = {}  # (repo, issue) -> the PR that closes it
+    for (repo, number), linked in closes.items():
+        for c in linked:
+            if carries(c, repo) and (repo, c["number"]) not in closes:
+                carry.setdefault((repo, c["number"]), number)
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
           f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
+          + (f", and {plural(len(carry), 'issue')} their PRs close" if carry else "")
           + (f", priority {PRIORITY_KEYS[key]}" if args.priority else ""))
     # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
     # script, there is no tty to answer from, and a milestone is a reversible field that
@@ -1195,15 +1210,28 @@ def cmd_assign(config, args):
         sys.exit("Aborted.")
     for repo, number in todo:
         issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
-        note = ""
-        field = priority.get(repo.split("/")[0])
-        if field and "pull_request" in issue:
-            note = "  (a PR has no fields; priority not set)"
-        elif field:
-            # After the milestone, so a failed field write can't lose the assignment.
+        owner = repo.split("/")[0]
+        field = priority.get(owner)
+        # After the milestone, so a failed field write can't lose the assignment.
+        if field and "pull_request" not in issue:
             set_priority(issue["node_id"], *field)
-            note = f", priority {PRIORITY_KEYS[key]}"
-        print(f"  {repo}#{number} → {args.milestone}{note}")
+            print(f"  {repo}#{number} → {args.milestone}, priority {PRIORITY_KEYS[key]}")
+            continue
+        print(f"  {repo}#{number} → {args.milestone}")
+        if field:
+            # A PR has no fields: its priority goes onto the open issues it closes.
+            prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
+                           and c["repo"].split("/")[0].lower() == owner.lower()]
+            for c in prioritised:
+                set_priority(c["id"], *field)
+                print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
+                      f"(closed by #{number})")
+            if not prioritised:
+                print(f"    (a PR has no fields, and #{number} closes no open issue of "
+                      f"{owner}'s; priority not set)")
+    for (repo, number), pr in carry.items():
+        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
 
 
 def cmd_prs(config, args):
