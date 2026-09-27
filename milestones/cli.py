@@ -611,9 +611,18 @@ def cmd_rollover(config, args):
 
 
 def _norm_issue(issue: dict, repo: str) -> dict:
+    # Both the REST listing and a search item carry `draft` on a pull request.
     return {"repo": repo, "number": issue["number"], "title": issue["title"],
             "body": issue["body"], "labels": [l["name"] for l in issue["labels"]],
-            "updated": issue["updated_at"], "url": issue["html_url"]}
+            "updated": issue["updated_at"], "url": issue["html_url"],
+            "pr": "pull_request" in issue, "draft": bool(issue.get("draft"))}
+
+
+def item_marker(item: dict) -> str:
+    """"(PR, draft)", "(PR)", or nothing for an issue — what a walk or a list shows after the ref."""
+    if not item["pr"]:
+        return ""
+    return "(PR, draft)" if item["draft"] else "(PR)"
 
 
 def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> list[dict]:
@@ -643,8 +652,9 @@ def cmd_triage(config, args):
     if args.list:
         # One ref per line, first, so a line can be piped straight into `assign`.
         for i in issues:
+            marker = f"  {item_marker(i)}" if i["pr"] else ""
             labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
-            print(f"{i['repo']}#{i['number']}  {i['title']}{labels}")
+            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}")
         return
 
     if not issues:
@@ -665,7 +675,9 @@ def cmd_triage(config, args):
                             if b in OPTIONAL_BUCKETS]
         choices = menus[repo]
 
-        print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  (updated {issue['updated'][:10]})")
+        marker = f"  {item_marker(issue)}" if issue["pr"] else ""
+        print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}{marker}"
+              f"  (updated {issue['updated'][:10]})")
         print(f"  {issue['title']}")
         if issue["labels"]:
             print(f"  labels: {', '.join(issue['labels'])}")

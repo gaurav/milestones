@@ -11,7 +11,7 @@ from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
-    is_ignored, load_config, triage_order,
+    is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
     print_findings, print_table, read_key, sort_key, visible, write_repo_list,
@@ -407,3 +407,9 @@ def test_pr_group_prefers_tracked_then_ignored():
     assert pr_group("Gaurav/Milestones", config) == "tracked"
     assert pr_group("phyloref/klados", config) == "ignored"
     assert pr_group("rambaut/figtree", config) == "untracked"
+
+
+def test_item_marker_names_prs_and_drafts_only():
+    assert item_marker({"pr": False, "draft": False}) == ""
+    assert item_marker({"pr": True, "draft": False}) == "(PR)"
+    assert item_marker({"pr": True, "draft": True}) == "(PR, draft)"
