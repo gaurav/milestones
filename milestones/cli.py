@@ -994,7 +994,8 @@ def cmd_triage(config, args):
                 if suffix in ORDER_KEYS:
                     # Parsed on purpose, so the grammar is settled before the API exists.
                     print(f"  (not moved to the {ORDER_KEYS[suffix]}: GitHub has no API for "
-                          f"a milestone's order — drag it at {chosen['html_url']})")
+                          f"a milestone's order, gaurav/milestones#25 — drag it at "
+                          f"{chosen['html_url']})")
                 if suffix in PRIORITY_KEYS:
                     # After the milestone, so a failed field write can't lose the assignment.
                     set_priorities(owner, priority, issue, suffix)

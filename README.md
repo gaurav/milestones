@@ -204,6 +204,15 @@ open one is used as it is, a closed one is reopened and a new one created, each 
 milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
 open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
+An answer takes one modifier after the number (or after `c`), regex-style. `2!` assigns milestone
+2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority is an organisation
+issue field, so the keys are offered only where the repo's owner has a single-select `Priority`
+field with those option names, and since a pull request has no fields a PR's priority goes onto
+the open issues it closes. `2^` and `2$`, for the top and bottom of the milestone's order, are
+parsed and refused: GitHub has no API that writes that order
+([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
+links to it for dragging by hand.
+
 ### Reading the status table
 
 The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured

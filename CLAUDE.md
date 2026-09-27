@@ -34,6 +34,17 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   since the search comes back null with a partial error, which `gh.graphql` keeps. Editing a PR
   body updates its references within seconds, but bumps its `updated_at`, which reorders a
   freshest-first walk — mind that when driving one from a pipe.
+- A milestone's manual (drag) order is readable — GraphQL `Milestone.issues` returns it by
+  default, REST does not — but **nothing writes it**: no REST parameter, no mutation. The walk's
+  `^`/`$` modifiers are parsed for that day and refuse until it comes (#25).
+- Issue fields (`Priority`, `Effort`, …) are an **organisation** feature and an **issue** feature:
+  `users/{login}/issue-fields` is 404 for a user and `PullRequest` has no `issueFieldValues`.
+  Read them with `organization(login:) { issueFields { nodes { ... on IssueFieldSingleSelect
+  { id name options { id name } } } } }` (a union; `options` is a plain list) and write one with
+  `setIssueFieldValue(input: {issueId, issueFields: [{fieldId, singleSelectOptionId}]})`;
+  `[{fieldId, delete: true}]` clears it. The REST `orgs/{org}/issue-fields` listing carries the
+  same node ids. `fetch_priority_field` asks `users/{owner}` for the account type first, so a user
+  owner never triggers the NOT_FOUND warning the organisation query would print.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
