@@ -4,14 +4,14 @@ I have measured out my life with GitHub milestones
 
 A personal CLI for viewing and managing GitHub milestones across all my repositories.
 Milestones are the single source of truth: dated milestones for "this release"/"next release",
-plus standing undated buckets ("Needed soon", "Needed later", "Not urgent", "Upstream" — for
-work that belongs in someone else's tracker) that never close. Every issue's
-bucket is publicly visible on its GitHub issue page, so anyone can see how it's triaged and
-complain in a comment if they disagree.
+plus standing undated buckets such as "Needed soon" that never close.
+[MILESTONES.md](MILESTONES.md) lists the buckets and says what each one, and each kind of dated
+milestone, means. Every issue's bucket is publicly visible on its GitHub issue page, so anyone can
+see how it's triaged and complain in a comment if they disagree.
 
 The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
 a repo without them is simply left alone. Every command picks up whichever buckets a repo
-actually has, and `check` asks for a missing one only where the repo already uses the others.
+actually has, and a repo is free to use only some of them.
 
 ## Setup
 
@@ -28,7 +28,7 @@ Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write t
 and they rewrite just the `repos` list):
 
 ```toml
-buckets = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
+buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
 
 repos = [
   "gaurav/milestones",
@@ -83,6 +83,8 @@ milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
+                                         # except Critical, which triage offers anyway and
+                                         # creates the first time you pick it
 milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # the repos you track, then repos owned by your
                                          # configured owners that have issues/milestones
@@ -93,8 +95,7 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --ignore-remaining ignores the ones suggested
 milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
                                          # milestones to rename, date, close, delete or
-                                         # roll over, and repos that use standing buckets
-                                         # but have one missing or closed.
+                                         # roll over.
                                          # -i then walks the list and applies your answers;
                                          # --json prints them for a script instead
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
@@ -112,7 +113,7 @@ milestones ignore REPO|OWNER [...]       # hide repos from discover without trac
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
 to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
-the start of next month, close, delete, roll over, or run `setup` — plus open, skip and quit. Once
+the start of next month, close, delete or roll over — plus open, skip and quit. Once
 you type a date of your own, the fourth date slot offers that date back for the rest of the session
 (the one you have typed most often, most recent winning ties), since a run of milestones usually
 wants the same day — "after the project meeting" is one keypress each after the first. A single
@@ -175,6 +176,9 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
+A bucket with work on it is coloured by urgency: `Critical` bold red, `Needed soon` orange,
+`Needed later` light green. `Critical` is optional — `setup` leaves it to `triage` to create, and
+`status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
 The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses
@@ -193,6 +197,23 @@ script — or a coding agent — `milestones status --json` prints the same data
 `url`; `quiet_repos` in the same shape for the tracked repos with no open milestone; and the
 configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
+
+## Why not something else
+
+Nothing off the shelf manages milestones across repositories. `gh` itself declined milestone
+support ([cli/cli#1200](https://github.com/cli/cli/issues/1200)), the `gh-milestone` extensions
+are single-repo CRUD with no rollover, and ZenHub, Linear, Plane and Huly replace milestones with
+planning objects of their own. A GitHub Project could mirror them, but its auto-add can't filter on
+milestone, and it would be a second record that drifts from the first.
+
+What it deliberately leaves out:
+
+- **No local state or cache.** Every command reads GitHub fresh, so nothing can go stale except
+  GitHub's own listings, which lag writes by a few seconds.
+- **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
+- **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
+  `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would
+  only split it in two.
 
 ## Development
 

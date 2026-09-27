@@ -17,7 +17,13 @@ from pathlib import Path
 
 from . import gh
 
-DEFAULT_BUCKETS = ["Needed soon", "Needed later", "Not urgent", "Upstream"]
+# MILESTONES.md says what each of these is for; keep its table in step with this list.
+DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
+
+# Buckets that exist only once something needs them: `setup` doesn't create one, `triage`
+# offers it anyway and creates it when it's picked, and `status` hides one with nothing
+# open on it, so that a quiet "Critical" doesn't say "all is well" at the top of the table.
+OPTIONAL_BUCKETS = {"Critical"}
 
 EXAMPLE_CONFIG = """\
 buckets = [%s]
@@ -83,7 +89,6 @@ KINDS = {
     "overdue": "Roll over or re-date — past due with work still open",
     "done": "Close — every issue on it is closed",
     "empty": "Delete or fill — nothing has ever been filed against it",
-    "buckets": "Run setup — the repo uses standing buckets but is missing these",
 }
 
 
@@ -109,16 +114,16 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
     return problems
 
 
-def missing_buckets(buckets: list[str], titles: set[str]) -> list[str]:
-    """The standing buckets a repo has adopted but does not have.
+def free_buckets(buckets: list[str], titles: set[str]) -> list[str]:
+    """The standing buckets a milestone in this repo could be renamed onto.
 
-    Using none of them is a choice — most repos don't need this much triage — so a
-    missing bucket is only a gap once at least one of the others is there to be
-    incomplete. Doubles as the list of titles a milestone can be renamed onto: the
-    buckets the repo already has are exactly the ones a rename would collide with.
+    That is the ones it hasn't got, since a rename onto one it has would collide. A repo
+    using none of them gets none: most repos don't need this much triage, and a rename is
+    no way to opt one in. A repo is free to use any subset, so what is left over here is
+    not a gap to fill.
     """
-    missing = [b for b in buckets if b not in titles]
-    return missing if missing != buckets else []
+    free = [b for b in buckets if b not in titles]
+    return free if free != buckets else []
 
 
 def parse_repo(text: str) -> str:
@@ -286,6 +291,10 @@ LATE, SOON, AHEAD, DISTANT = (fg(n) for n in (196, 208, 226, 244))
 # down there is coloured as a warning; the ramp is there to pick out the ones near the end.
 PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 
+# A standing bucket's title, by how urgent the work on it is — coloured only while it holds
+# some, so an empty "Needed soon" doesn't look like an alarm.
+BUCKET_COLORS = {"Critical": "1;" + LATE, "Needed soon": SOON, "Needed later": fg(151)}
+
 # Names for the org colours, so a config can say "pink" rather than 218. Pastels and mid
 # tones only: an owner's colour is an identity, not a rating, and it should not compete with
 # the DUE and % columns for the eye.
@@ -348,6 +357,10 @@ def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> di
         elif counts[key] > 1:
             colors[owners[key]] = next(palette)
     return colors
+
+
+def bucket_color(title: str, open_issues: int) -> str | None:
+    return BUCKET_COLORS.get(title) if open_issues else None
 
 
 def due_color(due: str | None, today: str) -> str | None:
@@ -438,8 +451,10 @@ def cmd_status(config, args):
     tracked, entries = fetch_milestones(config["repos"])
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
-        milestones.append((repo, m["title"], due, m["open"]["totalCount"],
-                           m["closed"]["totalCount"], m["url"]))
+        count = m["open"]["totalCount"]
+        if m["title"] in OPTIONAL_BUCKETS and m["title"] in config["buckets"] and not count:
+            continue
+        milestones.append((repo, m["title"], due, count, m["closed"]["totalCount"], m["url"]))
     milestones.sort(key=lambda m: sort_key(m[1], m[2], config["buckets"]))
     # A tracked repo with no open milestone has no row of its own, and so is invisible
     # here unless it is named; `discover` lists the config's repos in full.
@@ -481,7 +496,8 @@ def cmd_status(config, args):
                          if kind in r["flags"])
         rows.append((star(r["focus"]),
                      f"{paint(owner, orgs.get(owner))}/{name}",
-                     VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
+                     paint(VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
+                           bucket_color(r["title"], r["open"])),
                      paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
                      r["open"], r["closed"],
                      paint(f"{r['percent']}%", pct_color(r["closed"], r["open"] + r["closed"]))
@@ -507,21 +523,31 @@ def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
                             paginate=True)}
 
 
+def _ensure_bucket(repo: str, title: str, existing: dict[str, dict]) -> dict:
+    """The open milestone called `title`, creating or reopening it as needed."""
+    milestone = existing.get(title)
+    if milestone is None:
+        milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
+        print(f"created:  {title}")
+    elif milestone["state"] != "open":
+        # A closed bucket is invisible to status and the triage menu, so
+        # "it exists" is not good enough for a repair command.
+        milestone = gh.api(f"repos/{repo}/milestones/{milestone['number']}", method="PATCH",
+                           state="open")
+        print(f"reopened: {title}")
+    else:
+        print(f"exists:   {title}")
+    return milestone
+
+
 def cmd_setup(config, args):
     existing = _milestones_by_title(args.repo)
     for bucket in config["buckets"]:
-        milestone = existing.get(bucket)
-        if milestone is None:
-            gh.api(f"repos/{args.repo}/milestones", method="POST", title=bucket)
-            print(f"created:  {bucket}")
-        elif milestone["state"] != "open":
-            # A closed bucket is invisible to status and the triage menu, so
-            # "it exists" is not good enough for a repair command.
-            gh.api(f"repos/{args.repo}/milestones/{milestone['number']}", method="PATCH",
-                   state="open")
-            print(f"reopened: {bucket}")
-        else:
-            print(f"exists:   {bucket}")
+        # An optional bucket waits until triage needs it, unless it was made once already.
+        if bucket in OPTIONAL_BUCKETS and bucket not in existing:
+            print(f"later:    {bucket} (made the first time triage picks it)")
+            continue
+        _ensure_bucket(args.repo, bucket, existing)
 
 
 def cmd_rollover(config, args):
@@ -608,6 +634,12 @@ def cmd_triage(config, args):
             menus[repo] = sorted(
                 _milestones_by_title(repo, state="open").values(),
                 key=lambda m: sort_key(m["title"], m["due_on"], config["buckets"]))
+            # An optional bucket the repo hasn't got yet is offered anyway, with no number
+            # until it's picked and made — but only where the repo uses buckets at all.
+            open_titles = {m["title"] for m in menus[repo]}
+            menus[repo] += [{"title": b, "number": None}
+                            for b in free_buckets(config["buckets"], open_titles)
+                            if b in OPTIONAL_BUCKETS]
         choices = menus[repo]
 
         print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  (updated {issue['updated'][:10]})")
@@ -617,10 +649,14 @@ def cmd_triage(config, args):
         if issue["body"]:
             print(f"  > {excerpt(issue['body'])}")
         for i, m in enumerate(choices, 1):
+            if m["number"] is None:
+                print(f"  {i}) {m['title']} (new)")
+                continue
             due = f", due {m['due_on'][:10]}" if m["due_on"] else ""
             # REST open_issues counts PRs as well as issues, which is what we want here:
             # both are work sitting on that milestone.
-            print(f"  {i}) {m['title']} ({m['open_issues']} open{due})")
+            title = paint(m["title"], bucket_color(m["title"], m["open_issues"]))
+            print(f"  {i}) {title} ({m['open_issues']} open{due})")
         if not choices:
             print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
 
@@ -636,6 +672,11 @@ def cmd_triage(config, args):
                 continue
             if answer.isdigit() and 1 <= int(answer) <= len(choices):
                 chosen = choices[int(answer) - 1]
+                if chosen["number"] is None:
+                    # Swap in the real milestone, so the next issue here sees it as one. A
+                    # closed one of that name is reopened rather than duplicated.
+                    choices[int(answer) - 1] = chosen = _ensure_bucket(
+                        repo, chosen["title"], _milestones_by_title(repo))
                 gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
@@ -678,10 +719,8 @@ def cmd_assign(config, args):
         print(f"  {repo}#{number} → {args.milestone}")
 
 
-def issue_count(issues: int | None) -> str:
-    """"(3 issues)", and nothing at all where a count makes no sense."""
-    if issues is None:
-        return ""
+def issue_count(issues: int) -> str:
+    """"(3 issues)", "(1 issue)"."""
     return f"({issues} issue{'' if issues == 1 else 's'})"
 
 
@@ -692,8 +731,8 @@ def collect_findings(config) -> list[dict]:
     for repo, m in milestones:
         seen[repo].add(m["title"])
     # One answer per repo, settled before any finding is built: which standing buckets
-    # this repo is short of, and empty for a repo that uses none of them.
-    free = {repo: missing_buckets(config["buckets"], titles) for repo, titles in seen.items()}
+    # a milestone here could be renamed onto, and none for a repo that uses none of them.
+    free = {repo: free_buckets(config["buckets"], titles) for repo, titles in seen.items()}
 
     findings = []
     for repo, m in milestones:
@@ -704,12 +743,6 @@ def collect_findings(config) -> list[dict]:
                              "url": m["url"], "number": m["number"],
                              "free_buckets": free[repo],
                              "issues": m["open"]["totalCount"] + m["closed"]["totalCount"]})
-    for repo, missing in free.items():
-        if missing:
-            findings.append({"kind": "buckets", "repo": repo, "title": "(whole repo)",
-                             "detail": ", ".join(missing), "issues": None,
-                             "free_buckets": missing,
-                             "url": f"https://github.com/{repo}/milestones", "number": None})
     findings.sort(key=lambda f: (list(KINDS).index(f["kind"]), f["repo"], f["title"]))
     return findings
 
@@ -896,9 +929,6 @@ def walk_findings(config, findings: list[dict]) -> None:
             options.append(("c", "close it", close_it))
         if kind == "empty":
             options.append(("d", "delete it", delete_it))
-        if kind == "buckets":
-            options.append(("b", "create the missing buckets",
-                            lambda: cmd_setup(config, argparse.Namespace(repo=repo))))
         options += [("o", "open", open_it), ("s", "skip", lambda: None),
                     ("q", "quit", lambda: QUIT)]
 
