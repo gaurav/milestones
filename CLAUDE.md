@@ -40,6 +40,16 @@ milestones are used. It is written for agents working in *other* repos, so keep 
 detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
 `test_milestones_md_lists_the_default_buckets` catches a table that has fallen behind the list.
 
+`assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
+coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
+pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
+only write that never closes or deletes anything, which is what makes that safe. A PR ref is
+accepted on purpose — the issues endpoint sets a PR's milestone too — but `triage --list` never
+lists one. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
+"Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —
+it hands the program an EOF before the answer, so `ask()` aborts whatever you send.
+
+
 Buckets are per repo, and a repo may use any subset of them: nothing here treats a missing
 bucket as a problem. `free_buckets` is the configured buckets a repo hasn't got, and nothing at all
 for a repo that has none of them. It is only the walk's rename targets — the buckets a repo already
