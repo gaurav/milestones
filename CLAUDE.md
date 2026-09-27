@@ -59,6 +59,10 @@ checks `readline.__doc__` for "libedit" and binds `^I rl_complete` instead. The 
 the whole line buffer (delimiters set to none), since titles have spaces. Nothing of this reaches a
 piped run, which `input()` reads plainly.
 
+The `triage` walk ends on `triage_summary`, printed from a `finally` so that a `q`, a ^C in
+`ask` or a failed write still says what got written. It reads the walk's `done` log, so a new
+write in the walk needs an entry there, or the summary will under-report it.
+
 `check -i` reads single keypresses, but falls back to whole lines when stdin is not a tty, so
 `printf 's\ns\ne\n2026-09-03\nq\n' | milestones check -i` drives it end to end. Its findings
 are collected once up front and one milestone can raise several, so anything a walk does to a

@@ -77,7 +77,10 @@ milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
                                          # --prs walks the pull requests instead;
                                          # --list prints them instead, one per line
                                          # (OWNER/NAME#N  title  [labels]), focused repos
-                                         # first then freshest; --json likewise
+                                         # first then freshest; --json likewise. A walk
+                                         # opens with how many it found where, and ends —
+                                         # on q, ^C or an error too — on what it assigned,
+                                         # skipped, created and left to do
 milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
                                          # put issues on the milestone of that title in
                                          # each of their repos; REF is OWNER/NAME#N or an
