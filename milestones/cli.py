@@ -836,6 +836,80 @@ def closes_line(closes: list[dict]) -> str:
         return c["milestone"] or "no milestone"
     return "closes " + ", ".join(f"#{c['number']} ({where(c)})" for c in closes)
 
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def triage_scope(items: list[dict], noun: str, repo: str | None,
+                 tracked: int) -> tuple[str, str]:
+    """What a walk covers, as (the phrase the summary repeats, the per-repo counts only the
+    opening line adds): ("11 PRs without a milestone in https://github.com/a/b", "")."""
+    what = f"{plural(len(items), noun) if items else 'no ' + noun + 's'} without a milestone"
+    if repo:
+        return f"{what} in {repo_url(repo)}", ""
+    counts = Counter(i["repo"] for i in items)  # first-seen order, which is the walk's
+    if not counts:
+        return f"{what} in {plural(tracked, 'tracked repo')}", ""
+    return (f"{what} in {len(counts)} of {plural(tracked, 'tracked repo')}",
+            ", ".join(f"{r} ({c})" for r, c in counts.items()))
+
+
+def by_title(entries: list[tuple[str, str]]) -> str:
+    """" to Needed soon" for (ref, title) pairs on one milestone, ": 4 to Needed soon, 2 to
+    v1.2" for several, most first — what follows "Assigned 6"."""
+    counts = Counter(title for _, title in entries).most_common()
+    if len(counts) == 1:
+        return f" to {counts[0][0]}"
+    return ": " + ", ".join(f"{c} to {t}" for t, c in counts)
+
+
+def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[str],
+                   rerun: str) -> list[str]:
+    """The lines a walk ends on, however it ends: what it covered, what it wrote, and what
+    is still to do. `done` is the walk's log, a list per kind of thing that happened."""
+    lines = [f"Of {scope}:"]
+    assigned = done["assigned"]
+    lines.append(f"Assigned {len(assigned)}{by_title(assigned)}" if assigned else "Assigned none")
+    if done["carried"]:
+        lines.append(f"Also assigned {plural(len(done['carried']), 'issue')} they close"
+                     f"{by_title(done['carried'])}")
+    if done["passed"]:
+        lines.append(f"Passed over {len(done['passed'])} already assigned with the PR "
+                     "that closes them")
+    if done["priority"]:
+        counts = Counter(name for _, name in done["priority"])
+        lines.append(f"Set priority on {len(done['priority'])}: " + ", ".join(
+            f"{counts[name]} {name}" for name in PRIORITY_KEYS.values() if name in counts))
+    for ref, reason in done["unprioritised"]:
+        lines.append(f"Priority not set on {ref}: {reason}")
+    shown = 5
+    if done["skipped"]:
+        refs = done["skipped"]
+        lines.append(f"Skipped {len(refs)}: " + ", ".join(refs[:shown])
+                     + (f" and {len(refs) - shown} more" if len(refs) > shown else ""))
+    decided = len(assigned) + len(done["skipped"]) + len(done["passed"])
+    if decided < total:
+        lines.append(f"Stopped at {decided + 1} of {total}, "
+                     f"with {total - decided} left undecided")
+    for repo, title in done["created"]:
+        # A bucket needs no date; anything else created here will be `check`'s `undated`.
+        undated = "" if title in buckets else " (undated: `milestones check` will ask for a date)"
+        lines.append(f"Created {title} in {repo}{undated}")
+    for repo, title in done["reopened"]:
+        lines.append(f"Reopened {title} in {repo}")
+    for (title, url, where), count in Counter(done["unordered"]).items():
+        lines.append(f"Not moved {count} to the {where} of {title}: GitHub has no API for "
+                     f"that (gaurav/milestones#25), so drag {'it' if count == 1 else 'them'} "
+                     f"at {url}")
+    lines += [f"Priority failed on {ref}: {message}" for ref, message in done["failed"]]
+    left = total - len(assigned) - len(done["passed"])
+    if left:
+        # Listings lag writes by up to ~10s, so a rerun straight away can offer again
+        # what this one just assigned.
+        lag = ", after ~10s for GitHub to catch up" if assigned else ""
+        lines.append(f"{left} still without a milestone: `{rerun}` walks them again{lag}")
+    return [lines[0]] + [f"  - {line}" for line in lines[1:]]
+
 
 def cmd_triage(config, args):
     issues = fetch_untriaged(config, args.repo, "pr" if args.prs else "issue")

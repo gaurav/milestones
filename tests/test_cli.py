@@ -15,7 +15,8 @@ from milestones.cli import (
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, untriaged_counts, visible,
+    print_findings, print_table, read_key, sort_key, triage_scope, triage_summary,
+    untriaged_counts, visible,
     write_repo_list,
 )
 
@@ -504,3 +505,59 @@ def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
     # A PR is the same record with a `pull_request` key; `draft` rides along on it.
     assert _norm_issue({**base, "pull_request": {}, "draft": True}, "a/b")["draft"] is True
     assert _norm_issue({**base, "pull_request": {}}, "a/b")["pr"] is True
+
+
+def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
+    items = [{"repo": "B/two"}, {"repo": "A/one"}, {"repo": "B/two"}]
+    assert triage_scope(items, "PR", "A/one", 9) == (
+        "3 PRs without a milestone in https://github.com/A/one", "")
+    assert triage_scope(items, "issue", None, 9) == (
+        "3 issues without a milestone in 2 of 9 tracked repos", "B/two (2), A/one (1)")
+    assert triage_scope([], "issue", None, 1) == (
+        "no issues without a milestone in 1 tracked repo", "")
+
+
+def _done(**entries):
+    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+                                "failed", "skipped", "created", "reopened", "unordered")}
+    return done | entries
+
+
+def test_triage_summary_counts_by_milestone_and_says_what_is_left():
+    done = _done(assigned=[("A/one#1", "Needed soon"), ("A/one#2", "v1.2"),
+                           ("A/one#3", "Needed soon")],
+                 carried=[("A/one#9", "v1.2")],
+                 priority=[("A/one#1", "Low"), ("A/one#3", "Urgent"), ("A/one#9", "Low")],
+                 skipped=["A/one#4"],
+                 created=[("A/one", "v1.2"), ("A/one", "Critical")],
+                 unordered=[("v1.2", "https://x/1", "top")])
+    assert triage_summary("7 PRs without a milestone in X", 7, done, ["Critical"],
+                          "milestones triage --prs") == [
+        "Of 7 PRs without a milestone in X:",
+        "  - Assigned 3: 2 to Needed soon, 1 to v1.2",
+        "  - Also assigned 1 issue they close to v1.2",
+        # In the keys' order, Urgent first, not in the order they were set.
+        "  - Set priority on 3: 1 Urgent, 2 Low",
+        "  - Skipped 1: A/one#4",
+        "  - Stopped at 5 of 7, with 3 left undecided",
+        "  - Created v1.2 in A/one (undated: `milestones check` will ask for a date)",
+        "  - Created Critical in A/one",
+        "  - Not moved 1 to the top of v1.2: GitHub has no API for that "
+        "(gaurav/milestones#25), so drag it at https://x/1",
+        "  - 4 still without a milestone: `milestones triage --prs` walks them again, "
+        "after ~10s for GitHub to catch up",
+    ]
+
+
+def test_triage_summary_of_a_walk_that_assigned_nothing_or_everything():
+    skipped = [f"A/one#{n}" for n in range(1, 8)]
+    assert triage_summary("7 issues", 7, _done(skipped=skipped), [], "milestones triage") == [
+        "Of 7 issues:",
+        "  - Assigned none",
+        "  - Skipped 7: A/one#1, A/one#2, A/one#3, A/one#4, A/one#5 and 2 more",
+        # No lag to wait out when nothing was written.
+        "  - 7 still without a milestone: `milestones triage` walks them again",
+    ]
+    done = _done(assigned=[("A/one#1", "Upstream"), ("A/one#2", "Upstream")])
+    assert triage_summary("2 issues", 2, done, [], "milestones triage") == [
+        "Of 2 issues:", "  - Assigned 2 to Upstream"]
