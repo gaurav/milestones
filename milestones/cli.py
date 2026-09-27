@@ -229,6 +229,21 @@ def ask(prompt: str) -> str:
         sys.exit("\nAborted.")
 
 
+# A walk answer: a menu number or `c`, then at most one modifier — "2", "12!", "c-".
+ANSWER_RE = re.compile(r"(\d+|c)([\^$!+-]?)")
+
+# What each modifier means. The order ones are parsed so the grammar is settled, but
+# GitHub has no API that writes a milestone's manual order, so they only say so.
+PRIORITY_KEYS = {"!": "Urgent", "+": "High", "-": "Low"}
+ORDER_KEYS = {"^": "top", "$": "bottom"}
+
+
+def parse_answer(text: str) -> tuple[str, str] | None:
+    """(choice, suffix) from a walk answer, or None for anything that isn't an assignment."""
+    match = ANSWER_RE.fullmatch(text.strip().lower())
+    return (match[1], match[2]) if match else None
+
+
 def complete_titles(titles: list[str], text: str) -> list[str]:
     """The titles that start with what has been typed so far, ignoring case, in order."""
     return [t for t in titles if t.lower().startswith(text.lower())]
@@ -898,21 +913,27 @@ def cmd_triage(config, args):
                 webbrowser.open(issue["url"])
                 continue
             chosen = None
-            if answer == "c":
+            parsed = parse_answer(answer)
+            choice, suffix = parsed if parsed else ("", "")
+            if choice == "c":
                 chosen = custom(repo, choices)
                 if chosen is None:
                     continue
-            elif answer.isdigit() and 1 <= int(answer) <= len(choices):
-                chosen = choices[int(answer) - 1]
+            elif choice.isdigit() and 1 <= int(choice) <= len(choices):
+                chosen = choices[int(choice) - 1]
                 if chosen["number"] is None:
                     # Swap in the real milestone, so the next issue here sees it as one. A
                     # closed one of that name is reopened rather than duplicated.
-                    choices[int(answer) - 1] = chosen = _ensure_bucket(
+                    choices[int(choice) - 1] = chosen = _ensure_bucket(
                         repo, chosen["title"], _milestones_by_title(repo))
             if chosen is not None:
                 gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                        milestone=chosen["number"])
                 print(f"  → {chosen['title']}")
+                if suffix in ORDER_KEYS:
+                    # Parsed on purpose, so the grammar is settled before the API exists.
+                    print(f"  (not moved to the {ORDER_KEYS[suffix]}: GitHub has no API for "
+                          f"a milestone's order — drag it at {chosen['html_url']})")
                 # A PR is triaged for the issues it closes too: an open one with no
                 # milestone goes where the PR goes, and one already placed is left alone.
                 for c in issue.get("closes") or []:

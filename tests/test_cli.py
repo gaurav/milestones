@@ -9,7 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
-    closes_line, complete_titles,
+    closes_line, complete_titles, parse_answer,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -467,3 +467,13 @@ def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():
     assert complete_titles(titles, "N") == ["Needed soon", "Not urgent"]
     assert complete_titles(titles, "") == titles
     assert complete_titles(titles, "v1") == []
+
+
+def test_parse_answer_splits_a_choice_from_its_one_modifier():
+    assert parse_answer("2") == ("2", "")
+    assert parse_answer("12!") == ("12", "!")
+    assert parse_answer(" C- ") == ("c", "-")
+    assert parse_answer("2^") == ("2", "^")
+    assert parse_answer("c$") == ("c", "$")
+    for other in ["s", "o", "q", "", "2!!", "!2", "x", "2 3"]:
+        assert parse_answer(other) is None, other
