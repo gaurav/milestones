@@ -1,7 +1,8 @@
 # How milestones are used
 
 This is how my repositories use GitHub milestones. It is written for anyone working on one of them,
-human collaborators and coding agents alike.
+human collaborators and coding agents alike. [`milestones`](README.md) is the tool that keeps it
+tidy across all of them, but nothing here depends on it.
 
 A repository has two kinds of milestone: **standing buckets**, which say how urgent an issue is and
 are never closed, and **release or deadline milestones**, which say when an issue has to be done by
@@ -65,6 +66,11 @@ right one is clear: it is plainly critical, or it is needed for a particular rel
 is fine to leave it without one. Triage (`milestones triage`) works through issues that have no
 milestone, so it will be picked up in time. A guessed milestone is harder to spot than a missing
 one.
+
+A pull request is work already under way, so it always belongs on a milestone, and it stands in for
+the issues it closes: an open issue a pull request closes goes on the same milestone as the pull
+request if it has no milestone yet. One that already has a milestone keeps it, since that was
+somebody's decision; say so if the two look inconsistent rather than moving it.
 
 ## For coding agents
 
