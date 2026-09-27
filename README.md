@@ -78,12 +78,14 @@ milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
                                          # --list prints them instead, one per line
                                          # (OWNER/NAME#N  title  [labels]), focused repos
                                          # first then freshest; --json likewise
-milestones assign MILESTONE [REF ...]    # put issues on the milestone of that title in
+milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
+                                         # put issues on the milestone of that title in
                                          # each of their repos; REF is OWNER/NAME#N or an
                                          # issue URL, or read from stdin one per line — a
                                          # `triage --list` line works as-is. Confirms on a
                                          # terminal; a repo without that milestone is
-                                         # skipped, not fatal
+                                         # skipped, not fatal. --priority also sets the
+                                         # organisation's Priority field, where there is one
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -187,7 +189,9 @@ milestones triage --list --repo NCATSTranslator/Babel | grep -i duckdb | milesto
 `assign` resolves the title in each issue's repo, so one command puts issues from several repos
 onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
-is the answer. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
+is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
+one item: the organisation's Priority field is set on each issue after its milestone, skipped with
+a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
 after an `assign` can still show what was just moved — re-running is harmless.
 
 ### Triaging pull requests

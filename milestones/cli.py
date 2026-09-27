@@ -1035,16 +1035,36 @@ def cmd_assign(config, args):
     todo = [(r, n) for r, n in refs if r in targets]
     if not todo:
         sys.exit("Nothing to assign.")
+    # --priority is the walk's ! + - for a pipeline: the organisation's Priority field,
+    # resolved per owner before any write, and skipped with a word where there is none.
+    priority: dict[str, tuple[str, str] | None] = {}
+    if args.priority:
+        key = {name.lower(): k for k, name in PRIORITY_KEYS.items()}[args.priority]
+        for owner in {repo.split("/")[0] for repo in targets}:
+            options = fetch_priority_field(owner)
+            priority[owner] = options and options[key]
+            if not options:
+                print(f"skipping priority for {owner}: no Priority field with Urgent, High "
+                      f"and Low options")
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
-          f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'")
+          f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
+          + (f", priority {PRIORITY_KEYS[key]}" if args.priority else ""))
     # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
     # script, there is no tty to answer from, and a milestone is a reversible field that
     # never closes or deletes anything.
     if sys.stdin.isatty() and ask("Proceed? [y/N] ").strip().lower() != "y":
         sys.exit("Aborted.")
     for repo, number in todo:
-        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
-        print(f"  {repo}#{number} → {args.milestone}")
+        issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        note = ""
+        field = priority.get(repo.split("/")[0])
+        if field and "pull_request" in issue:
+            note = "  (a PR has no fields; priority not set)"
+        elif field:
+            # After the milestone, so a failed field write can't lose the assignment.
+            set_priority(issue["node_id"], *field)
+            note = f", priority {PRIORITY_KEYS[key]}"
+        print(f"  {repo}#{number} → {args.milestone}{note}")
 
 
 def cmd_prs(config, args):
@@ -1548,6 +1568,8 @@ def main():
                         help="milestone title, resolved in each issue's repo")
     assign.add_argument("refs", metavar="REF", nargs="*",
                         help="OWNER/NAME#N or an issue URL; none, to read them from stdin")
+    assign.add_argument("--priority", choices=[n.lower() for n in PRIORITY_KEYS.values()],
+                        help="also set the organisation's Priority field on each issue")
     assign.set_defaults(func=cmd_assign)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
