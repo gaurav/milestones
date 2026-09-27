@@ -63,9 +63,12 @@ Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`
 ```sh
 milestones status [--json]               # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
-                                         # due date, with open/closed counts and % done;
-                                         # flags !OVERDUE, (empty) and (done), links each,
-                                         # then names any tracked repo with nothing open.
+                                         # due date, with open/closed issue counts, open
+                                         # PRs and % done; flags !OVERDUE, (empty) and
+                                         # (done), links each, then names any tracked repo
+                                         # with nothing open, says how many closed
+                                         # milestones still hold open work, and counts the
+                                         # issues and PRs in each repo with no milestone.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
@@ -106,6 +109,7 @@ milestones prs [--assigned] [--review-requested] [--mentions] [--json]
                                          # PRs assigned to you, awaiting your review, or
                                          # mentioning you
 milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
+                                         # closed milestones with work still on them, and
                                          # milestones to rename, date, close, delete or
                                          # roll over.
                                          # -i then walks the list and applies your answers;
@@ -125,7 +129,7 @@ milestones ignore REPO|OWNER [...]       # hide repos from discover without trac
 `check` reports only; every finding carries the milestone's URL, so a fix is one click away.
 `--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
 to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
-the start of next month, close, delete or roll over — plus open, skip and quit. Once
+the start of next month, close, delete, roll over, or reopen — plus open, skip and quit. Once
 you type a date of your own, the fourth date slot offers that date back for the rest of the session
 (the one you have typed most often, most recent winning ties), since a run of milestones usually
 wants the same day — "after the project meeting" is one keypress each after the first. A single
@@ -133,7 +137,11 @@ keypress acts immediately; the fixes that need more (a new title, a typed date, 
 onto) then ask, and take blank as "skip". A milestone is well-formed if it is one of the repo's
 standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
-to roll over.
+to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
+else can see that work, since `status` shows open milestones and `triage` only what has no
+milestone at all, so `check` leads with those and offers to roll the work onto a milestone that is
+open, or to reopen the closed one. Pull requests count as work on a milestone throughout, so a
+milestone whose issues are all closed but whose PRs are still open is not `(done)`.
 
 Owning a repo is not the same as triaging it, and `discover` searches by owner, so most of what it
 turns up is someone else's to manage. `ignore` is the third state beside tracked and untracked:
@@ -182,6 +190,17 @@ refs on the command line at a terminal it asks first; fed from a pipe it doesn't
 is the answer. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
 after an `assign` can still show what was just moved — re-running is harmless.
 
+### Triaging pull requests
+
+A pull request is work already under way, so every open one belongs on a milestone, and
+`triage --prs` walks the ones that haven't got one (`--list` and `--json` take `--prs` too).
+Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where they are:
+`closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
+closes that has no milestone on the same one, since the PR stands in for them; an issue already
+placed is left where it is. For a PR that needs a closer look, `o` opens it in the browser and `s`
+leaves it untriaged, so it comes round again next run. `milestones prs` is the wider view: every
+open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
+
 ### Reading the status table
 
 The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured
@@ -205,9 +224,11 @@ just one somebody has only started. An undated milestone stays plain, for the sa
 Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
 `milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a
 script — or a coding agent — `milestones status --json` prints the same data as JSON:
-`milestones` with `repo`, `title`, `due`, `open`, `closed`, `percent`, `flags`, `focus` and
-`url`; `quiet_repos` in the same shape for the tracked repos with no open milestone; and the
-configured `focus` list itself. `milestones check --json` does the same for the findings, with
+`milestones` with `repo`, `title`, `due`, `open`, `closed`, `open_prs`, `closed_prs`,
+`percent`, `flags`, `focus` and `url` (`open` and `closed` are issues, as GitHub counts them, and
+`percent` is over issues and PRs together); `quiet_repos` in the same shape for the tracked repos
+with no open milestone; `stranded`, the closed milestones with open work still on them; `untriaged`,
+the per-repo counts of issues and PRs with no milestone; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
 
 ## Why not something else

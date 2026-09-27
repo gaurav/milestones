@@ -29,6 +29,11 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
   `gh.graphql`'s `partial_ok`.
+- A PR's `closingIssuesReferences` is GraphQL-only, so the PR walk fetches it in one aliased
+  query per fifty PRs, `pN: pullRequest(number: N)` under each repo alias; a PR that has gone
+  since the search comes back null with a partial error, which `gh.graphql` keeps. Editing a PR
+  body updates its references within seconds, but bumps its `updated_at`, which reorders a
+  freshest-first walk — mind that when driving one from a pipe.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it

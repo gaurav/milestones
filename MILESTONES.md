@@ -67,6 +67,9 @@ is fine to leave it without one. Triage (`milestones triage`) works through issu
 milestone, so it will be picked up in time. A guessed milestone is harder to spot than a missing
 one.
 
+A pull request is work already under way, so it always belongs on a milestone, and it stands in for
+the issues it closes: an issue a pull request closes goes on the same milestone as the pull request.
+
 ## For coding agents
 
 - Set a milestone on an issue when the right one is clear. When it isn't, leave the issue without
