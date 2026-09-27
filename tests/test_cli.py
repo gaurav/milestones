@@ -9,7 +9,7 @@ import pytest
 
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
-    closes_line, complete_titles, parse_answer, priority_options,
+    _norm_issue, closes_line, complete_titles, parse_answer, priority_options,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -494,3 +494,13 @@ def test_priority_options_needs_the_whole_single_select_priority_field():
     assert priority_options([field("Priority", ["High", "Low"])]) is None
     assert priority_options([{"__typename": "IssueFieldText", "id": "F", "name": "Priority"}]) is None
     assert priority_options([]) is None
+
+
+def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
+    base = {"number": 7, "title": "T", "body": None, "labels": [{"name": "bug"}],
+            "updated_at": "2026-09-27T00:00:00Z", "html_url": "u", "node_id": "I_x"}
+    issue = _norm_issue(base, "a/b")
+    assert (issue["pr"], issue["draft"], issue["labels"], issue["id"]) == (False, False, ["bug"], "I_x")
+    # A PR is the same record with a `pull_request` key; `draft` rides along on it.
+    assert _norm_issue({**base, "pull_request": {}, "draft": True}, "a/b")["draft"] is True
+    assert _norm_issue({**base, "pull_request": {}}, "a/b")["pr"] is True

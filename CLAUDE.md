@@ -115,7 +115,10 @@ whatever table came last, so `ignore` would read back as `colors.ignore`. Keep n
 top-level and this keeps working; a new `[table]` of your own goes after every scalar key.
 
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
-symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable.
+symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable. This is not
+optional when piping answers into `check -i` or `triage`: findings and items are ordered across
+every tracked repo, so a keypress meant for a scratch milestone in `gaurav/milestones` lands on
+whichever repo sorts first. One such run reopened a closed Babel milestone and rolled 27 issues.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
 the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its
