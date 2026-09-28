@@ -24,11 +24,15 @@ uv tool install --editable .
 
 That puts a `milestones` command on your PATH running the code in this working tree, so edits to the source take effect immediately; re-run it only if the dependencies or the entry point change. To run it out of the checkout without installing, prefix every command below with `uv run`.
 
-Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write to it,
-and they rewrite just the `repos` list):
+Create `~/.config/milestones.toml` by hand. The commands that change it (`add`, `remove`,
+`focus`, `unfocus`, `ignore` and `discover --ignore-remaining`) each rewrite the one list they
+own and leave the rest of the file alone:
 
 ```toml
-buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
+# Optional: this is the default, so most configs leave it out. A list written here
+# doesn't grow when the default does, so a bucket added later ("Needs triage" was
+# one) has to be added here by hand too, or the tool treats it as any other milestone.
+buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream", "Needs triage"]
 
 repos = [
   "gaurav/milestones",
@@ -57,6 +61,35 @@ phyloref = "yellow"
 
 Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`, `yellow`,
 `green`, `rose`, `pink` and `grey`; a 256-colour number from 0 to 255 works too.
+
+## First run
+
+Every command is described below; this is the order they are useful in.
+
+1. **Find your repos.** Put one or two in `repos` by hand, then `milestones discover` lists what
+   else you own that has issues or milestones. `milestones add OWNER/NAME` tracks one, and
+   `milestones ignore OWNER/NAME` (or a bare `OWNER`) hides what is not yours to triage, so the
+   next `discover` only shows what is new.
+2. **Give each repo its buckets.** `milestones setup OWNER/NAME` creates the standing buckets in
+   a repo, and is safe to run again. Skip it for a repo that doesn't need that much triage: the
+   rest of the tool treats a repo without buckets, or with only some, as fine.
+3. **Triage.** `milestones triage` walks every open issue with no milestone, then everything
+   parked on `Needs triage`, one keypress each; `milestones triage --prs` does the pull requests.
+   For a backlog, `triage --list` piped through `grep` or `fzf` into `milestones assign` does
+   hundreds at once ([below](#triaging-in-bulk)).
+4. **Look.** `milestones status` (bare `milestones` too) is the table to keep open: every open
+   milestone across your repos by due date, and at the bottom what is still untriaged.
+   `milestones focus OWNER/NAME` stars the repos you are working on this week.
+5. **Tidy.** `milestones check` says what is wrong with the milestones themselves — undated,
+   misnamed, empty, done, or closed with work still on them — and `check -i` fixes each with a
+   keypress.
+6. **Release.** When a release goes out, `milestones rollover OWNER/NAME "v1.2" "v1.3" --close`
+   moves what didn't make it onto the next milestone and closes the old one; `triage --from
+   "v1.2"` is the same job one issue at a time, for when they shouldn't all go the same way.
+
+[MILESTONES.md](MILESTONES.md) is the other half: what the buckets mean and how a release is
+put together. It is written for the people and coding agents working in the repos themselves,
+so it says nothing about this tool.
 
 ## Commands
 
@@ -202,8 +235,9 @@ clearer where each belongs. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
 is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
 one item: the organisation's Priority field is set on each issue after its milestone, skipped with
-a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
-after an `assign` can still show what was just moved — re-running is harmless.
+a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags
+writes by a few seconds, so a `--list` straight after an `assign` can still show what was just
+moved — re-running is harmless.
 
 ### Parking, and re-triaging a milestone
 
@@ -240,12 +274,15 @@ open one is used as it is, a closed one is reopened and a new one created, each 
 milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
 open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
-An answer takes one modifier after the number (or after `c`), regex-style. `2!` assigns milestone
-2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority is an organisation
-issue field, so the keys are offered only where the repo's owner has a single-select `Priority`
-field with those option names, and since a pull request has no fields a PR's priority goes onto
-the open issues it closes. `2^` and `2$`, for the top and bottom of the milestone's order, are
-parsed and refused: GitHub has no API that writes that order
+### Priority and order
+
+An answer in either walk takes one modifier after the number (or after `c`), regex-style. `2!`
+assigns milestone 2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority
+is an organisation issue field, so the keys are offered only where the repo's owner has a
+single-select `Priority` field with those option names, and since a pull request has no fields a
+PR's priority goes onto the open issues it closes. `assign --priority urgent|high|low` is the same
+thing for a pipeline. `2^` and `2$`, for the top and bottom of the milestone's order, are parsed
+and refused: GitHub has no API that writes that order
 ([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
 links to it for dragging by hand.
 
@@ -255,8 +292,10 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
-A bucket with work on it is coloured by urgency: `Critical` bold red, `Needed soon` orange,
-`Needed later` light green. `Critical` is optional — `setup` leaves it to `triage` to create, and
+A bucket with work on it is coloured too: the urgency levels run down the same ramp, `Critical`
+bold red, `Needed soon` orange, `Needed later` light green and `Not urgent` grey, and the two that
+are states rather than levels sit off it, `Upstream` teal and `Needs triage` magenta. An empty
+bucket stays plain, so a quiet `Needed soon` reads as quiet. `Critical` is optional — `setup` leaves it to `triage` to create, and
 `status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
