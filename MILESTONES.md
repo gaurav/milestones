@@ -17,11 +17,20 @@ and are closed once everything on them is. Every issue should end up on one or t
 | `Needed later` | Wanted, but can wait until the soon work is done.                                     |
 | `Not urgent`   | Worth doing some day. Nobody is waiting on it.                                        |
 | `Upstream`     | Belongs to an upstream data or code source. Finalise it here, then report it there.   |
+| `Needs triage` | Seen, but can't be placed yet: needs a reproduction, tests, or an investigation first. |
 
 `Needed soon`, `Needed later` and `Not urgent` are for work that can be put aside for now, and they
 run in decreasing urgency. `Critical` is the exception: an issue there has to be fixed before the
 next release. `Upstream` is not a level of urgency. It is for issues that are only fully resolved
 once someone else fixes their data or code.
+
+`Needs triage` is not a level of urgency either. It is for an issue somebody has looked at and
+could not place: not until it has been reproduced, or a question about it answered, or its scope
+talked through. That is different from an issue with no milestone, which nobody has looked at
+yet (see [below](#issues-with-no-milestone)). Sometimes it just means a person set it without
+knowing that no milestone would have said the same thing, and that is fine: triage covers both.
+If you put an issue there, say in a comment what has to be found out first, so that the next
+person to look knows where to start.
 
 Buckets are undated. A bucket gets a due date only while it is urgent — say, when upstream sources
 need contacting by a certain day — and loses it again once the urgent work is done. A bucket still
@@ -63,9 +72,9 @@ milestone rather than staying on a closed one.
 
 Eventually every issue should be on a milestone. An issue gets one when it is filed only if the
 right one is clear: it is plainly critical, or it is needed for a particular release. Otherwise it
-is fine to leave it without one. Triage (`milestones triage`) works through issues that have no
-milestone, so it will be picked up in time. A guessed milestone is harder to spot than a missing
-one.
+is fine to leave it without one. Triage (`milestones triage`) works through the issues that have
+no milestone, and then the ones on `Needs triage`, so either will be picked up in time. A guessed
+milestone is harder to spot than a missing one.
 
 A pull request is work already under way, so it always belongs on a milestone, and it stands in for
 the issues it closes: an open issue a pull request closes goes on the same milestone as the pull
@@ -74,8 +83,11 @@ somebody's decision; say so if the two look inconsistent rather than moving it.
 
 ## For coding agents
 
-- Set a milestone on an issue when the right one is clear. When it isn't, leave the issue without
-  one.
+- Set a milestone on an issue when the right one is clear. When you have looked and it needs a
+  reproduction, tests or an investigation before it can be placed, put it on `Needs triage` where
+  the repository has that bucket, with a comment saying what has to be found out. When you
+  haven't looked, leave the issue without one.
+- Never move an issue off `Needs triage` unless the right milestone has become clear.
 - Never close, delete or rename a standing bucket.
 - Suggest due-date changes; don't make them. The same goes for closing a release milestone outside
   of a release.

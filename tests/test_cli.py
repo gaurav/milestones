@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, TRIAGE_BUCKET,
+    bucket_color, build_search_queries,
     _norm_issue, carries, closes_line, complete_titles, parse_answer, priority_options,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
@@ -321,6 +322,16 @@ def test_due_color_bands():
     assert due_color("2026-09-16", today) == AHEAD
     assert due_color("2026-10-08", today) == AHEAD      # exactly 30 days
     assert due_color("2026-10-09", today) == DISTANT
+
+
+def test_bucket_color_covers_every_default_bucket_only_while_it_holds_work():
+    # Every standing bucket has a colour, so a row is never plain by accident; an empty one is
+    # plain on purpose, so that a quiet "Needed soon" reads as quiet.
+    assert all(bucket_color(b, 1) for b in DEFAULT_BUCKETS)
+    assert not any(bucket_color(b, 0) for b in DEFAULT_BUCKETS)
+    # Needs triage is a state, not a level of urgency, so it is off the due-date ramp.
+    assert bucket_color(TRIAGE_BUCKET, 1) not in {"1;" + LATE, LATE, SOON, AHEAD, DISTANT}
+    assert bucket_color("Some release v1.2", 5) is None
 
 
 def test_pct_color_ramps_up_from_halfway():

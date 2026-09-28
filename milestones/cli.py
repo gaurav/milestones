@@ -17,8 +17,16 @@ from pathlib import Path
 
 from . import gh
 
+# The one bucket the triage walk reads from as well as writes to: an issue on it has been
+# looked at and can't be placed yet — it needs a reproduction, tests, an investigation or a
+# discussion first — where an issue with no milestone is one nobody has looked at. Sometimes a
+# person sets it not knowing that no milestone means the same thing; that is harmless, since
+# `triage` walks both. It is last in the list so that it sorts after the urgency buckets.
+TRIAGE_BUCKET = "Needs triage"
+
 # MILESTONES.md says what each of these is for; keep its table in step with this list.
-DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
+DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream",
+                   TRIAGE_BUCKET]
 
 # Buckets that exist only once something needs them: `setup` doesn't create one, `triage`
 # offers it anyway and creates it when it's picked, and `status` hides one with nothing
@@ -376,9 +384,13 @@ LATE, SOON, AHEAD, DISTANT = (fg(n) for n in (196, 208, 226, 244))
 # down there is coloured as a warning; the ramp is there to pick out the ones near the end.
 PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 
-# A standing bucket's title, by how urgent the work on it is — coloured only while it holds
-# some, so an empty "Needed soon" doesn't look like an alarm.
-BUCKET_COLORS = {"Critical": "1;" + LATE, "Needed soon": SOON, "Needed later": fg(151)}
+# A standing bucket's title — coloured only while it holds work, so an empty "Needed soon"
+# doesn't look like an alarm. The urgency levels run down the same ramp as due dates, red to
+# orange to green, and then grey for work nobody is waiting on. The other two are states, not
+# levels, so they sit off that ramp: teal for work that is someone else's to finish, magenta
+# for work nobody has been able to place yet.
+BUCKET_COLORS = {"Critical": "1;" + LATE, "Needed soon": SOON, "Needed later": fg(151),
+                 "Not urgent": DISTANT, "Upstream": fg(74), TRIAGE_BUCKET: fg(170)}
 
 # Names for the org colours, so a config can say "pink" rather than 218. Pastels and mid
 # tones only: an owner's colour is an identity, not a rating, and it should not compete with
