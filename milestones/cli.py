@@ -310,18 +310,24 @@ def sort_key(title: str, due_on: str | None, buckets: list[str]):
     return (2, "", title)
 
 
-def build_search_queries(repos: list[str], cap: int = 256,
-                         kind: str | None = "issue") -> list[str]:
+def build_search_queries(repos: list[str], cap: int = 256, kind: str | None = "issue",
+                         milestone: str | None = None) -> list[str]:
     """Queries covering every configured repo, each under GitHub's 256-char cap.
 
     Scoped by repo rather than by owner: an owner's unconfigured repos would
     otherwise crowd real results out of the single page search_issues fetches.
-    `kind` is "issue", "pr", or None for both in one query.
+    `kind` is "issue", "pr", or None for both in one query. `milestone` is a title to
+    search on — matched by title alone, whatever state the milestone is in — or None for
+    items with no milestone. One source per query set, on purpose: `(no:milestone OR
+    milestone:"…")` is accepted too, but the walk wants its sources in order, and each
+    query keeps its own 1000-result headroom this way.
     """
+    where = f'milestone:"{milestone}"' if milestone else "no:milestone"
+
     def query(batch):
         # Advanced search ANDs repeated qualifiers, so repos must be OR'd explicitly.
-        return "%sis:open no:milestone archived:false (%s)" % (
-            f"is:{kind} " if kind else "", " OR ".join("repo:" + r for r in batch))
+        return "%sis:open %s archived:false (%s)" % (
+            f"is:{kind} " if kind else "", where, " OR ".join("repo:" + r for r in batch))
 
     queries, batch = [], []
     for repo in sorted(set(repos)):
@@ -744,11 +750,14 @@ def cmd_rollover(config, args):
 
 
 def _norm_issue(issue: dict, repo: str) -> dict:
-    # Both the REST listing and a search item carry `draft` on a pull request.
+    # Both the REST listing and a search item carry `draft` on a pull request, and the
+    # milestone it is on, if any — the walk says so when it offers an item that has one.
+    milestone = issue.get("milestone")
     return {"repo": repo, "number": issue["number"], "title": issue["title"],
             "body": issue["body"], "labels": [l["name"] for l in issue["labels"]],
             "updated": issue["updated_at"], "url": issue["html_url"], "id": issue["node_id"],
-            "pr": "pull_request" in issue, "draft": bool(issue.get("draft"))}
+            "pr": "pull_request" in issue, "draft": bool(issue.get("draft")),
+            "milestone": milestone["title"] if milestone else None}
 
 
 def priority_options(fields: list[dict]) -> dict[str, tuple[str, str]] | None:
@@ -789,22 +798,50 @@ def item_marker(item: dict) -> str:
     return "(PR, draft)" if item["draft"] else "(PR)"
 
 
-def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> list[dict]:
-    """Open items with no milestone, in walk order: focused repos first, then freshest.
+def triage_sources(config: dict, given: list[str] | None) -> list[str | None]:
+    """Where a triage walk takes its items from, in walk order: milestone titles, with None
+    for "no milestone". By default that is the items with no milestone and then, where the
+    config has the bucket, the ones parked on Needs triage. `--from` replaces the default
+    with exactly what was asked for; its literal `none` is the no-milestone source."""
+    if given is None:
+        return [None] + ([TRIAGE_BUCKET] if TRIAGE_BUCKET in config["buckets"] else [])
+    sources = list(dict.fromkeys(None if t.lower() == "none" else t for t in given))
+    quoted = [t for t in sources if t and '"' in t]
+    if quoted:
+        # The search qualifier is milestone:"title", and nothing escapes a quote inside it.
+        sys.exit(f"Can't search for a milestone with a quote in its title: {', '.join(quoted)}")
+    return sources
+
+
+def fetch_untriaged(config, repo: str | None, kind: str | None = "issue",
+                    sources: list[str | None] = (None,)) -> list[dict]:
+    """Open items from each of `sources` in turn — None for the ones with no milestone, a
+    title for the ones on that milestone — each in walk order: focused repos first, then
+    freshest. Every item carries the `source` it came from, spelt as it was asked for.
 
     `kind` is "issue", "pr", or None for both at once.
     """
-    if repo:
-        raw = gh.api(f"repos/{repo}/issues?milestone=none&state=open&per_page=100",
-                     paginate=True)
-        issues = [_norm_issue(i, repo) for i in raw
-                  if kind is None or ("pull_request" in i) == (kind == "pr")]
-    else:
-        issues = []
-        for query in build_search_queries(config["repos"], kind=kind):
-            for item in gh.search_issues(query):
-                issues.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
-    return triage_order(issues, config["focus"])
+    issues = []
+    by_title = _milestones_by_title(repo) if repo and any(sources) else {}
+    for source in sources:
+        items = []
+        if repo:
+            # A title the repo hasn't got is nothing to walk from it, and the walk's opening
+            # line says so; it is not an error, since the other sources may still have items.
+            number = "none" if source is None else (
+                by_title[source]["number"] if source in by_title else None)
+            raw = gh.api(f"repos/{repo}/issues?milestone={number}&state=open&per_page=100",
+                         paginate=True) if number is not None else []
+            items = [_norm_issue(i, repo) for i in raw
+                     if kind is None or ("pull_request" in i) == (kind == "pr")]
+        else:
+            for query in build_search_queries(config["repos"], kind=kind, milestone=source):
+                for item in gh.search_issues(query):
+                    items.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
+        for item in items:
+            item["source"] = source
+        issues += triage_order(items, config["focus"])
+    return issues
 
 
 def fetch_closing_issues(items: list[dict]) -> None:

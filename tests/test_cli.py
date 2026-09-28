@@ -16,7 +16,8 @@ from milestones.cli import (
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, triage_scope, triage_summary,
+    print_findings, print_table, read_key, sort_key, triage_scope, triage_sources,
+    triage_summary,
     untriaged_counts, visible,
     write_repo_list,
 )
@@ -57,6 +58,18 @@ def test_build_search_queries_scope_to_configured_repos_only():
     # None asks for both at once, which is how status counts what is untriaged.
     assert all("is:pr" not in q and "is:issue" not in q and "no:milestone" in q
                for q in build_search_queries(repos, kind=None))
+
+
+def test_build_search_queries_ask_for_one_milestone_instead_of_none():
+    repos = [f"owner{i}/some-repository-name" for i in range(20)]
+    title = "A milestone whose title runs on for a good sixty characters or so"
+    queries = build_search_queries(repos, milestone=title)
+    assert all(f'milestone:"{title}"' in q and "no:milestone" not in q for q in queries)
+    # A long qualifier just means fewer repos per query; every repo is still asked for.
+    # The cap is inclusive, and the splitter fills right up to it.
+    assert all(len(q) <= 256 for q in queries)
+    assert all("repo:" + r in " ".join(queries) for r in repos)
+    assert len(queries) > len(build_search_queries(repos))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -529,6 +542,22 @@ def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
     # A PR is the same record with a `pull_request` key; `draft` rides along on it.
     assert _norm_issue({**base, "pull_request": {}, "draft": True}, "a/b")["draft"] is True
     assert _norm_issue({**base, "pull_request": {}}, "a/b")["pr"] is True
+    # The milestone an item is already on, for a walk that starts from one.
+    assert issue["milestone"] is None
+    assert _norm_issue({**base, "milestone": None}, "a/b")["milestone"] is None
+    assert _norm_issue({**base, "milestone": {"title": "Needs triage", "number": 3}},
+                       "a/b")["milestone"] == "Needs triage"
+
+
+def test_triage_sources_default_to_none_then_the_triage_bucket_where_configured():
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, None) == [None, TRIAGE_BUCKET]
+    # A config that lists its buckets by hand and hasn't added the new one walks as before.
+    assert triage_sources({"buckets": ["Needed soon"]}, None) == [None]
+    # --from replaces the default outright, keeps its order, and folds duplicates.
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", "None", "v1.2"]) == ["v1.2", None]
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["none"]) == [None]
+    with pytest.raises(SystemExit, match="quote"):
+        triage_sources({"buckets": DEFAULT_BUCKETS}, ['Say "when"'])
 
 
 def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
