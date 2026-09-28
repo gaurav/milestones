@@ -24,11 +24,15 @@ uv tool install --editable .
 
 That puts a `milestones` command on your PATH running the code in this working tree, so edits to the source take effect immediately; re-run it only if the dependencies or the entry point change. To run it out of the checkout without installing, prefix every command below with `uv run`.
 
-Create `~/.config/milestones.toml` by hand (only `add` and `remove` ever write to it,
-and they rewrite just the `repos` list):
+Create `~/.config/milestones.toml` by hand. The commands that change it (`add`, `remove`,
+`focus`, `unfocus`, `ignore` and `discover --ignore-remaining`) each rewrite the one list they
+own and leave the rest of the file alone:
 
 ```toml
-buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream"]
+# Optional: this is the default, so most configs leave it out. A list written here
+# doesn't grow when the default does, so a bucket added later ("Needs triage" was
+# one) has to be added here by hand too, or the tool treats it as any other milestone.
+buckets = ["Critical", "Needed soon", "Needed later", "Not urgent", "Upstream", "Needs triage"]
 
 repos = [
   "gaurav/milestones",
@@ -58,6 +62,35 @@ phyloref = "yellow"
 Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`, `yellow`,
 `green`, `rose`, `pink` and `grey`; a 256-colour number from 0 to 255 works too.
 
+## First run
+
+Every command is described below; this is the order they are useful in.
+
+1. **Find your repos.** Put one or two in `repos` by hand, then `milestones discover` lists what
+   else you own that has issues or milestones. `milestones add OWNER/NAME` tracks one, and
+   `milestones ignore OWNER/NAME` (or a bare `OWNER`) hides what is not yours to triage, so the
+   next `discover` only shows what is new.
+2. **Give each repo its buckets.** `milestones setup OWNER/NAME` creates the standing buckets in
+   a repo, and is safe to run again. Skip it for a repo that doesn't need that much triage: the
+   rest of the tool treats a repo without buckets, or with only some, as fine.
+3. **Triage.** `milestones triage` walks every open issue with no milestone, then everything
+   parked on `Needs triage`, one keypress each; `milestones triage --prs` does the pull requests.
+   For a backlog, `triage --list` piped through `grep` or `fzf` into `milestones assign` does
+   hundreds at once ([below](#triaging-in-bulk)).
+4. **Look.** `milestones status` (bare `milestones` too) is the table to keep open: every open
+   milestone across your repos by due date, and at the bottom what is still untriaged.
+   `milestones focus OWNER/NAME` stars the repos you are working on this week.
+5. **Tidy.** `milestones check` says what is wrong with the milestones themselves — undated,
+   misnamed, empty, done, or closed with work still on them — and `check -i` fixes each with a
+   keypress.
+6. **Release.** When a release goes out, `milestones rollover OWNER/NAME "v1.2" "v1.3" --close`
+   moves what didn't make it onto the next milestone and closes the old one; `triage --from
+   "v1.2"` is the same job one issue at a time, for when they shouldn't all go the same way.
+
+[MILESTONES.md](MILESTONES.md) is the other half: what the buckets mean and how a release is
+put together. It is written for the people and coding agents working in the repos themselves,
+so it says nothing about this tool.
+
 ## Commands
 
 ```sh
@@ -68,13 +101,17 @@ milestones status [--json]               # the default command (bare `milestones
                                          # (done), links each, then names any tracked repo
                                          # with nothing open, says how many closed
                                          # milestones still hold open work, and counts the
-                                         # issues and PRs in each repo with no milestone.
+                                         # issues and PRs in each repo with no milestone,
+                                         # and the ones parked on Needs triage.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
-milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
+milestones triage [--repo OWNER/NAME] [--prs] [--from MILESTONE ...] [--list|--json]
                                          # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket;
-                                         # --prs walks the pull requests instead;
+                                         # time, then the ones parked on Needs triage, and
+                                         # assign each to a milestone/bucket; --prs walks
+                                         # the pull requests instead; --from walks the open
+                                         # items on that milestone instead (repeatable, in
+                                         # that order; `none` is the no-milestone set);
                                          # --list prints them instead, one per line
                                          # (OWNER/NAME#N  title  [labels]), focused repos
                                          # first then freshest; --json likewise. A walk
@@ -145,7 +182,7 @@ standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
 to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
 else can see that work, since `status` shows open milestones and `triage` only what has no
-milestone at all, so `check` leads with those and offers to roll the work onto a milestone that is
+milestone or sits on Needs triage, so `check` leads with those and offers to roll the work onto a milestone that is
 open, or to reopen the closed one. Pull requests count as work on a milestone throughout, so a
 milestone whose issues are all closed but whose PRs are still open is not `(done)`.
 
@@ -191,12 +228,36 @@ milestones triage --list --repo NCATSTranslator/Babel | grep -i duckdb | milesto
 ```
 
 `assign` resolves the title in each issue's repo, so one command puts issues from several repos
-onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Given
+onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Parking
+is the same pipeline with `Needs triage` as the title (`grep -i 'cannot reproduce'`, say), and
+`triage --from "Needs triage" --list` is the parked set, ready to be piped back in once it is
+clearer where each belongs. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
 is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
 one item: the organisation's Priority field is set on each issue after its milestone, skipped with
-a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
-after an `assign` can still show what was just moved — re-running is harmless.
+a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags
+writes by a few seconds, so a `--list` straight after an `assign` can still show what was just
+moved — re-running is harmless.
+
+### Parking, and re-triaging a milestone
+
+Two things in the walk look alike and aren't. `s` skips: nothing is written, and the issue comes
+round again next run. Picking `Needs triage` parks it: it has been looked at and can't be placed
+until it has been reproduced, tested or investigated, and that is now visible on the issue's page
+for everyone, as [MILESTONES.md](MILESTONES.md) describes. A walk covers both states, in that
+order: every issue with no milestone, then everything parked, so a parked issue is offered again
+each run but only after the new arrivals, and a `q` before then leaves it parked. Its header
+says where it is (`on Needs triage, updated …`), that milestone is marked `(current)` in the
+menu, and picking it again writes nothing.
+
+`--from MILESTONE` walks the open items on any milestone instead, and can be given more than
+once for several in that order. `--from none` is the no-milestone set on its own, the walk as it
+was before Needs triage existed; `--from "Needed later"` re-triages a bucket that has grown;
+`--from "Babel v1.19"` at release time is the one-at-a-time alternative to `rollover` for what
+didn't make it. `--list` and `--json` take `--from` too, and a listed item that has a milestone
+says so after its title (`(on Needs triage)`), while a no-milestone line reads exactly as before,
+so a pipeline into `assign` is not disturbed. GitHub matches the title whatever the milestone's
+state, so `--from` on a title that is closed in some repo walks that repo's stranded items too.
 
 ### Triaging pull requests
 
@@ -204,20 +265,24 @@ A pull request is work already under way, so every open one belongs on a milesto
 `triage --prs` walks the ones that haven't got one (`--list` and `--json` take `--prs` too).
 Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where they are:
 `closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
-closes that has no milestone on the same one, since the PR stands in for them; an issue already
-placed is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
+closes that has no milestone, or is parked on Needs triage, on the same one, since the PR stands
+in for them and a PR is as good a way of placing an issue as any; an issue already placed anywhere
+else is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
 leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
 one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
 open one is used as it is, a closed one is reopened and a new one created, each after asking. A
 milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
 open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
-An answer takes one modifier after the number (or after `c`), regex-style. `2!` assigns milestone
-2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority is an organisation
-issue field, so the keys are offered only where the repo's owner has a single-select `Priority`
-field with those option names, and since a pull request has no fields a PR's priority goes onto
-the open issues it closes. `2^` and `2$`, for the top and bottom of the milestone's order, are
-parsed and refused: GitHub has no API that writes that order
+### Priority and order
+
+An answer in either walk takes one modifier after the number (or after `c`), regex-style. `2!`
+assigns milestone 2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority
+is an organisation issue field, so the keys are offered only where the repo's owner has a
+single-select `Priority` field with those option names, and since a pull request has no fields a
+PR's priority goes onto the open issues it closes. `assign --priority urgent|high|low` is the same
+thing for a pipeline. `2^` and `2$`, for the top and bottom of the milestone's order, are parsed
+and refused: GitHub has no API that writes that order
 ([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
 links to it for dragging by hand.
 
@@ -227,8 +292,10 @@ The table is colour-coded so a long one can be skimmed rather than read. An owne
 when the config names a colour for it, or when several of your repos share it, so a run of rows
 from the same organisation lights up together. Version numbers in a milestone title are bold. A
 due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
-A bucket with work on it is coloured by urgency: `Critical` bold red, `Needed soon` orange,
-`Needed later` light green. `Critical` is optional — `setup` leaves it to `triage` to create, and
+A bucket with work on it is coloured too: the urgency levels run down the same ramp, `Critical`
+bold red, `Needed soon` orange, `Needed later` light green and `Not urgent` grey, and the two that
+are states rather than levels sit off it, `Upstream` teal and `Needs triage` magenta. An empty
+bucket stays plain, so a quiet `Needed soon` reads as quiet. `Critical` is optional — `setup` leaves it to `triage` to create, and
 `status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
@@ -248,7 +315,8 @@ script — or a coding agent — `milestones status --json` prints the same data
 `percent`, `flags`, `focus` and `url` (`open` and `closed` are issues, as GitHub counts them, and
 `percent` is over issues and PRs together); `quiet_repos` in the same shape for the tracked repos
 with no open milestone; `stranded`, the closed milestones with open work still on them; `untriaged`,
-the per-repo counts of issues and PRs with no milestone; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
+the per-repo counts of issues and PRs with no milestone, with `needs_triage` for what is parked on
+that bucket; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
 
 ## Why not something else

@@ -8,14 +8,16 @@ from pathlib import Path
 import pytest
 
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, build_search_queries,
+    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, TRIAGE_BUCKET,
+    bucket_color, build_search_queries,
     _norm_issue, carries, closes_line, complete_titles, parse_answer, priority_options,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, triage_scope, triage_summary,
+    print_findings, print_table, read_key, sort_key, triage_scope, triage_sources,
+    triage_summary,
     untriaged_counts, visible,
     write_repo_list,
 )
@@ -56,6 +58,18 @@ def test_build_search_queries_scope_to_configured_repos_only():
     # None asks for both at once, which is how status counts what is untriaged.
     assert all("is:pr" not in q and "is:issue" not in q and "no:milestone" in q
                for q in build_search_queries(repos, kind=None))
+
+
+def test_build_search_queries_ask_for_one_milestone_instead_of_none():
+    repos = [f"owner{i}/some-repository-name" for i in range(20)]
+    title = "A milestone whose title runs on for a good sixty characters or so"
+    queries = build_search_queries(repos, milestone=title)
+    assert all(f'milestone:"{title}"' in q and "no:milestone" not in q for q in queries)
+    # A long qualifier just means fewer repos per query; every repo is still asked for.
+    # The cap is inclusive, and the splitter fills right up to it.
+    assert all(len(q) <= 256 for q in queries)
+    assert all("repo:" + r in " ".join(queries) for r in repos)
+    assert len(queries) > len(build_search_queries(repos))
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -323,6 +337,16 @@ def test_due_color_bands():
     assert due_color("2026-10-09", today) == DISTANT
 
 
+def test_bucket_color_covers_every_default_bucket_only_while_it_holds_work():
+    # Every standing bucket has a colour, so a row is never plain by accident; an empty one is
+    # plain on purpose, so that a quiet "Needed soon" reads as quiet.
+    assert all(bucket_color(b, 1) for b in DEFAULT_BUCKETS)
+    assert not any(bucket_color(b, 0) for b in DEFAULT_BUCKETS)
+    # Needs triage is a state, not a level of urgency, so it is off the due-date ramp.
+    assert bucket_color(TRIAGE_BUCKET, 1) not in {"1;" + LATE, LATE, SOON, AHEAD, DISTANT}
+    assert bucket_color("Some release v1.2", 5) is None
+
+
 def test_pct_color_ramps_up_from_halfway():
     assert pct_color(0, 0) is None                      # nothing ever filed
     # Nothing under halfway is coloured as progress, and none of it as a warning.
@@ -366,6 +390,10 @@ def test_print_table_drops_a_column_that_is_empty_all_the_way_down(capsys):
     # The focus column with nothing focused: it should cost no indent at all.
     print_table([("", "a/one"), ("", "b/two")], ("", "REPO"))
     assert [line[0] for line in capsys.readouterr().out.splitlines()] == ["R", "a", "b"]
+    # A headed column with nothing in any row goes the same way: PRS when no milestone has
+    # any. Its header would otherwise stand over a column of blanks.
+    print_table([("a/one", "", 3), ("b/two", "", 1)], ("REPO", "PRS", "N"), right=("N",))
+    assert capsys.readouterr().out.splitlines()[0] == "REPO   N"
 
 
 def test_focus_marker_is_one_column_wide():
@@ -448,9 +476,16 @@ def test_item_marker_names_prs_and_drafts_only():
 def test_untriaged_counts_splits_issues_from_prs_per_repo():
     items = [{"repo": "b/two", "pr": True}, {"repo": "A/one", "pr": False},
              {"repo": "b/two", "pr": False}, {"repo": "b/two", "pr": False}]
-    assert untriaged_counts(items) == [{"repo": "A/one", "issues": 1, "prs": 0},
-                                       {"repo": "b/two", "issues": 2, "prs": 1}]
+    assert untriaged_counts(items) == [
+        {"repo": "A/one", "issues": 1, "prs": 0, "needs_triage": 0},
+        {"repo": "b/two", "issues": 2, "prs": 1, "needs_triage": 0}]
     assert untriaged_counts([]) == []
+    # What is parked on Needs triage rides along per repo, and a repo with only that still
+    # gets a row; one with nothing parked adds no row of its own.
+    assert untriaged_counts(items[:2], {"b/two": 3, "c/three": 1, "d/four": 0}) == [
+        {"repo": "A/one", "issues": 1, "prs": 0, "needs_triage": 0},
+        {"repo": "b/two", "issues": 0, "prs": 1, "needs_triage": 3},
+        {"repo": "c/three", "issues": 0, "prs": 0, "needs_triage": 1}]
 
 
 def test_closes_line_says_where_each_linked_issue_is():
@@ -469,6 +504,10 @@ def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
     assert carries(issue(), "A/one")
     assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
     assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    # Parked on Needs triage is not placed: the PR that closes it places it.
+    assert carries(issue(milestone="Needs triage"), "A/one", parked="Needs triage")
+    assert not carries(issue(milestone="Needs triage"), "A/one")
+    assert not carries(issue(milestone="v1.2"), "A/one", parked="Needs triage")
     assert not carries(issue(state="CLOSED"), "A/one")
     # Its milestone number here would name some other milestone there, or none.
     assert not carries(issue(repo="B/two"), "A/one")
@@ -518,6 +557,22 @@ def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
     # A PR is the same record with a `pull_request` key; `draft` rides along on it.
     assert _norm_issue({**base, "pull_request": {}, "draft": True}, "a/b")["draft"] is True
     assert _norm_issue({**base, "pull_request": {}}, "a/b")["pr"] is True
+    # The milestone an item is already on, for a walk that starts from one.
+    assert issue["milestone"] is None
+    assert _norm_issue({**base, "milestone": None}, "a/b")["milestone"] is None
+    assert _norm_issue({**base, "milestone": {"title": "Needs triage", "number": 3}},
+                       "a/b")["milestone"] == "Needs triage"
+
+
+def test_triage_sources_default_to_none_then_the_triage_bucket_where_configured():
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, None) == [None, TRIAGE_BUCKET]
+    # A config that lists its buckets by hand and hasn't added the new one walks as before.
+    assert triage_sources({"buckets": ["Needed soon"]}, None) == [None]
+    # --from replaces the default outright, keeps its order, and folds duplicates.
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", "None", "v1.2"]) == ["v1.2", None]
+    assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["none"]) == [None]
+    with pytest.raises(SystemExit, match="quote"):
+        triage_sources({"buckets": DEFAULT_BUCKETS}, ['Say "when"'])
 
 
 def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
@@ -528,6 +583,26 @@ def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
         "3 issues without a milestone in 2 of 9 tracked repos", "B/two (2), A/one (1)")
     assert triage_scope([], "issue", None, 1) == (
         "no issues without a milestone in 1 tracked repo", "")
+
+
+def test_triage_scope_counts_each_source_even_an_empty_one():
+    both = [None, "Needs triage"]
+    items = [{"repo": "A/one", "source": None}, {"repo": "A/one", "source": "Needs triage"},
+             {"repo": "B/two", "source": None}]
+    assert triage_scope(items, "issue", None, 2, both) == (
+        "2 issues without a milestone and 1 on Needs triage in 2 of 2 tracked repos",
+        "A/one (2), B/two (1)")
+    # A source that turned up nothing is still named, so it is seen to have been asked.
+    assert triage_scope(items[:1], "issue", "A/one", 2, both)[0] == (
+        "1 issue without a milestone and none on Needs triage in https://github.com/A/one")
+    assert triage_scope(items[1:2], "issue", "A/one", 2, both)[0] == (
+        "no issues without a milestone and 1 on Needs triage in https://github.com/A/one")
+    assert triage_scope([], "PR", None, 3, both) == (
+        "no PRs without a milestone or on Needs triage in 3 tracked repos", "")
+    assert triage_scope(items[1:2], "issue", None, 3, ["Needs triage"]) == (
+        "1 issue on Needs triage in 1 of 3 tracked repos", "A/one (1)")
+    assert triage_scope([], "issue", None, 3, ["v1.2", None, "v1.3"])[0] == (
+        "no issues on v1.2 or without a milestone or on v1.3 in 3 tracked repos")
 
 
 def _done(**entries):
@@ -560,6 +635,14 @@ def test_triage_summary_counts_by_milestone_and_says_what_is_left():
         "  - 4 still without a milestone: `milestones triage --prs` walks them again, "
         "after ~10s for GitHub to catch up",
     ]
+
+
+def test_triage_summary_says_what_a_walk_from_a_milestone_leaves():
+    done = _done(assigned=[("A/one#1", "v1.2")], skipped=["A/one#2"])
+    lines = triage_summary("2 issues on Needs triage in X", 2, done, ["Critical"],
+                           "milestones triage --from 'Needs triage'", "to triage")
+    assert lines[-1] == ("  - 1 still to triage: `milestones triage --from 'Needs triage'` "
+                         "walks them again, after ~10s for GitHub to catch up")
 
 
 def test_triage_summary_of_a_walk_that_assigned_nothing_or_everything():

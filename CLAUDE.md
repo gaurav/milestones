@@ -48,6 +48,14 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   `[{fieldId, delete: true}]` clears it. The REST `orgs/{org}/issue-fields` listing carries the
   same node ids. `fetch_priority_field` asks `users/{owner}` for the account type first, so a user
   owner never triggers the NOT_FOUND warning the organisation query would print.
+- Advanced search takes `milestone:"Some title"` (quoted, spaces and all) alongside OR'd repos,
+  and matches by **title alone, whatever the milestone's state** — so `triage --from X` where X
+  is closed in one repo walks that repo's stranded items, with no `(current)` entry in the menu.
+  `(no:milestone OR milestone:"X")` in one query is accepted too and returns exactly the sum
+  (verified live), but `fetch_untriaged` runs one query set per source on purpose: the walk
+  wants its sources in order, `--repo` goes through REST `issues?milestone=<number>` and is
+  per source anyway, and each query keeps its own 1000-result headroom. Nothing escapes a `"`
+  inside the qualifier, so `triage_sources` refuses such a title.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
@@ -55,6 +63,14 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   send — use `echo '{"due_on":null}' | gh api -X PATCH ... --input -`.
 - Issue listings lag writes by up to ~10s: a rollover straight after another, or a triage run
   straight after filing an issue, can see a stale list. Rerunning works; not worth retry logic.
+
+`TRIAGE_BUCKET` ("Needs triage") is the one bucket the walk reads from as well as writes to: by
+default `triage` walks the no-milestone items and then the parked ones, `--from` (argparse
+`dest="sources"`, since `from` is a keyword) replaces that set, and every item carries `milestone`
+and `source`. Picking an item's current milestone is logged as a skip, no PATCH. A PR carries an
+issue parked there onto its own milestone as it does an unplaced one (`carries`'s `parked`), in
+the walk and in `assign` alike — but only while the config lists the bucket, so a config that
+names its buckets by hand and hasn't added it treats "Needs triage" as any other milestone.
 
 `triage`'s `c` prompt completes milestone titles with `readline`, which on macOS is libedit under
 the same module name: `parse_and_bind("tab: complete")` does nothing there, so `ask_completing`
