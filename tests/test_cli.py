@@ -390,6 +390,10 @@ def test_print_table_drops_a_column_that_is_empty_all_the_way_down(capsys):
     # The focus column with nothing focused: it should cost no indent at all.
     print_table([("", "a/one"), ("", "b/two")], ("", "REPO"))
     assert [line[0] for line in capsys.readouterr().out.splitlines()] == ["R", "a", "b"]
+    # A headed column with nothing in any row goes the same way: PRS when no milestone has
+    # any. Its header would otherwise stand over a column of blanks.
+    print_table([("a/one", "", 3), ("b/two", "", 1)], ("REPO", "PRS", "N"), right=("N",))
+    assert capsys.readouterr().out.splitlines()[0] == "REPO   N"
 
 
 def test_focus_marker_is_one_column_wide():
@@ -472,9 +476,16 @@ def test_item_marker_names_prs_and_drafts_only():
 def test_untriaged_counts_splits_issues_from_prs_per_repo():
     items = [{"repo": "b/two", "pr": True}, {"repo": "A/one", "pr": False},
              {"repo": "b/two", "pr": False}, {"repo": "b/two", "pr": False}]
-    assert untriaged_counts(items) == [{"repo": "A/one", "issues": 1, "prs": 0},
-                                       {"repo": "b/two", "issues": 2, "prs": 1}]
+    assert untriaged_counts(items) == [
+        {"repo": "A/one", "issues": 1, "prs": 0, "needs_triage": 0},
+        {"repo": "b/two", "issues": 2, "prs": 1, "needs_triage": 0}]
     assert untriaged_counts([]) == []
+    # What is parked on Needs triage rides along per repo, and a repo with only that still
+    # gets a row; one with nothing parked adds no row of its own.
+    assert untriaged_counts(items[:2], {"b/two": 3, "c/three": 1, "d/four": 0}) == [
+        {"repo": "A/one", "issues": 1, "prs": 0, "needs_triage": 0},
+        {"repo": "b/two", "issues": 0, "prs": 1, "needs_triage": 3},
+        {"repo": "c/three", "issues": 0, "prs": 0, "needs_triage": 1}]
 
 
 def test_closes_line_says_where_each_linked_issue_is():

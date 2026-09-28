@@ -68,7 +68,8 @@ milestones status [--json]               # the default command (bare `milestones
                                          # (done), links each, then names any tracked repo
                                          # with nothing open, says how many closed
                                          # milestones still hold open work, and counts the
-                                         # issues and PRs in each repo with no milestone.
+                                         # issues and PRs in each repo with no milestone,
+                                         # and the ones parked on Needs triage.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME] [--prs] [--from MILESTONE ...] [--list|--json]
@@ -275,7 +276,8 @@ script — or a coding agent — `milestones status --json` prints the same data
 `percent`, `flags`, `focus` and `url` (`open` and `closed` are issues, as GitHub counts them, and
 `percent` is over issues and PRs together); `quiet_repos` in the same shape for the tracked repos
 with no open milestone; `stranded`, the closed milestones with open work still on them; `untriaged`,
-the per-repo counts of issues and PRs with no milestone; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
+the per-repo counts of issues and PRs with no milestone, with `needs_triage` for what is parked on
+that bucket; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
 a `kinds` legend saying what each one's fix is.
 
 ## Why not something else

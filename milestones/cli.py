@@ -492,10 +492,11 @@ def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
     counts escape sequences and would knock the column out of line.
     """
     widths = [max(visible(r[i]) for r in [headers, *rows]) for i in range(len(headers))]
-    # A column empty from its header to the last row takes no space at all, rather than
-    # indenting everything past it: the flags column with nothing flagged, the focus
-    # column with nothing focused.
-    keep = [i for i, width in enumerate(widths) if width]
+    # A column with nothing in any row takes no space at all, header or no header, rather
+    # than indenting everything past it: the flags column with nothing flagged, the focus
+    # column with nothing focused, the PRS column when no milestone has any.
+    keep = [i for i, width in enumerate(widths)
+            if width and (not rows or any(visible(r[i]) for r in rows))]
     for row in [headers, *rows]:
         cells = []
         for i in keep:
@@ -555,13 +556,19 @@ def fetch_milestones(repos: list[str],
     return list(names.values()), milestones
 
 
-def untriaged_counts(items: list[dict]) -> list[dict]:
-    """Per repo, how many open issues and pull requests have no milestone — only the repos
-    that have any, by name. `repo` is GitHub's spelling, as fetch_milestones' names are."""
+def untriaged_counts(items: list[dict], parked: dict[str, int] | None = None) -> list[dict]:
+    """Per repo, how many open issues and pull requests have no milestone, and how many sit
+    on Needs triage (`parked`, repo -> count, from the milestone rows status already has) —
+    only the repos that have any, by name. `repo` is GitHub's spelling, as fetch_milestones'
+    names are."""
     counts: dict[str, dict] = {}
+    def row(repo):
+        return counts.setdefault(repo, {"repo": repo, "issues": 0, "prs": 0, "needs_triage": 0})
     for item in items:
-        row = counts.setdefault(item["repo"], {"repo": item["repo"], "issues": 0, "prs": 0})
-        row["prs" if item["pr"] else "issues"] += 1
+        row(item["repo"])["prs" if item["pr"] else "issues"] += 1
+    for repo, count in (parked or {}).items():
+        if count:
+            row(repo)["needs_triage"] = count
     return [counts[repo] for repo in sorted(counts, key=str.lower)]
 
 
@@ -588,8 +595,15 @@ def cmd_status(config, args):
     # here unless it is named; `discover` lists the config's repos in full.
     quiet = sorted(set(tracked) - {m[0] for m in milestones})
     # "Is everything triaged?" is the other half of the question status answers; one
-    # search over every tracked repo, issues and PRs together.
-    untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None))
+    # search over every tracked repo, issues and PRs together — and what is parked on Needs
+    # triage, read off the rows above rather than searched for, so it can't disagree with
+    # the bucket's own row. Only where the config has the bucket: elsewhere it is a
+    # milestone like any other, and `triage` wouldn't walk it.
+    parked = {repo: m["open"]["totalCount"] + m["openPrs"]["totalCount"]
+              for repo, m in entries
+              if m["title"] == TRIAGE_BUCKET and m["state"] == "OPEN"
+              and TRIAGE_BUCKET in config["buckets"]}
+    untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None), parked)
     for row in untriaged:
         row["focus"] = is_focused(row["repo"], config["focus"])
 
@@ -643,7 +657,8 @@ def cmd_status(config, args):
                      if r["percent"] is not None else "—",
                      flags, r["url"]))
     if rows:
-        # PRS is open pull requests; print_table drops it when no milestone has any.
+        # PRS is open pull requests, blank for none; print_table drops the column when no
+        # milestone has any.
         print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "PRS", "%", "", "URL"),
                     right=("OPEN", "DONE", "PRS", "%"))
     if quiet:
@@ -666,12 +681,22 @@ def cmd_status(config, args):
         print("\nEverything open in every tracked repo is on a milestone.")
         return
     issues, prs = sum(r["issues"] for r in untriaged), sum(r["prs"] for r in untriaged)
-    print(f"\n{issues} untriaged issue{'s' if issues != 1 else ''} and {prs} pull "
-          f"request{'s' if prs != 1 else ''} (no milestone):")
-    # A zero prints as blank so the column reads as "which repos have PRs waiting".
-    print_table([(star(r["focus"]), r["repo"], r["issues"] or "", r["prs"] or "")
-                 for r in untriaged],
-                ("", "REPO", "ISSUES", "PRS"), right=("ISSUES", "PRS"))
+    waiting = sum(r["needs_triage"] for r in untriaged)
+    on_bucket = f"{waiting} sit{'s' if waiting == 1 else ''} on {TRIAGE_BUCKET}" if waiting else ""
+    if not issues and not prs:
+        # Placed, every one — but a parked issue is placed only in the sense that somebody
+        # has looked at it, and it is still the walk's to finish.
+        print(f"\nEverything open in every tracked repo is on a milestone, but {on_bucket}:")
+    else:
+        print(f"\n{issues} untriaged issue{'s' if issues != 1 else ''} and {prs} pull "
+              f"request{'s' if prs != 1 else ''} (no milestone)"
+              + (f", and {on_bucket}" if waiting else "") + ":")
+    # A zero prints as blank so a column reads as "which repos have PRs waiting", and a
+    # column nobody has anything in is dropped altogether.
+    print_table([(star(r["focus"]), r["repo"], r["issues"] or "", r["prs"] or "",
+                  r["needs_triage"] or "") for r in untriaged],
+                ("", "REPO", "ISSUES", "PRS", "NEEDS TRIAGE"),
+                right=("ISSUES", "PRS", "NEEDS TRIAGE"))
     print("run: milestones triage --prs" + ("  (then: milestones triage)" if issues else "")
           if prs else "run: milestones triage")
 
