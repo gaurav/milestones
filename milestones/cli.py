@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import sys
 import termios
 import textwrap
@@ -886,11 +887,13 @@ def fetch_closing_issues(items: list[dict]) -> None:
                     for c in refs["nodes"]] if refs else []
 
 
-def carries(closed: dict, repo: str) -> bool:
+def carries(closed: dict, repo: str, parked: str | None = None) -> bool:
     """Whether a PR in `repo` takes this issue it closes onto its own milestone: open, on no
-    milestone yet, and in the same repo — milestone numbers are per repo, so one elsewhere
-    is shown but left alone."""
-    return (closed["state"] == "OPEN" and not closed["milestone"]
+    milestone yet — or on `parked`, the bucket that means nobody could place it — and in the
+    same repo, since milestone numbers are per repo, so one elsewhere is shown but left
+    alone."""
+    return (closed["state"] == "OPEN"
+            and (not closed["milestone"] or closed["milestone"] == parked)
             and closed["repo"].lower() == repo.lower())
 
 
@@ -913,11 +916,22 @@ def plural(n: int, noun: str) -> str:
     return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
-def triage_scope(items: list[dict], noun: str, repo: str | None,
-                 tracked: int) -> tuple[str, str]:
+def triage_scope(items: list[dict], noun: str, repo: str | None, tracked: int,
+                 sources: list[str | None] = (None,)) -> tuple[str, str]:
     """What a walk covers, as (the phrase the summary repeats, the per-repo counts only the
-    opening line adds): ("11 PRs without a milestone in https://github.com/a/b", "")."""
-    what = f"{plural(len(items), noun) if items else 'no ' + noun + 's'} without a milestone"
+    opening line adds): ("11 PRs without a milestone in https://github.com/a/b", ""). With
+    several sources, each is counted in turn — "7 issues without a milestone and none on
+    Needs triage" — so a source that turned up nothing is still seen to have been asked."""
+    def where(source):
+        return "without a milestone" if source is None else f"on {source}"
+    if not items:
+        what = f"no {noun}s " + " or ".join(where(s) for s in sources)
+    else:
+        counts = Counter(i.get("source") for i in items)
+        parts = [f"{plural(counts[s], noun) if counts[s] else 'no ' + noun + 's'} {where(s)}"
+                 if k == 0 else f"{counts[s] or 'none'} {where(s)}"
+                 for k, s in enumerate(sources)]
+        what = ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
     if repo:
         return f"{what} in {repo_url(repo)}", ""
     counts = Counter(i["repo"] for i in items)  # first-seen order, which is the walk's
@@ -937,9 +951,10 @@ def by_title(entries: list[tuple[str, str]]) -> str:
 
 
 def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[str],
-                   rerun: str) -> list[str]:
+                   rerun: str, still: str = "without a milestone") -> list[str]:
     """The lines a walk ends on, however it ends: what it covered, what it wrote, and what
-    is still to do. `done` is the walk's log, a list per kind of thing that happened."""
+    is still to do. `done` is the walk's log, a list per kind of thing that happened;
+    `still` is what the items not dealt with are, once a walk reads from a milestone too."""
     lines = [f"Of {scope}:"]
     assigned = done["assigned"]
     lines.append(f"Assigned {len(assigned)}{by_title(assigned)}" if assigned else "Assigned none")
@@ -980,12 +995,13 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
         # Listings lag writes by up to ~10s, so a rerun straight away can offer again
         # what this one just assigned.
         lag = ", after ~10s for GitHub to catch up" if assigned else ""
-        lines.append(f"{left} still without a milestone: `{rerun}` walks them again{lag}")
+        lines.append(f"{left} still {still}: `{rerun}` walks them again{lag}")
     return [lines[0]] + [f"  - {line}" for line in lines[1:]]
 
 
 def cmd_triage(config, args):
-    issues = fetch_untriaged(config, args.repo, "pr" if args.prs else "issue")
+    sources = triage_sources(config, args.sources)
+    issues = fetch_untriaged(config, args.repo, "pr" if args.prs else "issue", sources)
     if args.prs:
         fetch_closing_issues(issues)
     if args.json:
@@ -996,19 +1012,27 @@ def cmd_triage(config, args):
         # One ref per line, first, so a line can be piped straight into `assign`.
         for i in issues:
             marker = f"  {item_marker(i)}" if i["pr"] else ""
+            # Only an item that has a milestone says so, so a no-milestone line is what it
+            # always was for whatever is parsing it downstream.
+            on = f"  (on {i['milestone']})" if i["milestone"] else ""
             labels = f"  [{', '.join(i['labels'])}]" if i["labels"] else ""
             closes = f"  {closes_line(i['closes'], i['repo'])}" if i.get("closes") else ""
-            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{labels}{closes}")
+            print(f"{i['repo']}#{i['number']}  {i['title']}{marker}{on}{labels}{closes}")
         return
 
     noun = "PR" if args.prs else "issue"
-    scope, per_repo = triage_scope(issues, noun, args.repo, len(config["repos"]))
+    scope, per_repo = triage_scope(issues, noun, args.repo, len(config["repos"]), sources)
     if not issues:
         print(f"Nothing to triage: {scope}.")
         return
     print(f"Found {scope}" + (f": {per_repo}" if per_repo else ""))
     rerun = "milestones triage" + (" --prs" if args.prs else "") + (
-        f" --repo {args.repo}" if args.repo else "")
+        f" --repo {args.repo}" if args.repo else "") + (
+        "".join(f" --from {shlex.quote(s or 'none')}" for s in sources)
+        if args.sources is not None else "")
+    # The one milestone an issue a PR closes may be moved off along with the PR: parked
+    # there means nobody could place it, which the PR now does.
+    parked = TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
     # Everything the walk does, for the summary it ends on: (ref, milestone title) for
     # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
     # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
@@ -1117,8 +1141,9 @@ def cmd_triage(config, args):
             priority = priorities[owner]
 
             marker = f"  {item_marker(issue)}" if issue["pr"] else ""
+            on = f"on {issue['milestone']}, " if issue["milestone"] else ""
             print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}{marker}"
-                  f"  (updated {issue['updated'][:10]})")
+                  f"  ({on}updated {issue['updated'][:10]})")
             print(f"  {issue['title']}")
             if issue.get("closes"):
                 print(f"  {closes_line(issue['closes'], repo)}")
@@ -1134,7 +1159,8 @@ def cmd_triage(config, args):
                 # REST open_issues counts PRs as well as issues, which is what we want here:
                 # both are work sitting on that milestone.
                 title = paint(m["title"], bucket_color(m["title"], m["open_issues"]))
-                print(f"  {i}) {title} ({m['open_issues']} open{due})")
+                current = "  (current)" if m["title"] == issue["milestone"] else ""
+                print(f"  {i}) {title} ({m['open_issues']} open{due}){current}")
             if not choices:
                 print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
             if priority:
@@ -1170,6 +1196,11 @@ def cmd_triage(config, args):
                             repo, chosen["title"], existing)
                         done["reopened" if chosen["title"] in existing else "created"].append(
                             (repo, chosen["title"]))
+                if chosen is not None and chosen["title"] == issue["milestone"]:
+                    # Where it already is: nothing to write, and it is still to triage.
+                    print(f"  (already on {chosen['title']}; skipped)")
+                    done["skipped"].append(f"{repo}#{issue['number']}")
+                    break
                 if chosen is not None:
                     gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                            milestone=chosen["number"])
@@ -1188,7 +1219,7 @@ def cmd_triage(config, args):
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
                     for c in issue.get("closes") or []:
-                        if carries(c, repo):
+                        if carries(c, repo, parked):
                             gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
                                    milestone=chosen["number"])
                             print(f"  → also #{c['number']} → {chosen['title']} "
@@ -1200,7 +1231,9 @@ def cmd_triage(config, args):
                 print(f"  Not one of: {assign}c, s, o, q.")
     finally:
         print()
-        print("\n".join(triage_summary(scope, len(issues), done, config["buckets"], rerun)))
+        print("\n".join(triage_summary(
+            scope, len(issues), done, config["buckets"], rerun,
+            "without a milestone" if sources == [None] else "to triage")))
 
 
 def cmd_assign(config, args):
@@ -1244,9 +1277,10 @@ def cmd_assign(config, args):
     fetch_closing_issues(items)
     closes = {(i["repo"], i["number"]): i["closes"] for i in items}
     carry: dict[tuple[str, int], int] = {}  # (repo, issue) -> the PR that closes it
+    parked = TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
     for (repo, number), linked in closes.items():
         for c in linked:
-            if carries(c, repo) and (repo, c["number"]) not in closes:
+            if carries(c, repo, parked) and (repo, c["number"]) not in closes:
                 carry.setdefault((repo, c["number"]), number)
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
           f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
@@ -1779,6 +1813,11 @@ def main():
                      help="print them as JSON instead")
     triage.add_argument("--prs", action="store_true",
                         help="walk untriaged pull requests instead of issues")
+    # `from` is a keyword, hence the dest. Repeatable, and it replaces the default set —
+    # the items with no milestone, then the ones on Needs triage — rather than adding to it.
+    triage.add_argument("--from", dest="sources", action="append", metavar="MILESTONE",
+                        help="walk the open items on this milestone instead (repeatable; "
+                             "`none` for the ones with no milestone)")
     triage.set_defaults(func=cmd_triage)
     assign = sub.add_parser("assign", help="put issues on a milestone by title, across repos")
     assign.add_argument("milestone", metavar="MILESTONE",

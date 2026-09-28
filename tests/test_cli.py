@@ -493,6 +493,10 @@ def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
     assert carries(issue(), "A/one")
     assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
     assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    # Parked on Needs triage is not placed: the PR that closes it places it.
+    assert carries(issue(milestone="Needs triage"), "A/one", parked="Needs triage")
+    assert not carries(issue(milestone="Needs triage"), "A/one")
+    assert not carries(issue(milestone="v1.2"), "A/one", parked="Needs triage")
     assert not carries(issue(state="CLOSED"), "A/one")
     # Its milestone number here would name some other milestone there, or none.
     assert not carries(issue(repo="B/two"), "A/one")
@@ -570,6 +574,26 @@ def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
         "no issues without a milestone in 1 tracked repo", "")
 
 
+def test_triage_scope_counts_each_source_even_an_empty_one():
+    both = [None, "Needs triage"]
+    items = [{"repo": "A/one", "source": None}, {"repo": "A/one", "source": "Needs triage"},
+             {"repo": "B/two", "source": None}]
+    assert triage_scope(items, "issue", None, 2, both) == (
+        "2 issues without a milestone and 1 on Needs triage in 2 of 2 tracked repos",
+        "A/one (2), B/two (1)")
+    # A source that turned up nothing is still named, so it is seen to have been asked.
+    assert triage_scope(items[:1], "issue", "A/one", 2, both)[0] == (
+        "1 issue without a milestone and none on Needs triage in https://github.com/A/one")
+    assert triage_scope(items[1:2], "issue", "A/one", 2, both)[0] == (
+        "no issues without a milestone and 1 on Needs triage in https://github.com/A/one")
+    assert triage_scope([], "PR", None, 3, both) == (
+        "no PRs without a milestone or on Needs triage in 3 tracked repos", "")
+    assert triage_scope(items[1:2], "issue", None, 3, ["Needs triage"]) == (
+        "1 issue on Needs triage in 1 of 3 tracked repos", "A/one (1)")
+    assert triage_scope([], "issue", None, 3, ["v1.2", None, "v1.3"])[0] == (
+        "no issues on v1.2 or without a milestone or on v1.3 in 3 tracked repos")
+
+
 def _done(**entries):
     done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
                                 "failed", "skipped", "created", "reopened", "unordered")}
@@ -600,6 +624,14 @@ def test_triage_summary_counts_by_milestone_and_says_what_is_left():
         "  - 4 still without a milestone: `milestones triage --prs` walks them again, "
         "after ~10s for GitHub to catch up",
     ]
+
+
+def test_triage_summary_says_what_a_walk_from_a_milestone_leaves():
+    done = _done(assigned=[("A/one#1", "v1.2")], skipped=["A/one#2"])
+    lines = triage_summary("2 issues on Needs triage in X", 2, done, ["Critical"],
+                           "milestones triage --from 'Needs triage'", "to triage")
+    assert lines[-1] == ("  - 1 still to triage: `milestones triage --from 'Needs triage'` "
+                         "walks them again, after ~10s for GitHub to catch up")
 
 
 def test_triage_summary_of_a_walk_that_assigned_nothing_or_everything():

@@ -71,10 +71,13 @@ milestones status [--json]               # the default command (bare `milestones
                                          # issues and PRs in each repo with no milestone.
                                          # Colour-coded on a terminal (see below); --json
                                          # prints the same thing for a script to read
-milestones triage [--repo OWNER/NAME] [--prs] [--list|--json]
+milestones triage [--repo OWNER/NAME] [--prs] [--from MILESTONE ...] [--list|--json]
                                          # walk untriaged issues (no milestone) one at a
-                                         # time and assign each to a milestone/bucket;
-                                         # --prs walks the pull requests instead;
+                                         # time, then the ones parked on Needs triage, and
+                                         # assign each to a milestone/bucket; --prs walks
+                                         # the pull requests instead; --from walks the open
+                                         # items on that milestone instead (repeatable, in
+                                         # that order; `none` is the no-milestone set);
                                          # --list prints them instead, one per line
                                          # (OWNER/NAME#N  title  [labels]), focused repos
                                          # first then freshest; --json likewise. A walk
@@ -145,7 +148,7 @@ standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
 to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
 else can see that work, since `status` shows open milestones and `triage` only what has no
-milestone at all, so `check` leads with those and offers to roll the work onto a milestone that is
+milestone or sits on Needs triage, so `check` leads with those and offers to roll the work onto a milestone that is
 open, or to reopen the closed one. Pull requests count as work on a milestone throughout, so a
 milestone whose issues are all closed but whose PRs are still open is not `(done)`.
 
@@ -191,12 +194,35 @@ milestones triage --list --repo NCATSTranslator/Babel | grep -i duckdb | milesto
 ```
 
 `assign` resolves the title in each issue's repo, so one command puts issues from several repos
-onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Given
+onto their own "Needed later"; a repo that hasn't got the milestone is named and skipped. Parking
+is the same pipeline with `Needs triage` as the title (`grep -i 'cannot reproduce'`, say), and
+`triage --from "Needs triage" --list` is the parked set, ready to be piped back in once it is
+clearer where each belongs. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
 is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
 one item: the organisation's Priority field is set on each issue after its milestone, skipped with
 a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags writes by a few seconds, so a `--list` straight
 after an `assign` can still show what was just moved — re-running is harmless.
+
+### Parking, and re-triaging a milestone
+
+Two things in the walk look alike and aren't. `s` skips: nothing is written, and the issue comes
+round again next run. Picking `Needs triage` parks it: it has been looked at and can't be placed
+until it has been reproduced, tested or investigated, and that is now visible on the issue's page
+for everyone, as [MILESTONES.md](MILESTONES.md) describes. A walk covers both states, in that
+order: every issue with no milestone, then everything parked, so a parked issue is offered again
+each run but only after the new arrivals, and a `q` before then leaves it parked. Its header
+says where it is (`on Needs triage, updated …`), that milestone is marked `(current)` in the
+menu, and picking it again writes nothing.
+
+`--from MILESTONE` walks the open items on any milestone instead, and can be given more than
+once for several in that order. `--from none` is the no-milestone set on its own, the walk as it
+was before Needs triage existed; `--from "Needed later"` re-triages a bucket that has grown;
+`--from "Babel v1.19"` at release time is the one-at-a-time alternative to `rollover` for what
+didn't make it. `--list` and `--json` take `--from` too, and a listed item that has a milestone
+says so after its title (`(on Needs triage)`), while a no-milestone line reads exactly as before,
+so a pipeline into `assign` is not disturbed. GitHub matches the title whatever the milestone's
+state, so `--from` on a title that is closed in some repo walks that repo's stranded items too.
 
 ### Triaging pull requests
 
@@ -204,8 +230,9 @@ A pull request is work already under way, so every open one belongs on a milesto
 `triage --prs` walks the ones that haven't got one (`--list` and `--json` take `--prs` too).
 Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where they are:
 `closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
-closes that has no milestone on the same one, since the PR stands in for them; an issue already
-placed is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
+closes that has no milestone, or is parked on Needs triage, on the same one, since the PR stands
+in for them and a PR is as good a way of placing an issue as any; an issue already placed anywhere
+else is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
 leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
 one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
 open one is used as it is, a closed one is reopened and a new one created, each after asking. A
