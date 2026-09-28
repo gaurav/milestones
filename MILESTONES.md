@@ -30,7 +30,8 @@ talked through. That is different from an issue with no milestone, which nobody 
 yet (see [below](#issues-with-no-milestone)). Sometimes it just means a person set it without
 knowing that no milestone would have said the same thing, and that is fine: triage covers both.
 If you put an issue there, say in a comment what has to be found out first, so that the next
-person to look knows where to start.
+person to look knows where to start. Parking an issue is a person's call: a coding agent that
+can't place one leaves it without a milestone, as the next section says.
 
 Buckets are undated. A bucket gets a due date only while it is urgent — say, when upstream sources
 need contacting by a certain day — and loses it again once the urgent work is done. A bucket still
@@ -83,11 +84,12 @@ somebody's decision; say so if the two look inconsistent rather than moving it.
 
 ## For coding agents
 
-- Set a milestone on an issue when the right one is clear. When you have looked and it needs a
-  reproduction, tests or an investigation before it can be placed, put it on `Needs triage` where
-  the repository has that bucket, with a comment saying what has to be found out. When you
-  haven't looked, leave the issue without one.
-- Never move an issue off `Needs triage` unless the right milestone has become clear.
+- Set a milestone on an issue when the right one is clear. When it isn't, leave the issue without
+  one. Don't put an issue on `Needs triage`, even when you have looked and it plainly needs a
+  reproduction or an investigation first: that bucket is for a person's judgement, and an issue
+  with no milestone reaches the same triage anyway. Say what you found in a comment instead.
+- Never move an issue off `Needs triage`. Somebody parked it there for a reason; if you think you
+  know where it belongs, say so in a comment.
 - Never close, delete or rename a standing bucket.
 - Suggest due-date changes; don't make them. The same goes for closing a release milestone outside
   of a release.
