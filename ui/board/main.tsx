@@ -4,13 +4,13 @@ import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
-  NONE, age, cardStatus, cardValue, columnOf, describe, effortOf, inkOn, linkedPrs, noFilters, pickerMatches,
+  NONE, age, askPrompt, cardStatus, cardValue, columnOf, describe, effortOf, inkOn, linkedPrs, noFilters, pickerMatches,
   priorityOf,
 } from '../shared/logic.ts';
 import type { ColumnId } from '../shared/logic.ts';
 import {
   actions, board, cards, change, columnTitle, columns, fatal, filters, focused, grouped, loading, milestones,
-  modal, move, moveToTitle, openSuggestions, pending, readOnly, refresh, resolve, retry, revert, selected,
+  modal, move, moveToTitle, notify, openSuggestions, pending, readOnly, refresh, resolve, retry, revert, selected,
   setDue, shown, start, step, targets, toast, toggleColumn, toggleSelected, trayOpen, undo, visibleColumns,
 } from '../shared/state.ts';
 
@@ -177,6 +177,9 @@ function Detail() {
         {(card.mentionedPrs?.length ?? 0) > 0 && <><dt>Mentioned in</dt><dd>{card.mentionedPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {(card.closes?.length ?? 0) > 0 && <><dt>Closes</dt><dd>{card.closes!.map((c) => <div>#{c.number} {c.title} <small>({c.state.toLowerCase()})</small></div>)}</dd></>}
       </dl>
+      <div class="detail-actions">
+        <button onClick={() => { modal.value = 'ask'; }} title="Copy a prompt for a coding agent; its answer comes back as suggestions (a)">Ask an agent…</button>
+      </div>
       <Suggestions list={openSuggestions.value.filter((s) => s.issue === card.number)} />
       <iframe class="body" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc={doc} title="Description" />
     </aside>
@@ -332,6 +335,40 @@ function LabelsDialog() {
   );
 }
 
+/** Hand the focused card, or the selection, to a coding agent: say what you think, and copy
+ *  a prompt to paste into its session. Its answer comes back as suggestions. */
+function AskDialog() {
+  const [view, setView] = useState('');
+  const asked = targets().map((n) => cards.value.get(n)!).filter(Boolean);
+  const prompt = askPrompt(board.value?.repo ?? '', asked, milestones.value, view);
+  const close = () => { modal.value = null; };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      notify('Copied. Paste it into your coding agent; its suggestions will appear here.');
+      close();
+    } catch {
+      notify('Could not reach the clipboard; select the text and copy it by hand.');
+    }
+  };
+  return (
+    <div class="overlay" onClick={close}>
+      <div class="picker wide" onClick={(e) => e.stopPropagation()}>
+        <div class="picker-head">Ask a coding agent about {asked.length === 1 ? `#${asked[0]!.number}` : `${asked.length} cards`} — what do you think?</div>
+        <textarea autoFocus rows={4} placeholder="e.g. medium priority, medium effort: we can add this as its own identifier source that won't conflict with existing ones"
+          value={view} onInput={(e) => setView((e.target as HTMLTextAreaElement).value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Escape') close();
+            else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); copy(); }
+          }} />
+        <pre class="prompt">{prompt}</pre>
+        <div class="picker-foot"><button onClick={close}>Cancel</button><button class="primary" onClick={copy}>Copy prompt (⌘↵)</button></div>
+      </div>
+    </div>
+  );
+}
+
 function PrLink({ pr }: { pr: { number: number; title: string; state: string; draft: boolean; url: string } }) {
   return <div><a href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a> {pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small></div>;
 }
@@ -446,7 +483,7 @@ function Toolbar() {
           <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
           <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
           <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-          <div><kbd>s</kbd> suggestions</div>
+          <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div>
           <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
           <div>Drag a card, or a selection, onto a column.</div>
         </div>
@@ -455,7 +492,7 @@ function Toolbar() {
   );
 }
 
-const MODAL_KEYS: Record<string, Kind> = { m: 'milestone', p: 'priority', e: 'effort', L: 'labels', t: 'title', c: 'comment', x: 'state' };
+const MODAL_KEYS: Record<string, Kind | 'ask'> = { a: 'ask', m: 'milestone', p: 'priority', e: 'effort', L: 'labels', t: 'title', c: 'comment', x: 'state' };
 
 function onKey(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey || modal.value) return;
@@ -505,6 +542,7 @@ function App() {
       {(modal.value === 'priority' || modal.value === 'effort' || modal.value === 'state') && <Choice kind={modal.value} />}
       {(modal.value === 'title' || modal.value === 'comment') && <TextDialog kind={modal.value} />}
       {modal.value === 'labels' && <LabelsDialog />}
+      {modal.value === 'ask' && <AskDialog />}
       {toast.value && <div class="toast" onClick={() => { toast.value = ''; }}>{toast.value}</div>}
     </>
   );

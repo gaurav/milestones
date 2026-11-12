@@ -173,6 +173,27 @@ export function inkOn(hex: string): string {
   return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#000' : '#fff';
 }
 
+/** What to paste into a coding agent's session to have it weigh in on some cards: where
+ *  each stands now, what you think, and how it should answer. The agent has the repository;
+ *  this gives it the question. */
+export function askPrompt(repo: string, asked: Card[], milestones: Map<number, Milestone>, view: string): string {
+  const lines = asked.map((c) => {
+    const where = c.milestone === null ? 'no milestone' : milestones.get(c.milestone)?.title ?? `milestone ${c.milestone}`;
+    const labels = c.labels.map((l) => l.name).join(', ') || 'none';
+    return `- ${repo}#${c.number} "${c.title}"\n  ${c.url}\n  Now: ${where}; priority ${priorityOf(c) || 'not set'}; effort ${effortOf(c) || 'not set'}; labels: ${labels}.`;
+  });
+  const one = asked.length === 1;
+  return [
+    `Help me triage ${one ? 'this issue' : `these ${asked.length} issues`}:`,
+    ...lines,
+    '',
+    `What I think: ${view.trim() || '(nothing yet — tell me what you find)'}`,
+    '',
+    `Read ${one ? 'the issue, its thread' : 'each issue, its thread'} and the code it concerns before answering. If I have misread ${one ? 'it' : 'one'}, or the work is bigger or riskier than I think, or it overlaps another issue, tell me that first and say why.`,
+    `When we agree, propose the changes with \`milestones suggest ${one ? asked[0]!.number : 'N'} ... --reason "..." --source <your model>\` — they appear on my board and I accept or reject each one. Nothing is written to GitHub until I accept. Run \`milestones board --brief\` for the rules and the full syntax.`,
+  ].join('\n');
+}
+
 /** Milestones for the picker: those matching the typed text, open ones first. */
 export function pickerMatches(milestones: Milestone[], order: number[], text: string): Milestone[] {
   const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean);

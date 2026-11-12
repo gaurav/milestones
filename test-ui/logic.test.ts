@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { parseFragment } from '../ui/shared/api.ts';
 import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import {
-  NONE, age, allColumns, cardStatus, cardValue, describe, effortOf, group, initialColumns, inkOn, latestAction, matches, nextFocus,
+  NONE, age, allColumns, askPrompt, cardStatus, cardValue, describe, effortOf, group, initialColumns, inkOn, latestAction, matches, nextFocus,
   noFilters, pickerMatches, priorityOf, unsettled, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -126,4 +126,15 @@ test('the picker lists matching milestones, open ones first in column order', ()
   const ms = [milestone(3, 'Needs tests', 'closed'), milestone(1, 'Needed soon'), milestone(2, 'Needed later')];
   assert.deepEqual(pickerMatches(ms, [2, 1], 'need').map((m) => m.title), ['Needed later', 'Needed soon', 'Needs tests']);
   assert.deepEqual(pickerMatches(ms, [2, 1], 'soon').map((m) => m.title), ['Needed soon']);
+});
+
+test('the prompt for an agent says where the issue stands and what you think', () => {
+  const ms = new Map([[7, milestone(7, 'Critical')]]);
+  const c = card(62, { title: 'Add X', url: 'https://github.com/o/r/issues/62', milestone: 7, fields: { Priority: 'High' }, labels: [{ name: 'bug', color: 'fff' }] });
+  const prompt = askPrompt('o/r', [c], ms, ' medium effort, own source ');
+  assert.match(prompt, /- o\/r#62 "Add X"/);
+  assert.match(prompt, /Now: Critical; priority High; effort not set; labels: bug\./);
+  assert.match(prompt, /What I think: medium effort, own source\n/);
+  assert.match(prompt, /milestones suggest 62 \.\.\. --reason/);
+  assert.match(askPrompt('o/r', [c, card(63)], ms, ''), /these 2 issues[\s\S]*nothing yet[\s\S]*milestones suggest N /);
 });
