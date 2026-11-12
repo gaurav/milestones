@@ -32,6 +32,9 @@ export const selected = signal<Set<number>>(new Set());
 export const modal = signal<Kind | 'ask' | null>(null);
 export const suggestions = signal<Map<number, Suggestion>>(new Map());
 export const trayOpen = signal(false);
+/** Whether the card panel on the right is open. Collapsed, the columns get its room; the
+ *  suggestions tray still opens over it. Saved with the view. */
+export const detailOpen = signal(true);
 /** Where the plan file is and how many changes it holds. */
 export const planInfo = signal<PlanInfo>({ path: null, count: 0 });
 /** Whether the read-only notice has been given: once is enough to say it. */
@@ -117,6 +120,7 @@ function take(data: BoardData, first: boolean) {
     shown.value = view.shown;
     dimension.value = view.by;
     groupBy.value = view.group;
+    detailOpen.value = view.detail;
     rememberView();
     document.title = `${data.repo} · milestones board`;
   }
@@ -131,7 +135,7 @@ function take(data: BoardData, first: boolean) {
 function rememberView() {
   let last = '';
   effect(() => {
-    const view = { by: dimension.value, group: groupBy.value, shown: shown.value.filter((id): id is number => typeof id === 'number') };
+    const view = { by: dimension.value, group: groupBy.value, shown: shown.value.filter((id): id is number => typeof id === 'number'), detail: detailOpen.value };
     const now = JSON.stringify(view);
     const first = last === '';
     if (now === last) return;

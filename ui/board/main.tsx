@@ -9,7 +9,7 @@ import {
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, change, columnTitle, cycleDimension, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
+  actions, board, cards, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
   planInfo, readOnly, reviewPlan, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
@@ -170,9 +170,25 @@ function Column({ id, index }: { id: ColumnId; index: number }) {
   );
 }
 
+/** Folds the card panel to a strip at the edge, giving its room to the columns. */
+function CollapseButton() {
+  return <button class="collapse" title="Collapse this panel (i)" aria-label="Collapse the card panel" onClick={() => { detailOpen.value = false; }}>›</button>;
+}
+
+/** The card panel, collapsed: one button to open it again, with the focused card's number so
+ *  the strip still says what it would show. */
+function DetailStrip() {
+  return (
+    <aside class="detail-strip">
+      <button title="Show the card panel (i)" aria-label="Show the card panel" onClick={() => { detailOpen.value = true; }}>‹</button>
+      {focused.value !== null && <span>#{focused.value}</span>}
+    </aside>
+  );
+}
+
 function Detail() {
   const card = focused.value === null ? undefined : cards.value.get(focused.value);
-  if (!card) return <aside class="detail"><p class="empty">No card in focus.</p></aside>;
+  if (!card) return <aside class="detail"><div class="detail-head"><p class="empty">No card in focus.</p><CollapseButton /></div></aside>;
   const milestone = card.milestone === null ? undefined : milestones.value.get(card.milestone);
   const fields = Object.entries(card.fields ?? {});
   // GitHub has already sanitised bodyHTML; the sandbox (no scripts, no same-origin) is the
@@ -186,7 +202,10 @@ function Detail() {
   </style>${card.bodyHTML || '<p><em>No description.</em></p>'}`;
   return (
     <aside class="detail">
-      <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
+      <div class="detail-head">
+        <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
+        <CollapseButton />
+      </div>
       <dl>
         <dt>Milestone</dt><dd>{milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'none'}</dd>
         <dt>Opened</dt><dd>{card.created.slice(0, 10)} by {card.author ?? 'a deleted account'}; updated {card.updated.slice(0, 10)}; {card.comments} comment{card.comments === 1 ? '' : 's'}</dd>
@@ -544,7 +563,7 @@ function Toolbar() {
           <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
           <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
           <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-          <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div>
+          <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
           <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
           <div>Drag a card, or a selection, onto a column.</div>
         </div>
@@ -593,6 +612,7 @@ function onKey(e: KeyboardEvent) {
   else if (key === 'Escape') selected.value = new Set();
   else if (key in MODAL_KEYS) { if (targets().length) modal.value = MODAL_KEYS[key]!; }
   else if (key === 's') trayOpen.value = !trayOpen.value;
+  else if (key === 'i') detailOpen.value = !detailOpen.value;
   else if (key === 'z') undo();
   else if (key === 'o') { const c = focused.value === null ? undefined : cards.value.get(focused.value); if (c) window.open(c.url, '_blank', 'noreferrer'); }
   else if (key === '/') document.getElementById('search')?.focus();
@@ -629,7 +649,7 @@ function App() {
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}
           {visibleColumns.value.length === 0 && <p class="empty">No columns shown. Pick some under Columns.</p>}
         </div>
-        {trayOpen.value ? <Tray /> : <Detail />}
+        {trayOpen.value ? <Tray /> : detailOpen.value ? <Detail /> : <DetailStrip />}
       </main>
       {modal.value === 'milestone' && <Picker />}
       {(modal.value === 'priority' || modal.value === 'effort' || modal.value === 'state') && <Choice kind={modal.value} />}

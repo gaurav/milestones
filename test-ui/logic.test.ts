@@ -205,10 +205,10 @@ test('the board opens as asked, else as it was left, else everything by mileston
   const ms = [milestone(7, 'Critical'), milestone(8, 'v1')];
   const all = [NONE, 7, 8];
   const none = { from: [], by: '', group: [] };
-  assert.deepEqual(initialView(none, undefined, all, ms), { by: 'milestone', group: [], shown: all });
-  const saved = { by: 'priority', group: ['effort'], shown: [7, 99] };   // 99 has since gone
-  assert.deepEqual(initialView(none, saved, all, ms), { by: 'priority', group: ['effort'], shown: [7] });
+  assert.deepEqual(initialView(none, undefined, all, ms), { by: 'milestone', group: [], shown: all, detail: true });
+  const saved = { by: 'priority', group: ['effort'], shown: [7, 99], detail: false };   // 99 has since gone
+  assert.deepEqual(initialView(none, saved, all, ms), { by: 'priority', group: ['effort'], shown: [7], detail: false });
   assert.deepEqual(initialView({ from: ['v1'], by: 'effort', group: ['priority'] }, saved, all, ms),
-    { by: 'effort', group: ['priority'], shown: [8] });
-  assert.deepEqual(initialView(none, { by: 'nonsense', group: ['x'], shown: [99] }, all, ms), { by: 'milestone', group: [], shown: all });
+    { by: 'effort', group: ['priority'], shown: [8], detail: false });
+  assert.deepEqual(initialView(none, { by: 'nonsense', group: ['x'], shown: [99] }, all, ms), { by: 'milestone', group: [], shown: all, detail: true });
 });

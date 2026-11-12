@@ -465,10 +465,12 @@ def test_the_view_is_remembered_between_runs(monkeypatch, tmp_path):
     board = make_board(monkeypatch, [], state_file=state)
     assert board.snapshot()["view"] == {}
     view = {"by": "priority", "group": ["effort"], "shown": [0, 1]}
-    assert board.set_view({**view, "extra": "dropped"}) == view
+    assert board.set_view({**view, "extra": "dropped"}) == {**view, "detail": True}
+    view = {**view, "detail": False}
+    assert board.set_view(view) == view
     for bad in ({"by": "labels", "group": [], "shown": []}, {"by": "priority", "group": ["x"], "shown": []},
                 {"by": "priority", "group": [], "shown": ["Soon"]}, {"by": "priority", "group": [], "shown": [True]},
-                {}):
+                {"by": "priority", "group": [], "shown": [], "detail": "no"}, {}):
         with pytest.raises(server.Refused):
             board.set_view(bad)
     assert make_board(monkeypatch, [], state_file=state).snapshot()["view"] == view

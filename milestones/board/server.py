@@ -537,8 +537,11 @@ class Board:
                 or any(isinstance(n, bool) or not isinstance(n, int) for n in shown)):
             raise Refused(400, "a view is {by: milestone|priority|effort, group: [...], "
                                "shown: [milestone numbers, 0 for none]}")
+        detail = view.get("detail", True)
+        if not isinstance(detail, bool):
+            raise Refused(400, "a view's detail is true (the card panel is open) or false")
         with self.lock:
-            self.view = {"by": by, "group": group, "shown": shown}
+            self.view = {"by": by, "group": group, "shown": shown, "detail": detail}
             self._save_state()
             return self.view
 

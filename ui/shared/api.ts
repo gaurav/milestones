@@ -88,8 +88,9 @@ export interface BoardData {
  *  a writable one, what an earlier read-only session left to be reviewed. */
 export interface PlanInfo { path: string | null; count: number }
 
-/** What the columns are, the grouping within them, and the milestones ticked (0 is none). */
-export interface View { by: string; group: string[]; shown: number[] }
+/** What the columns are, the grouping within them, the milestones ticked (0 is none), and
+ *  whether the card panel on the right is open (absent, from an older run, means open). */
+export interface View { by: string; group: string[]; shown: number[]; detail?: boolean }
 
 /** A change someone proposes — a coding agent, or the board's own rules — for you to
  *  accept or reject. A labels suggestion's value is a change: {add, remove}. */

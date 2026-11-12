@@ -91,10 +91,10 @@ export function initialColumns(all: ColumnId[], milestones: Milestone[], from: s
  *  selection with none left counts as no selection. */
 export function initialView(
   asked: { from: string[]; by: string; group: string[] },
-  saved: { by?: string; group?: string[]; shown?: number[] } | undefined,
+  saved: { by?: string; group?: string[]; shown?: number[]; detail?: boolean } | undefined,
   all: ColumnId[],
   milestones: Milestone[],
-): { by: DimKind; group: DimKind[]; shown: ColumnId[] } {
+): { by: DimKind; group: DimKind[]; shown: ColumnId[]; detail: boolean } {
   const kinds = DIMENSIONS.map((d) => d.kind as string);
   const kept = (saved?.shown ?? []).filter((id) => all.includes(id));
   const by = [asked.by, saved?.by].find((k) => k && kinds.includes(k)) ?? 'milestone';
@@ -103,6 +103,7 @@ export function initialView(
     by: by as DimKind,
     group: group.filter((g) => kinds.includes(g)) as DimKind[],
     shown: asked.from.length || kept.length === 0 ? initialColumns(all, milestones, asked.from) : kept,
+    detail: saved?.detail !== false,
   };
 }
 
