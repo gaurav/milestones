@@ -41,12 +41,14 @@ def path_owner(path: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _run(args: list[str], partial_ok: bool = False, owner: str | None = None) -> str:
+def _run(args: list[str], partial_ok: bool = False, owner: str | None = None,
+         stdin: str | None = None) -> str:
     key = env.token_key(settings()[0], owner)
     # gh reads GH_TOKEN ahead of its own stored login. Unset, the child inherits ours.
     child_env = {**os.environ, "GH_TOKEN": settings()[0][key]} if key else None
     try:
-        proc = subprocess.run(["gh", *args], capture_output=True, text=True, env=child_env)
+        proc = subprocess.run(["gh", *args], capture_output=True, text=True, env=child_env,
+                              input=stdin)
     except FileNotFoundError:
         raise SystemExit("gh not found; install the GitHub CLI: https://cli.github.com")
     # gh signals a GraphQL error by exiting nonzero even when it has printed a
@@ -56,11 +58,20 @@ def _run(args: list[str], partial_ok: bool = False, owner: str | None = None) ->
     return proc.stdout
 
 
-def api(path: str, method: str = "GET", paginate: bool = False, **fields):
-    """Call the REST API. Returns parsed JSON; a flat list when paginated."""
+def api(path: str, method: str = "GET", paginate: bool = False, body: dict | None = None,
+        **fields):
+    """Call the REST API. Returns parsed JSON; a flat list when paginated.
+
+    `body` is sent as the JSON request body, which is the only way to send a null (clearing
+    a milestone's due date, or taking an issue off its milestone); `fields` go as gh's -f/-F.
+    """
     if method != "GET":
-        _refuse_write(" ".join([method, path, *(f"{k}={v}" for k, v in fields.items())]))
+        sent = {**fields, **(body or {})}
+        _refuse_write(" ".join([method, path, *(f"{k}={json.dumps(v) if v is None else v}"
+                                                 for k, v in sent.items())]))
     args = ["api", "-X", method]
+    if body is not None:
+        args += ["--input", "-"]
     if paginate:
         args += ["--paginate", "--slurp"]
     for key, value in fields.items():
@@ -68,7 +79,8 @@ def api(path: str, method: str = "GET", paginate: bool = False, **fields):
         flag = "-f" if isinstance(value, str) else "-F"
         args += [flag, f"{key}={value}"]
     args.append(path)
-    out = _run(args, owner=path_owner(path))
+    out = _run(args, owner=path_owner(path),
+               stdin=json.dumps(body) if body is not None else None)
     if not out.strip():
         return None
     data = json.loads(out)
