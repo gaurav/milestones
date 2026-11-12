@@ -574,3 +574,92 @@ def test_triage_summary_of_a_walk_that_assigned_nothing_or_everything():
     done = _done(assigned=[("A/one#1", "Upstream"), ("A/one#2", "Upstream")])
     assert triage_summary("2 issues", 2, done, [], "milestones triage") == [
         "Of 2 issues:", "  - Assigned 2 to Upstream"]
+
+
+# --- env files, tokens and the read-only switch -------------------------------------------
+
+from milestones import env, gh  # noqa: E402
+from milestones.cli import doctor_lines, token_kind  # noqa: E402
+
+
+def test_env_parse_reads_assignments_and_skips_the_rest():
+    text = """
+    # a comment
+    export MILESTONES_GH_TOKEN="abc def"
+    MILESTONES_PERMISSIONS = read   # trailing comment
+    QUOTED='x # not a comment'
+    not an assignment
+    EMPTY=
+    """
+    assert env.parse(text) == {"MILESTONES_GH_TOKEN": "abc def", "MILESTONES_PERMISSIONS": "read",
+                               "QUOTED": "x # not a comment", "EMPTY": ""}
+
+
+def test_env_load_prefers_the_environment_then_dot_env_then_the_config_dir(tmp_path):
+    cwd, home = tmp_path / "cwd", tmp_path / "config"
+    cwd.mkdir(), home.mkdir()
+    (home / "milestones.env").write_text(
+        "MILESTONES_GH_TOKEN=from-config\nMILESTONES_PERMISSIONS=read\n"
+        "MILESTONES_GH_TOKEN_ORG=org-config\n")
+    (cwd / ".env").write_text("MILESTONES_GH_TOKEN=from-dotenv\nDATABASE_URL=not-ours\n"
+                              "MILESTONES_PERMISSIONS=write\n")
+    environ = {"XDG_CONFIG_HOME": str(home), "MILESTONES_PERMISSIONS": "read", "PATH": "/bin"}
+    settings, sources = env.load(cwd, environ)
+    assert settings == {"MILESTONES_GH_TOKEN": "from-dotenv", "MILESTONES_PERMISSIONS": "read",
+                        "MILESTONES_GH_TOKEN_ORG": "org-config"}
+    assert sources["MILESTONES_PERMISSIONS"] == "environment"
+    assert sources["MILESTONES_GH_TOKEN"] == str(cwd / ".env")
+    assert sources["MILESTONES_GH_TOKEN_ORG"] == str(home / "milestones.env")
+
+
+def test_env_load_with_no_files_and_nothing_set_is_empty(tmp_path):
+    assert env.load(tmp_path, {"XDG_CONFIG_HOME": str(tmp_path / "nowhere")}) == ({}, {})
+
+
+def test_token_key_prefers_the_owners_own_token():
+    settings = {"MILESTONES_GH_TOKEN": "d", "MILESTONES_GH_TOKEN_MY_ORG": "o"}
+    assert env.owner_key("my-org") == "MILESTONES_GH_TOKEN_MY_ORG"
+    assert env.token_key(settings, "My-Org") == "MILESTONES_GH_TOKEN_MY_ORG"
+    assert env.token_key(settings, "gaurav") == "MILESTONES_GH_TOKEN"
+    assert env.token_key(settings, None) == "MILESTONES_GH_TOKEN"
+    assert env.token_key({}, "gaurav") is None
+
+
+def test_permissions_default_to_write_and_refuse_anything_else():
+    assert env.permissions({}) == "write"
+    assert env.permissions({"MILESTONES_PERMISSIONS": "READ"}) == "read"
+    with pytest.raises(SystemExit, match="must be one of"):
+        env.permissions({"MILESTONES_PERMISSIONS": "none"})
+
+
+def test_path_owner_reads_the_owner_a_rest_path_is_about():
+    assert gh.path_owner("repos/NCATSTranslator/Babel/issues/5") == "NCATSTranslator"
+    assert gh.path_owner("orgs/NCATSTranslator/issue-fields") == "NCATSTranslator"
+    assert gh.path_owner("users/gaurav") == "gaurav"
+    assert gh.path_owner("search/issues?q=repo:a/b") is None
+    assert gh.path_owner("user") is None
+
+
+def test_a_read_only_run_refuses_every_write_before_gh_is_called(monkeypatch):
+    monkeypatch.setattr(gh, "settings", lambda: ({"MILESTONES_PERMISSIONS": "read"}, {}))
+    monkeypatch.setattr(gh, "_run", lambda *a, **k: pytest.fail("gh was called"))
+    with pytest.raises(gh.ReadOnly, match="would PATCH repos/a/b/issues/5 milestone=3"):
+        gh.api("repos/a/b/issues/5", method="PATCH", milestone=3)
+    with pytest.raises(gh.ReadOnly, match="would set an issue's Priority field"):
+        gh.mutate("set an issue's Priority field", "mutation { x }")
+    # A SystemExit, so the walks that survive a failed write survive this one too.
+    assert issubclass(gh.ReadOnly, SystemExit)
+
+
+def test_doctor_lines_name_the_setting_and_never_the_token():
+    settings = {"MILESTONES_GH_TOKEN_ORG": "github_pat_SECRET", "MILESTONES_PERMISSIONS": "read"}
+    sources = {"MILESTONES_GH_TOKEN_ORG": "/x/.env", "MILESTONES_PERMISSIONS": "environment"}
+    lines = doctor_lines(settings, sources, ["gaurav", "org"])
+    assert lines[0].startswith("permissions: read  (MILESTONES_PERMISSIONS from environment)")
+    assert lines[1:] == ["gaurav: gh's own login", "org: MILESTONES_GH_TOKEN_ORG from /x/.env"]
+    assert "SECRET" not in "\n".join(lines)
+
+
+def test_token_kind_tells_a_classic_token_by_its_scopes_header():
+    assert token_kind("repo, read:org") == "classic token, scopes: repo, read:org"
+    assert token_kind(None).startswith("fine-grained or app token")

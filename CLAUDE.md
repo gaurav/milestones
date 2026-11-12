@@ -134,3 +134,21 @@ walk's write paths, create a scratch milestone with no due date and no issues â€
 raises `rename`, `undated` and `empty` together, so a single walk reaches the rename, the date and
 the delete prompts, and `[d]` clears it up at the end. Tests (`uv run pytest`) cover only the
 pure functions; keep it that way rather than mocking `gh`.
+
+Every write goes through `gh._refuse_write`: `gh.api` with any method but GET, and `gh.mutate`
+for a GraphQL mutation. That is what makes `MILESTONES_PERMISSIONS=read` trustworthy, so never
+send a mutation through `gh.graphql`, which can't tell a write from a read. The refusal is
+`gh.ReadOnly`, a `SystemExit` like every other failed call, so `check -i` and the priority writes
+report it and carry on as they do for a failure; `rollover`, `assign`, `setup` and the `triage`
+walk ask `gh.read_only()` first and print a preview instead, because a refusal at their first
+write would show one line of a plan that has many.
+
+Tokens are per owner (`env.token_key`), because a fine-grained token belongs to one resource
+owner: `gh.api` reads the owner off the REST path (`gh.path_owner`), and `gh.graphql`/`gh.mutate`
+take it as an argument â€” pass it for any query about a single owner. `doctor` tells a classic
+token from a fine-grained one by the `X-OAuth-Scopes` header, which only a classic token sends.
+Not yet verified live: whether a fine-grained token can read or write organisation issue fields
+(`doctor`'s "issue fields" probe answers the read half the day someone runs it with one).
+
+`gh.settings()` is cached for the run, so a test that wants a mode monkeypatches `gh.settings`
+rather than the environment.
