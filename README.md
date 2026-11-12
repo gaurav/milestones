@@ -151,6 +151,18 @@ There are three ways to move a card, and they are the same write:
 Moving a pull request also moves the open issues it closes that nobody has placed yet, as the
 `triage` walk does. A column's due date is a button: click it to change the date.
 
+The same keys reach the rest of a card: `p` sets its priority and `e` its effort, `L` toggles
+labels, `t` retitles it, `c` comments, and `x` closes or reopens it. Priority and effort are
+written to the organisation's issue fields; a repo whose owner has none (a personal account) gets a
+`Priority: High` label instead. All of them work on a selection, and `z` undoes all but a comment.
+
+**Suggestions** (`s`, or the button) is the list of changes waiting for a yes or no. The board
+puts its own there: where a `Priority:` or `Size:` label records what the Priority or Effort field
+should, it suggests filling the field, and then removing the label the field has made redundant —
+read from anywhere, written one way. Where a label and a field disagree it keeps the field and says
+so. Accept or reject them one at a time on the card, or a whole rule at once from the list;
+accepting is an ordinary change, written and undone like any other, and a rejection is remembered.
+
 Every move is written to GitHub as you make it, in order, while you carry on. A card whose write
 is in flight says *saving…*; one whose write failed keeps the place you gave it and gains **Retry**
 and **Revert**. Closing the tab with writes outstanding asks first, and stopping the server with
@@ -402,8 +414,10 @@ milestone, and it would be a second record that drifts from the first.
 
 What it deliberately leaves out:
 
-- **No local state or cache.** Every command reads GitHub fresh, so nothing can go stale except
-  GitHub's own listings, which lag writes by a few seconds.
+- **No local state or cache of GitHub.** Every command reads GitHub fresh, so nothing can go
+  stale except GitHub's own listings, which lag writes by a few seconds. Every decision lives on
+  GitHub; the one thing kept locally is what the board has *not* decided yet — suggestions still
+  waiting, and the ones you turned down, so that they aren't made again.
 - **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
 - **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
   `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would
