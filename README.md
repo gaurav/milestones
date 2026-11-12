@@ -121,6 +121,46 @@ the default token, which only has to be able to *read* them.
 use (the setting's name, never the token), who that token signs in as, and whether it can read
 projects and organisation issue fields.
 
+## The board
+
+```sh
+npm install && npm run build      # once, and after pulling changes to ui/
+milestones board NCATSTranslator/Babel --from Critical --from "Babel v1.19" --from none
+```
+
+`milestones board` opens one repo in your browser as a column per milestone, with every open
+issue and pull request as a card. Run it with no repo from inside a checkout and it takes that
+checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is the issues with no
+milestone); the rest are under **Columns**, including any closed milestone that still has open
+work on it.
+
+A card shows what has already been decided about it, wherever that was written down: its labels,
+the organisation's Priority and Effort fields (or a `Priority:`/`Size:` label where the field is
+unset), its issue type, the pull requests that close or mention it, sub-issues, age and comments.
+The pane on the right has the description and the rest.
+
+There are three ways to move a card, and they are the same write:
+
+- **Keys**: `j`/`k` and `h`/`l` move the focus; `1`–`9` send the focused card to that column and
+  `0` takes it off its milestone; `space` selects, and then a key moves the whole selection; `z`
+  undoes; `o` opens the card on GitHub; `/` searches.
+- **Drag** a card, or a selection, onto a column.
+- **`m`** opens a picker over every milestone in the repo, open or closed, for when there are more
+  than nine or you want a new one. It asks before reopening a closed milestone or creating one.
+
+Moving a pull request also moves the open issues it closes that nobody has placed yet, as the
+`triage` walk does. A column's due date is a button: click it to change the date.
+
+Every move is written to GitHub as you make it, in order, while you carry on. A card whose write
+is in flight says *saving…*; one whose write failed keeps the place you gave it and gains **Retry**
+and **Revert**. Closing the tab with writes outstanding asks first, and stopping the server with
+Ctrl-C lists anything that never reached GitHub. With `MILESTONES_PERMISSIONS=read` the board is a
+sandbox: cards move, are marked *not written*, and nothing is sent.
+
+The page and the server share nothing but an HTTP API, described in
+[docs/BoardAPI.md](docs/BoardAPI.md), so a different front end — or a script — can use the same
+server.
+
 ## Commands
 
 ```sh
@@ -372,5 +412,12 @@ What it deliberately leaves out:
 ## Development
 
 ```sh
-uv run pytest
+uv run pytest                     # the Python: pure functions only, nothing calls gh
+npm run typecheck && npm test     # the board's front end, in ui/
+npm run dev                       # rebuild the front end on every change
 ```
+
+The front end is TypeScript and Preact with signals, bundled by esbuild into
+`milestones/board/static/` (not checked in) — the same stack as
+[chaff](https://github.com/gaurav/triage), so that components can move between the two. Node is
+needed to build it and for nothing else; the Python package has no runtime dependencies.

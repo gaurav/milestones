@@ -168,3 +168,32 @@ Not yet verified live: whether a fine-grained token can read or write organisati
 
 `gh.settings()` is cached for the run, so a test that wants a mode monkeypatches `gh.settings`
 rather than the environment.
+
+## The board
+
+`milestones board` is `milestones/board/` (stdlib server) plus `ui/` (Preact, built by `npm run
+build` into `milestones/board/static/`, which is gitignored). They share only the API in
+`docs/BoardAPI.md`: change an endpoint and that file changes in the same commit. Keep `cli.py` out
+of it beyond the subparser — the board has its own fetch (`board/data.py`), because a card needs
+far more than `_norm_issue` keeps.
+
+- The `Board` applies a change to its cards first and writes after, from one worker thread, in
+  order. A failed write leaves the new value on the card (`load()` re-applies unsettled actions
+  after a refetch for the same reason); only `revert` puts it back.
+- One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
+  PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
+  type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that
+  mentions an issue without closing it; those come from `timelineItems(itemTypes:
+  [CROSS_REFERENCED_EVENT])`. `projectItems { totalCount }` is readable without `read:project`;
+  a project's title and fields are not.
+- Taking an issue off its milestone is `PATCH` with `{"milestone": null}`, which needs
+  `gh.api(body=...)` (`--input -`); `-F milestone=null` sends the string.
+- There is no browser tool in an agent session unless the Chrome extension is connected. A
+  headless check works with the Playwright in `~/code/prcoder/node_modules`:
+  `createRequire('/Users/gaurav/code/prcoder/')('playwright')`, against a board started with
+  `--no-open --port N`. Playwright's `dragTo` scrolls the target into view mid-drag, so a card in
+  a column that is off-screen picks up whatever card ends under the pointer — drag between columns
+  that are both visible.
+- Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
+  gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
+  `MILESTONES_PERMISSIONS=read`.
