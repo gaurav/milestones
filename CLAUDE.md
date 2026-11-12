@@ -221,6 +221,16 @@ far more than `_norm_issue` keeps.
 - The board deliberately embeds no agent. An agent pointed at a bare issue has too little
   context; the one in the repo's checkout, in a conversation, has plenty — so the board hands it
   a prompt (`askPrompt` in `ui/shared/logic.ts`) and takes its answer back as suggestions.
+- What the columns are is a front-end notion (`DimKind` in `ui/shared/logic.ts`): a dimension is
+  an action kind whose values can be listed, so a drop is `{kind, value}` and the server needed
+  nothing new but `labelValues` in the snapshot — `reconcile.KINDS` itself, so the page sorts
+  `Priority: Critical` under Urgent by the same table the rules use. Don't copy that table into
+  `ui/`. A new dimension needs an entry in `DIMENSIONS`, branches in `dimColumns`, `columnFor`
+  and `columnLabel`, and a server kind to write it.
+- `grouped` is one flat, ordered list per column (grouping only changes the sort), which is what
+  lets `step` and `nextFocus` ignore grouping; `sections` cuts that list into headed runs for
+  drawing. `submit` in `ui/shared/state.ts` moves the focus on when a change takes the focused card
+  out of its column, in any view.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.
