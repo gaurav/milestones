@@ -6,7 +6,7 @@ import pytest
 from milestones import gh
 from pathlib import Path
 
-from milestones.board import client, data, reconcile, server
+from milestones.board import client, data, plan, reconcile, server
 from milestones.cli import DEFAULT_BUCKETS, remote_repo, sort_key, suggest_ref
 
 
@@ -104,7 +104,7 @@ ORG_FIELDS = {"Priority": {"id": "F_P", "options": {"Urgent": "o1", "High": "o2"
 
 
 def make_board(monkeypatch, cards, read_only=False, buckets=("Needs triage",), write=None,
-               fields=None, state_file=None):
+               fields=None, state_file=None, plan_file=None):
     monkeypatch.setattr(gh, "read_only", lambda: read_only)
     fetched = {"repo": "o/r", "cards": cards, "fields": fields or {},
                "labels": [{"name": "bug", "color": "ff0000"}], "milestones": [
@@ -112,7 +112,8 @@ def make_board(monkeypatch, cards, read_only=False, buckets=("Needs triage",), w
         {"number": 2, "title": "Needs triage", "state": "open", "due": None},
         {"number": 3, "title": "Old", "state": "closed", "due": None}]}
     board = server.Board("o/r", list(buckets), sort_key, fetch=lambda repo, progress: fetched,
-                         write=write or (lambda action: None), state_file=state_file)
+                         write=write or (lambda action: None), state_file=state_file,
+                         plan_file=plan_file)
     board.load()
     return board
 
@@ -471,3 +472,96 @@ def test_the_view_is_remembered_between_runs(monkeypatch, tmp_path):
         with pytest.raises(server.Refused):
             board.set_view(bad)
     assert make_board(monkeypatch, [], state_file=state).snapshot()["view"] == view
+
+
+# --- the plan: a read-only session's changes ----------------------------------------------
+
+def would(issue, kind, value, previous, status="would"):
+    return {"issue": issue, "kind": kind, "value": value, "previous": previous, "status": status}
+
+
+def test_a_plan_is_the_net_change_to_each_card():
+    entries = plan.net([
+        would(5, "milestone", 1, None), would(5, "milestone", 2, 1),      # two moves: one change
+        would(6, "priority", "High", None), would(6, "priority", None, "High"),   # undone: none
+        would(7, "comment", "a", None), would(7, "comment", "a", None),   # comments each stand
+        would(8, "title", "x", "y", status="done")])                      # written: not a plan
+    assert entries == [
+        {"issue": 5, "kind": "milestone", "value": 2, "previous": None},
+        {"issue": 7, "kind": "comment", "value": "a", "previous": None},
+        {"issue": 7, "kind": "comment", "value": "a", "previous": None}]
+
+
+def test_plan_lines_read_without_the_board():
+    titles = {1: "Needed soon"}
+    assert plan.summary(would(62, "milestone", 1, None), titles) == \
+        "#62: milestone → Needed soon (was none)"
+    assert plan.summary(would(62, "labels", ["a", "b"], []), titles) == "#62: labels → a, b (was none)"
+    assert plan.summary(would(62, "state", "not_planned", None), titles) == \
+        "#62: state → closed as not_planned (was open)"
+    assert plan.summary(would(62, "comment", "hello", None), titles) == "#62: comment: hello"
+
+
+def test_a_read_only_board_saves_its_changes_and_picks_them_up_again(monkeypatch, tmp_path):
+    path = tmp_path / "state" / "board.plan.json"
+    cards = lambda: [card(5), card(6), card(7)]  # noqa: E731
+    board = make_board(monkeypatch, cards(), read_only=True, plan_file=path)
+    board.submit([{"issue": 5, "kind": "milestone", "value": 1},
+                  {"issue": 6, "kind": "title", "value": "Better"},
+                  {"issue": 7, "kind": "milestone", "value": 2}])
+    board.submit([{"issue": 7, "kind": "milestone", "value": None}])   # and back again
+    board.save_plan()
+    saved = plan.read(path)
+    assert saved["repo"] == "o/r" and board.plan_info() == {"path": str(path), "count": 2}
+    assert [(c["issue"], c["summary"], c["title"]) for c in saved["changes"]] == [
+        (5, "#5: milestone → Soon (was none)", "Card 5"),
+        (6, "#6: title → Better (was Card 6)", "Better")]   # the card as the plan leaves it
+
+    again = make_board(monkeypatch, cards()[:1], read_only=True, plan_file=path)   # #6 has closed
+    restored, skipped = again.restore_plan()
+    assert restored == 1 and again.cards[5]["milestone"] == 1
+    assert len(skipped) == 1 and "#6: title → Better" in skipped[0]
+    assert [c["issue"] for c in plan.read(path)["changes"]] == [5]
+
+    again.submit([{"issue": 5, "kind": "milestone", "value": None}])
+    again.save_plan()
+    assert not path.exists()   # nothing left to plan
+    with pytest.raises(server.Refused, match="read-only"):
+        again.review_plan()
+    with pytest.raises(server.Refused, match="undo"):
+        again.discard_plan()
+
+
+def test_a_writable_board_offers_a_plan_back_as_suggestions(monkeypatch, tmp_path):
+    path = tmp_path / "board.plan.json"
+    path.write_text(__import__("json").dumps({"repo": "o/r", "saved": "2026-11-11T20:00:00-05:00", "changes": [
+        {"issue": 5, "kind": "milestone", "value": 1, "previous": None},      # still applies
+        {"issue": 6, "kind": "milestone", "value": 1, "previous": None},      # already there
+        {"issue": 7, "kind": "priority", "value": "High", "previous": None},  # set by hand since
+        {"issue": 8, "kind": "labels", "value": ["a", "c"], "previous": ["a", "b"]},
+        {"issue": 9, "kind": "title", "value": "x", "previous": "y"}]}))      # closed since
+    board = make_board(monkeypatch, [
+        card(5), card(6, milestone=1), card(7, fields={"Priority": "Low"}),
+        card(8, labels=labels("a", "b", "new"))], fields=ORG_FIELDS, plan_file=path)
+    assert board.plan_info()["count"] == 5 and board.cards[5]["milestone"] is None   # not applied
+    added, dropped = board.review_plan()
+    assert dropped == 2 and not path.exists() and board.plan_info()["count"] == 0
+    assert [(s["issue"], s["kind"], s["value"], s["source"]) for s in added] == [
+        (5, "milestone", 1, "plan"), (7, "priority", "High", "plan"),
+        (8, "labels", {"add": ["c"], "remove": ["b"]}, "plan")]
+    assert added[0]["reason"] == "Planned in a read-only session on 2026-11-11."
+    assert "It was none then and is Low now" in added[1]["reason"]
+    board.resolve([added[2]["id"]], "accept")
+    assert [l["name"] for l in board.cards[8]["labels"]] == ["a", "new", "c"]   # "new" survives
+
+
+def test_a_plan_can_be_discarded_and_a_bad_file_is_no_plan(monkeypatch, tmp_path):
+    path = tmp_path / "board.plan.json"
+    path.write_text("{not json")
+    board = make_board(monkeypatch, [card(5)], plan_file=path)
+    assert board.plan_info()["count"] == 0 and board.review_plan() == ([], 0)
+    path.write_text('{"changes": [{"issue": 5, "kind": "milestone", "value": 1}]}')
+    assert board.plan_info()["count"] == 1
+    board.discard_plan()
+    assert not path.exists()
+    assert server.plan_path("o/r", {"XDG_STATE_HOME": "/s"}) == Path("/s/milestones/board-o-r.plan.json")

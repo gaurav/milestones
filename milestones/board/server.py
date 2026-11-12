@@ -2,6 +2,7 @@
 is made, and tells every open page what happened. `docs/BoardAPI.md` is the contract; a
 front end needs nothing from this file but that."""
 
+import datetime
 import json
 import mimetypes
 import os
@@ -18,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import gh
 from ..cli import TRIAGE_BUCKET
-from . import data, reconcile
+from . import data, plan, reconcile
 
 STATIC = Path(__file__).parent / "static"
 TOKEN_HEADER = "X-Milestones-Token"
@@ -85,6 +86,11 @@ def state_path(repo: str, environ=None) -> Path:
     return home / "milestones" / f"board-{repo.replace('/', '-')}.json"
 
 
+def plan_path(repo: str, environ=None) -> Path:
+    """Where a repo's read-only changes are kept: beside its suggestions."""
+    return state_path(repo, environ).with_suffix(".plan.json")
+
+
 def suggestion_key(s: dict) -> str:
     return json.dumps([s["issue"], s["kind"], s["value"], s["source"]], sort_keys=True)
 
@@ -97,9 +103,10 @@ class Board:
     network, and two moves of one issue can't arrive out of order."""
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
-                 write=None, state_file: Path | None = None):
+                 write=None, state_file: Path | None = None, plan_file: Path | None = None):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
         self.state_file = state_file
+        self.plan_file = plan_file
         self.labels: list[dict] = []
         self.fields: dict = {}
         self.suggestions: dict[int, dict] = {}
@@ -168,6 +175,7 @@ class Board:
                 # priority reads "Priority: Critical" as the rules here do.
                 "labelValues": reconcile.KINDS,
                 "view": self.view,
+                "plan": self.plan_info(),
             }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -370,6 +378,94 @@ class Board:
     def unsettled(self) -> list[dict]:
         with self.lock:
             return [a for a in self.actions.values() if a["status"] in UNSETTLED]
+
+    # --- the plan: a read-only session's changes --------------------------------------------
+
+    def _titles(self) -> dict[int, str]:
+        return {n: m["title"] for n, m in self.milestones.items()}
+
+    def plan_info(self) -> dict:
+        """What the page needs to say about the plan: where it is and how much is in it. On
+        a read-only board that is this session's changes; on a writable one, what an earlier
+        read-only session left to be reviewed."""
+        with self.lock:
+            if self.read_only:
+                count = len(plan.net(list(self.actions.values())))
+            else:
+                count = len(plan.read(self.plan_file)["changes"]) if self.plan_file else 0
+            return {"path": str(self.plan_file) if self.plan_file else None, "count": count}
+
+    def save_plan(self) -> None:
+        """Write this read-only session's net changes out, or remove the file when there
+        are none left. Called after every change: a board that is killed loses nothing."""
+        if not self.read_only or self.plan_file is None:
+            return
+        with self.lock:
+            entries = plan.net(list(self.actions.values()))
+            try:
+                if not entries:
+                    self.plan_file.unlink(missing_ok=True)
+                    return
+                self.plan_file.parent.mkdir(parents=True, exist_ok=True)
+                saved = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+                self.plan_file.write_text(json.dumps(
+                    plan.document(self.repo, entries, self.cards, self._titles(), saved),
+                    indent=2, ensure_ascii=False))
+            except OSError as error:
+                print(f"warning: could not save the plan to {self.plan_file}: {error}",
+                      file=sys.stderr)
+
+    def restore_plan(self) -> tuple[int, list[str]]:
+        """Pick a saved plan up again on a read-only board: (changes restored, the ones that
+        no longer can be and why). A card that has since closed, or a milestone that has,
+        is left out rather than stopping the rest."""
+        if not self.read_only or self.plan_file is None:
+            return 0, []
+        restored, skipped = 0, []
+        for entry in plan.read(self.plan_file)["changes"]:
+            try:
+                restored += len(self.submit([{k: entry[k] for k in ("issue", "kind", "value")}]))
+            except Refused as refused:
+                skipped.append(f"{plan.summary(entry, self._titles())}"
+                               f" — {refused}")
+        self.save_plan()
+        return restored, skipped
+
+    def review_plan(self) -> tuple[list[dict], int]:
+        """On a writable board, turn a saved plan into suggestions to accept or reject:
+        (the suggestions added, how many changes were dropped as already made or no longer
+        possible). The plan file is used up by this; the suggestions are what persists."""
+        if self.read_only:
+            raise Refused(409, "this board is read-only: its changes are the plan. Start a "
+                               "writable board to review them.")
+        if self.plan_file is None:
+            return [], 0
+        with self.lock:
+            saved = plan.read(self.plan_file)
+            proposed, dropped = [], 0
+            for entry in saved["changes"]:
+                card = self.cards.get(entry["issue"])
+                made = card and plan.as_suggestion(
+                    entry, card_value(card, entry["kind"]), str(saved.get("saved") or ""),
+                    self._titles())
+                try:
+                    if not made:
+                        raise Refused(404, "gone, or already so")
+                    self.normalise(made)
+                    proposed.append(made)
+                except Refused:
+                    dropped += 1
+            added = self._add_suggestions(proposed)
+            self._save_state()
+            self.plan_file.unlink(missing_ok=True)
+            return added, dropped + len(proposed) - len(added)
+
+    def discard_plan(self) -> None:
+        if self.read_only:
+            raise Refused(409, "on a read-only board the plan is what you have done here; "
+                               "undo the changes (z) to take them out of it")
+        if self.plan_file is not None:
+            self.plan_file.unlink(missing_ok=True)
 
     # --- suggestions ---------------------------------------------------------------------
 
@@ -624,9 +720,21 @@ def make_handler(board: Board, token: str):
                     if not isinstance(requests, list):
                         raise Refused(400, "send {actions: [{issue, kind, value}, ...]}")
                     made = board.submit(requests)
+                    board.save_plan()
                     for action in made:
                         board.publish("action", action)
+                    board.publish("plan", board.plan_info())
                     return self._json(200, {"actions": made})
+                if method == "POST" and rest == ["plan", "review"]:
+                    added, dropped = board.review_plan()
+                    for suggestion in added:
+                        board.publish("suggestion", suggestion)
+                    board.publish("plan", board.plan_info())
+                    return self._json(200, {"suggestions": added, "dropped": dropped})
+                if method == "POST" and rest == ["plan", "discard"]:
+                    board.discard_plan()
+                    board.publish("plan", board.plan_info())
+                    return self._json(200, {"plan": board.plan_info()})
                 if (method == "POST" and len(rest) == 3 and rest[0] == "actions"
                         and rest[1].isdigit() and rest[2] in ("retry", "revert")):
                     action = getattr(board, rest[2])(int(rest[1]))
@@ -646,6 +754,8 @@ def make_handler(board: Board, token: str):
                     if not isinstance(body.get("ids"), list):
                         raise Refused(400, "send {ids: [...], decision: 'accept' | 'reject'}")
                     changed, actions = board.resolve(body["ids"], body.get("decision"))
+                    board.save_plan()
+                    board.publish("plan", board.plan_info())
                     for action in actions:
                         board.publish("action", action)
                     for suggestion in changed:
@@ -731,7 +841,8 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         # other's saved suggestions, and leave `milestones suggest` reaching only the newer.
         raise SystemExit(f"A board is already running for {repo}: {other['url']}\n"
                          f"Stop it first (Ctrl-C there, or kill {other['pid']}).")
-    board = Board(repo, buckets, sort_key, state_file=state_path(repo))
+    board = Board(repo, buckets, sort_key, state_file=state_path(repo),
+                  plan_file=plan_path(repo))
 
     def progress(what: str, seen: int, total: int) -> None:
         label = "issues" if what == "issues" else "pull requests"
@@ -740,6 +851,15 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     print(f"Reading {repo} …", file=sys.stderr)
     board.load(progress)
     print(file=sys.stderr)
+    restored, skipped = board.restore_plan()
+    if restored or skipped:
+        print(f"Picked up {restored} change{'' if restored == 1 else 's'} from the plan left by "
+              f"an earlier read-only run ({board.plan_file}).", file=sys.stderr)
+        for line in skipped:
+            print(f"  left out: {line}", file=sys.stderr)
+    elif not board.read_only and board.plan_info()["count"]:
+        print(f"A read-only run left a plan of {board.plan_info()['count']} changes "
+              f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
     token = secrets.token_urlsafe(24)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(board, token))
     server.daemon_threads = True
@@ -765,6 +885,9 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     except KeyboardInterrupt:
         pass
     finally:
+        # `uv run` passes a SIGTERM on to its child, so a `kill` aimed at both arrives
+        # twice; the second must not cut the clean-up short.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         session.unlink(missing_ok=True)
         # A write already handed to gh finishes or fails within its own timeout; give the
         # queue a moment, then say what never reached GitHub.
@@ -786,7 +909,7 @@ def closing_lines(snapshot: dict) -> list[str]:
     lines = ["", f"{sum(a['status'] == 'done' for a in actions)} written to {snapshot['repo']}."]
     for status, label in (("failed", "NOT written (failed)"),
                           ("pending", "NOT written (still queued)"),
-                          ("would", "not written (read-only)")):
+                          ("would", "not written (read-only; kept in the plan)")):
         left = [a for a in actions if a["status"] == status]
         if left:
             lines.append(f"{len(left)} {label}:")

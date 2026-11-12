@@ -236,6 +236,13 @@ far more than `_norm_issue` keeps.
 - The page's layout (view, grouping, ticked milestones) is saved through `POST /api/v1/view` into
   the state file, not `localStorage`: each run is on a new port, which a browser treats as a new
   origin. `initialView` in `logic.ts` decides precedence: flags, then saved, then defaults.
+- A read-only board saves its changes to a plan file (`board/plan.py`; `Board.save_plan` after
+  every submit and resolve). The plan is the **net** of the `would` actions, so an undone change
+  is not in it. A writable board never applies a plan by itself: `review_plan` turns it into
+  suggestions (source `plan`) and deletes the file — the suggestions persist in the state file
+  from then on. Keep it that way; a plan is hours old and was made looking at a different board.
+- `uv run` forwards SIGTERM to its child, so `pkill -f` on a board's command line delivers it
+  twice; `server.run` ignores the second during clean-up.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.

@@ -81,7 +81,12 @@ export interface BoardData {
   labelValues?: Record<string, { field: string; prefix: string; values: Record<string, string> }>;
   /** How the board was last looked at, if it has been; see `View`. */
   view?: Partial<View>;
+  plan?: PlanInfo;
 }
+
+/** The plan file: on a read-only board, this session's changes, saved as they are made; on
+ *  a writable one, what an earlier read-only session left to be reviewed. */
+export interface PlanInfo { path: string | null; count: number }
 
 /** What the columns are, the grouping within them, and the milestones ticked (0 is none). */
 export interface View { by: string; group: string[]; shown: number[] }
@@ -145,16 +150,19 @@ export class Api {
   async setDue(number: number, due: string | null): Promise<Milestone> {
     return (await this.call<{ milestone: Milestone }>('PATCH', `/milestones/${number}`, { due })).milestone;
   }
+  reviewPlan(): Promise<{ suggestions: Suggestion[]; dropped: number }> { return this.call('POST', '/plan/review'); }
+  discardPlan(): Promise<unknown> { return this.call('POST', '/plan/discard'); }
   saveView(view: View): Promise<unknown> { return this.call('POST', '/view', view); }
   resolve(ids: number[], decision: 'accept' | 'reject'): Promise<{ suggestions: Suggestion[]; actions: Action[] }> {
     return this.call('POST', '/suggestions/resolve', { ids, decision });
   }
   /** Server-sent events: every action as it changes state, every milestone as it changes. */
-  events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; reload(): void }): EventSource {
+  events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; plan(p: PlanInfo): void; reload(): void }): EventSource {
     const source = new EventSource(`/api/v1/events?token=${encodeURIComponent(this.token)}`);
     source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('suggestion', (e) => on.suggestion(JSON.parse((e as MessageEvent).data)));
+    source.addEventListener('plan', (e) => on.plan(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('reload', () => on.reload());
     return source;
   }

@@ -85,12 +85,14 @@ loses neither and a rejected suggestion is not made again.
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is what a label means in a field's terms, as `{priority: {field, prefix, values}, effort: {…}}` — `prefix` is a regular expression for the label's name before its colon, and `values` maps what follows it, lower-cased, to an option's name; `view` is what was last saved with `POST /api/v1/view`, or `{}`. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is what a label means in a field's terms, as `{priority: {field, prefix, values}, effort: {…}}` — `prefix` is a regular expression for the label's name before its colon, and `values` maps what follows it, lower-cased, to an option's name; `view` is what was last saved with `POST /api/v1/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
 | `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
 | `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Here alone a `milestone` value may be a **title** (matched ignoring case), for a caller with no way to know the numbers. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
 | `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
+| `POST /api/v1/plan/review` | On a writable board, turn the plan a read-only session left into suggestions with source `plan`, and remove the plan file. Returns `{suggestions, dropped}`: `dropped` counts changes already made, or no longer possible. `409` on a read-only board. |
+| `POST /api/v1/plan/discard` | Delete the plan file without reviewing it. `409` on a read-only board, where the plan is the session's own changes: undo them instead. |
 | `POST /api/v1/view` | Body `{by, group, shown}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, and the milestone numbers ticked (`0` for none). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
@@ -108,9 +110,29 @@ a milestone.
 | `action` | an Action | it is made, and each time its status changes |
 | `milestone` | a Milestone | one is created, reopened or re-dated |
 | `suggestion` | a Suggestion | one is added, accepted, rejected or withdrawn |
+| `plan` | `{path, count}` | the plan file changed: after any action on a read-only board, and after a review or a discard |
 | `reload` | `{}` | a refresh finished; fetch the board again |
 
 A comment line arrives every 15 seconds to keep the connection open.
+
+## The plan file
+
+On a read-only board every action has status `would` and none is written. The net of them — per
+card and kind, from what the card held before the first to what the last left it with; nothing
+for a change that was undone; every comment — is saved after each change to
+`$XDG_STATE_HOME/milestones/board-<owner>-<repo>.plan.json`:
+
+```json
+{"about": "…", "repo": "o/r", "saved": "2026-11-11T22:39:38-05:00",
+ "changes": [{"issue": 2, "kind": "milestone", "value": null, "previous": 3,
+              "title": "…", "summary": "#2: milestone → none (was Not urgent)"}]}
+```
+
+`issue`, `kind` and `value` are what `POST /api/v1/actions` takes; `title` and `summary` are for
+whoever reads the file. A read-only board applies the file to its cards when it starts. A writable
+board never applies it: `plan.count` in the board says one is waiting, and `/plan/review` makes
+suggestions of it. A labels change becomes `{add, remove}` on review, so labels added since the
+plan survive it.
 
 ## Finding a running board
 
