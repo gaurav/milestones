@@ -16,7 +16,8 @@ actually has, and a repo is free to use only some of them.
 ## Setup
 
 Requires Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and an authenticated
-[`gh`](https://cli.github.com/) (all API calls go through it; there is no other auth).
+[`gh`](https://cli.github.com/) (all API calls go through it; a token of your own choosing is
+optional, see [Tokens and read-only runs](#tokens-and-read-only-runs)).
 
 ```sh
 uv tool install --editable .
@@ -58,9 +59,41 @@ phyloref = "yellow"
 Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`, `yellow`,
 `green`, `rose`, `pink` and `grey`; a 256-colour number from 0 to 255 works too.
 
+## Tokens and read-only runs
+
+Out of the box every call is made as whoever `gh auth login` signed in, which usually means a
+token that can push code as well as move issues. An env file narrows that. Copy
+[`env.default`](env.default) to `.env` in the directory you run `milestones` from, or to
+`~/.config/milestones.env`; a variable set in your shell wins over both, and only `MILESTONES_*`
+lines are read from a file.
+
+| Setting | What it does |
+| --- | --- |
+| `MILESTONES_GH_TOKEN` | The token `gh` is handed for every call. Unset: `gh`'s own login. |
+| `MILESTONES_GH_TOKEN_<OWNER>` | A token for calls about one owner's repos (`NCATSTranslator` → `_NCATSTRANSLATOR`, `my-org` → `_MY_ORG`). |
+| `MILESTONES_PERMISSIONS` | `write` (the default) or `read`. |
+
+With `MILESTONES_PERMISSIONS=read` nothing is written, whatever the token could do: `setup` says
+what it would create, `rollover` and `assign` list what they would move and stop, the `triage` walk
+says where each issue would go, and `check -i` reports each fix it would have made. It is the way
+to see what the tool suggests for your repos before letting it act.
+
+A fine-grained personal access token keeps the tool to what it should touch — Issues and Pull
+requests read and write, Metadata read, and organisation Projects read, with nothing for
+Contents. Such a token belongs to **one owner**, so repos under a second owner need a second
+token: that is what the per-owner setting is for. A search across every tracked repo goes out on
+the default token, which only has to be able to *read* them.
+
+`milestones doctor` shows which env files were found, the mode, which token each owner's calls
+use (the setting's name, never the token), who that token signs in as, and whether it can read
+projects and organisation issue fields.
+
 ## Commands
 
 ```sh
+milestones doctor                        # which token and permissions are in effect, and
+                                         # what that token can read
+
 milestones status [--json]               # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
                                          # due date, with open/closed issue counts, open
