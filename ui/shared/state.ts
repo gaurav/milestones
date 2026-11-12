@@ -4,9 +4,10 @@ import { computed, signal } from '@preact/signals';
 import { Api, parseFragment } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, Suggestion, Value } from './api.ts';
 import {
-  NONE, allColumns, columnOf, group, initialColumns, latestAction, nextFocus, noFilters, unsettled, withValue,
+  DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialColumns,
+  latestAction, nextFocus, noFilters, unsettled, withValue,
 } from './logic.ts';
-import type { ColumnId, Filters } from './logic.ts';
+import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
 
 const fragment = parseFragment(location.hash);
 export const api = new Api(fragment.token);
@@ -19,7 +20,12 @@ export const cards = signal<Map<number, Card>>(new Map());
 export const milestones = signal<Map<number, Milestone>>(new Map());
 export const actions = signal<Map<number, Action>>(new Map());
 export const filters = signal<Filters>(noFilters);
+/** The milestone columns ticked under Columns. In the priority and effort views these are
+ *  the scope instead: which milestones' cards are being sorted. */
 export const shown = signal<ColumnId[]>([]);
+/** What the columns are, and what cards are grouped by within a column. */
+export const dimension = signal<DimKind>('milestone');
+export const groupBy = signal<DimKind[]>([]);
 export const focused = signal<number | null>(null);
 export const selected = signal<Set<number>>(new Set());
 /** Which dialog is open: the milestone picker, or the editor for one kind. */
@@ -29,18 +35,65 @@ export const trayOpen = signal(false);
 /** Batches of changes made here, newest last, for `z`. Each entry is one card's way back. */
 const undoStack: { issue: number; kind: Kind; previous: Value }[][] = [];
 
-export const columns = computed<ColumnId[]>(() =>
+export const layout = computed<Layout>(() => ({
+  kind: dimension.value,
+  order: board.value?.columns ?? [],
+  fields: board.value?.fields ?? {},
+  mapping: board.value?.labelValues ?? PLAIN_MAPPING,
+  milestones: [...milestones.value.values()],
+}));
+/** Every milestone column there is: what the Columns menu lists, in any view. */
+export const milestoneColumns = computed<ColumnId[]>(() =>
   board.value ? allColumns(board.value.columns, [...milestones.value.values()], [...cards.value.values()]) : []);
-export const grouped = computed(() => group([...cards.value.values()], filters.value));
-export const visibleColumns = computed(() => columns.value.filter((id) => shown.value.includes(id)));
+export const columns = computed<ColumnId[]>(() =>
+  board.value ? dimColumns(dimension.value, layout.value, [...cards.value.values()]) : []);
+/** The milestones being sorted, in the priority and effort views; null when it is all of them. */
+export const scope = computed<Set<ColumnId> | null>(() =>
+  (shown.value.length === milestoneColumns.value.length ? null : new Set(shown.value)));
+export const grouped = computed(() =>
+  group([...cards.value.values()], filters.value, layout.value, scope.value, groupBy.value.filter((k) => k !== dimension.value)));
+/** How many cards each column holds before the filters, for "12 of 40". */
+export const totals = computed(() => {
+  const all = group([...cards.value.values()], noFilters, layout.value, scope.value);
+  return new Map([...all].map(([id, list]) => [id, list.length]));
+});
+export const visibleColumns = computed(() =>
+  (dimension.value === 'milestone' ? columns.value.filter((id) => shown.value.includes(id)) : columns.value));
 export const pending = computed(() => unsettled(actions.value.values()));
 export const readOnly = computed(() => board.value?.permissions === 'read');
 export const openSuggestions = computed(() => [...suggestions.value.values()].filter((s) => s.status === 'open'));
 
 export function notify(message: string) { say(message); }
 
-export function columnTitle(id: ColumnId): string {
-  return id === NONE ? 'No milestone' : milestones.value.get(id)?.title ?? `Milestone ${id}`;
+export function columnTitle(id: ColumnId, kind: DimKind = dimension.value): string {
+  return columnLabel(id, kind, layout.value.milestones);
+}
+
+/** The column a card stands in, in the current view. */
+export const currentColumn = (card: Card): ColumnId => columnFor(card, dimension.value, layout.value);
+
+export function setDimension(kind: DimKind) {
+  dimension.value = kind;
+  selected.value = new Set();
+  const here = focused.value === null ? undefined : cards.value.get(focused.value);
+  // Keep the focus if its card is still on show; otherwise start at the top of the view.
+  if (!here || !(grouped.value.get(currentColumn(here)) ?? []).includes(here)) {
+    focused.value = visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean)?.number ?? null;
+  }
+}
+
+export function cycleDimension() {
+  const at = DIMENSIONS.findIndex((d) => d.kind === dimension.value);
+  setDimension(DIMENSIONS[(at + 1) % DIMENSIONS.length]!.kind);
+}
+
+export function selectAll(numbers: number[]) {
+  const next = new Set(selected.value);
+  // A second click on a group that is wholly selected lets it go.
+  if (numbers.every((n) => next.has(n))) numbers.forEach((n) => next.delete(n));
+  else numbers.forEach((n) => next.add(n));
+  selected.value = next;
+  if (numbers.length && (focused.value === null || !numbers.includes(focused.value))) focused.value = numbers[0]!;
 }
 
 function say(message: string) {
@@ -55,7 +108,10 @@ function take(data: BoardData, first: boolean) {
   actions.value = new Map(data.actions.map((a) => [a.id, a]));
   suggestions.value = new Map(data.suggestions.map((s) => [s.id, s]));
   if (first) {
-    shown.value = initialColumns(columns.value, data.milestones, fragment.from);
+    shown.value = initialColumns(milestoneColumns.value, data.milestones, fragment.from);
+    const kinds = DIMENSIONS.map((d) => d.kind as string);
+    if (kinds.includes(fragment.by)) dimension.value = fragment.by as DimKind;
+    groupBy.value = fragment.group.filter((g) => kinds.includes(g)) as DimKind[];
     document.title = `${data.repo} · milestones board`;
   }
   if (focused.value === null || !cards.value.has(focused.value)) {
@@ -119,12 +175,22 @@ function remember(made: Action[]) {
 }
 
 /** Send changes to the server, which applies them and queues the writes; show the result. */
-async function submit(moves: Move[], undoable = true): Promise<boolean> {
+async function submit(moves: Move[], undoable = true, advance = true): Promise<boolean> {
   if (moves.length === 0) return true;
+  // Where the focused card stands now, to tell afterwards whether the change took it away.
+  const here = focused.value === null ? undefined : cards.value.get(focused.value);
+  const before = here ? currentColumn(here) : NONE;
+  const list = here ? grouped.value.get(before) ?? [] : [];
   try {
     const made = await api.act(moves);
     made.forEach(applyAction);
     if (undoable) remember(made);
+    const now = here ? cards.value.get(here.number) : undefined;
+    if (advance && now && (currentColumn(now) !== before || !(grouped.value.get(before) ?? []).some((c) => c.number === now.number))) {
+      // It left its column (or the view): carry on with the card that was below it, so a
+      // run of keys walks down a column.
+      focused.value = nextFocus(list, new Set(moves.map((m) => m.issue)), now.number) ?? now.number;
+    }
     return true;
   } catch (error) {
     say((error as Error).message);
@@ -134,22 +200,25 @@ async function submit(moves: Move[], undoable = true): Promise<boolean> {
 
 /** Move cards to a column. */
 export async function move(issues: number[], to: ColumnId) {
-  const value = to === NONE ? null : to;
+  const value = to === NONE ? null : (to as number);
   const moving = issues.map((n) => cards.value.get(n)).filter((c): c is Card => !!c && c.milestone !== value);
   if (moving.length === 0) return;
-  const target = milestones.value.get(to);
+  const target = milestones.value.get(to as number);
   if (to !== NONE && target?.state !== 'open') {
-    say(`'${columnTitle(to)}' is closed. Press m to reopen it and move there.`);
+    say(`'${columnTitle(to, 'milestone')}' is closed. Press m to reopen it and move there.`);
     return;
-  }
-  // Focus first, while the cards are still where they were.
-  const leaving = new Set(moving.map((c) => c.number));
-  if (focused.value !== null && leaving.has(focused.value)) {
-    const from = grouped.value.get(columnOf(cards.value.get(focused.value)!)) ?? [];
-    focused.value = nextFocus(from, leaving, focused.value) ?? focused.value;
   }
   selected.value = new Set();
   await submit(moving.map((c) => ({ issue: c.number, kind: 'milestone' as const, value })));
+}
+
+/** Put cards in a column of the current view: a milestone, a priority or an effort. */
+export async function place(issues: number[], to: ColumnId) {
+  if (dimension.value === 'milestone') return move(issues, to);
+  const kind = dimension.value;
+  const placing = issues.map((n) => cards.value.get(n)).filter((c): c is Card => !!c && currentColumn(c) !== to);
+  selected.value = new Set();
+  await submit(placing.map((c) => ({ issue: c.number, kind, value: to === NONE ? null : to })));
 }
 
 /** Change one kind on some cards: a priority, a title, the labels… */
@@ -162,7 +231,7 @@ export async function change(issues: number[], kind: Kind, value: Move['value'])
 export async function undo() {
   const batch = undoStack.pop();
   if (!batch) { say('Nothing to undo.'); return; }
-  await submit(batch.map((b) => ({ issue: b.issue, kind: b.kind, value: b.previous })).reverse(), false);
+  await submit(batch.map((b) => ({ issue: b.issue, kind: b.kind, value: b.previous })).reverse(), false, false);
   focused.value = batch[0]!.issue;
 }
 
@@ -236,7 +305,7 @@ export function step(dx: number, dy: number) {
     focused.value = cols.map((id) => grouped.value.get(id)?.[0]).find(Boolean)?.number ?? null;
     return;
   }
-  const col = columnOf(current);
+  const col = currentColumn(current);
   const list = grouped.value.get(col) ?? [];
   const row = Math.max(0, list.findIndex((c) => c.number === current.number));
   if (dy) {

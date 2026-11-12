@@ -122,3 +122,12 @@ main { flex: 1; display: flex; min-height: 0; }
 button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .detail-actions { margin-bottom: 10px; }
 .prompt { max-height: 30vh; overflow: auto; white-space: pre-wrap; font: 12px ui-monospace, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 8px 0 0; }
+.segmented { display: inline-flex; }
+.segmented button { border-radius: 0; margin-left: -1px; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; }
+.segmented button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.column.inbox { border-style: dashed; }
+.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 6px 2px 2px; font-weight: 600; color: var(--muted); position: sticky; top: -6px; background: var(--panel); z-index: 1; }
+.group-head:hover { color: var(--accent); }
+.chip.milestone { border: 1px solid var(--line); background: none; }

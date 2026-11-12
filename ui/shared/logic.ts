@@ -2,10 +2,27 @@
 // tested under `node --test` and reused by a view that looks nothing like the first.
 import type { Action, Card, Kind, Label, Milestone, Suggestion, Value } from './api.ts';
 
-/** A column is a milestone's number, or NONE for the issues that have no milestone. */
+/** What the columns are: a milestone each, or one per priority, or one per effort. Each is
+ *  an action kind, so putting a card in a column is the action `{kind, value}`. */
+export type DimKind = 'milestone' | 'priority' | 'effort';
+export const DIMENSIONS: { kind: DimKind; title: string }[] = [
+  { kind: 'milestone', title: 'Milestone' }, { kind: 'priority', title: 'Priority' }, { kind: 'effort', title: 'Effort' },
+];
+
+/** A column: a milestone's number, a priority's or effort's name, or NONE for the cards
+ *  that have no value in the dimension — no milestone, priority unset. */
 export const NONE = 0;
-export type ColumnId = number;
-export const columnOf = (card: Card): ColumnId => card.milestone ?? NONE;
+export type ColumnId = number | string;
+
+/** What a label says about a kind, as the server's reconcile table has it. */
+export interface LabelValues { field: string; prefix: string; values: Record<string, string> }
+export type Mapping = Partial<Record<'priority' | 'effort', LabelValues>>;
+/** Enough to read a label's raw text when a server sends no table. */
+export const PLAIN_MAPPING: Mapping = {
+  priority: { field: 'Priority', prefix: 'priority', values: {} },
+  effort: { field: 'Effort', prefix: '(?:size|effort)', values: {} },
+};
+const DEFAULT_OPTIONS = { priority: ['Urgent', 'High', 'Medium', 'Low'], effort: ['High', 'Medium', 'Low'] };
 
 export interface Filters {
   text: string;
@@ -17,28 +34,30 @@ export interface Filters {
 }
 export const noFilters: Filters = { text: '', label: '', priority: '', kind: '', hasPr: false, unlabelled: false };
 
-/** The priority someone recorded, wherever they recorded it: the organisation's field
- *  first, then a `Priority: X` label. Slice 2 turns a disagreement into a suggestion. */
-export function priorityOf(card: Card): string {
-  const field = card.fields?.['Priority'];
-  if (typeof field === 'string' && field) return field;
-  const label = card.labels.find((l) => /^priority:/i.test(l.name));
-  return label ? label.name.replace(/^priority:\s*/i, '') : '';
+/** A card's priority or effort wherever it was recorded, and where: the organisation's
+ *  field first, then a label, read in the field's terms ("Priority: Critical" is Urgent,
+ *  "Size: M" is Medium). A label the table doesn't know is given as written. */
+export function effectiveValue(card: Card, kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): { value: string; from: 'field' | 'label' | '' } {
+  const spec = mapping[kind] ?? PLAIN_MAPPING[kind]!;
+  const field = card.fields?.[spec.field];
+  if (typeof field === 'string' && field) return { value: field, from: 'field' };
+  const pattern = new RegExp(`^${spec.prefix}\\s*:\\s*(.+)$`, 'i');
+  for (const label of card.labels) {
+    const raw = pattern.exec(label.name.trim())?.[1]?.trim();
+    if (raw) return { value: spec.values[raw.toLowerCase()] ?? raw, from: 'label' };
+  }
+  return { value: '', from: '' };
 }
 
-export function effortOf(card: Card): string {
-  const field = card.fields?.['Effort'];
-  if (typeof field === 'string' && field) return field;
-  const label = card.labels.find((l) => /^size:/i.test(l.name));
-  return label ? label.name.replace(/^size:\s*/i, '') : '';
-}
+export const priorityOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'priority', mapping).value;
+export const effortOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'effort', mapping).value;
 
 export const linkedPrs = (card: Card) => [...(card.closingPrs ?? []), ...(card.mentionedPrs ?? [])];
 
-export function matches(card: Card, f: Filters): boolean {
+export function matches(card: Card, f: Filters, mapping?: Mapping): boolean {
   if (f.kind && card.kind !== f.kind) return false;
   if (f.label && !card.labels.some((l) => l.name === f.label)) return false;
-  if (f.priority && priorityOf(card).toLowerCase() !== f.priority.toLowerCase()) return false;
+  if (f.priority && priorityOf(card, mapping).toLowerCase() !== f.priority.toLowerCase()) return false;
   if (f.hasPr && linkedPrs(card).length === 0) return false;
   if (f.unlabelled && card.labels.length > 0) return false;
   const text = f.text.trim().toLowerCase();
@@ -48,8 +67,8 @@ export function matches(card: Card, f: Filters): boolean {
   return text.split(/\s+/).every((word) => hay.toLowerCase().includes(word));
 }
 
-/** Every column the board can show, in order: no milestone, the open milestones as the
- *  server ordered them, then any closed milestone that still has open work on it. */
+/** Every milestone column the board can show, in order: no milestone, the open milestones
+ *  as the server ordered them, then any closed milestone that still has open work on it. */
 export function allColumns(columns: number[], milestones: Milestone[], cards: Card[]): ColumnId[] {
   const stranded = milestones
     .filter((m) => m.state === 'closed' && cards.some((c) => c.milestone === m.number))
@@ -67,17 +86,95 @@ export function initialColumns(all: ColumnId[], milestones: Milestone[], from: s
   return shown.length ? shown : all;
 }
 
-/** Cards by column, freshest first, after the filters. */
-export function group(cards: Card[], f: Filters): Map<ColumnId, Card[]> {
+/** What a view needs to know to lay cards out: which dimension the columns are, the
+ *  board's milestone order and fields, and the label table. */
+export interface Layout {
+  kind: DimKind;
+  /** Open milestones' numbers in order, from the server. */
+  order: number[];
+  /** The owner's single-select fields and their options. */
+  fields: Record<string, string[]>;
+  mapping: Mapping;
+  milestones: Milestone[];
+}
+
+const FIELD_OF = { priority: 'Priority', effort: 'Effort' } as const;
+
+/** Whether the owner has the issue field a dimension writes to. Without it the value lives
+ *  in a label, which a pull request can carry; with it, a pull request has nowhere to. */
+export const hasField = (kind: DimKind, fields: Record<string, string[]>) => kind !== 'milestone' && FIELD_OF[kind] in fields;
+
+/** A dimension's columns in order, the unset one first. */
+export function dimColumns(kind: DimKind, layout: Layout, cards: Card[]): ColumnId[] {
+  if (kind === 'milestone') return allColumns(layout.order, layout.milestones, cards);
+  return [NONE, ...(layout.fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind])];
+}
+
+/** The column a card stands in for a dimension. A priority or effort that isn't one of the
+ *  options — a label the table doesn't know — is unset as far as the columns go. */
+export function columnFor(card: Card, kind: DimKind, layout: Layout): ColumnId {
+  if (kind === 'milestone') return card.milestone ?? NONE;
+  const value = effectiveValue(card, kind, layout.mapping).value.toLowerCase();
+  const options = layout.fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind];
+  return options.find((o) => o.toLowerCase() === value) ?? NONE;
+}
+
+export function columnLabel(id: ColumnId, kind: DimKind, milestones: Milestone[]): string {
+  if (kind === 'milestone') return id === NONE ? 'No milestone' : milestones.find((m) => m.number === id)?.title ?? `Milestone ${id}`;
+  return id === NONE ? (kind === 'priority' ? 'No priority' : 'No effort') : String(id);
+}
+
+/** Whether a card belongs in a view at all. Sorting by priority or effort is done over the
+ *  milestones in `scope` (null for all of them), and leaves out pull requests where the value
+ *  would have to go in a field a pull request hasn't got. */
+export function inView(card: Card, layout: Layout, scope: Set<ColumnId> | null): boolean {
+  if (layout.kind === 'milestone') return true;
+  if (card.kind === 'pr' && hasField(layout.kind, layout.fields)) return false;
+  return scope === null || scope.has(card.milestone ?? NONE);
+}
+
+/** Where a card sorts within its column: by each `groupBy` dimension in turn, unset last,
+ *  so the cards someone has already judged come first. */
+function groupRank(card: Card, groupBy: DimKind[], layout: Layout, cards: Card[]): number[] {
+  return groupBy.map((kind) => {
+    const at = dimColumns(kind, layout, cards).indexOf(columnFor(card, kind, layout));
+    return at <= 0 ? Number.MAX_SAFE_INTEGER : at;
+  });
+}
+
+/** Cards by column after the filters: grouped as `groupBy` says, freshest first within a
+ *  group. The order is the order they are drawn in and walked in. */
+export function group(cards: Card[], f: Filters, layout: Layout, scope: Set<ColumnId> | null = null, groupBy: DimKind[] = []): Map<ColumnId, Card[]> {
   const groups = new Map<ColumnId, Card[]>();
+  const rank = new Map<number, number[]>();
   for (const card of cards) {
-    if (!matches(card, f)) continue;
-    const id = columnOf(card);
+    if (!inView(card, layout, scope) || !matches(card, f, layout.mapping)) continue;
+    const id = columnFor(card, layout.kind, layout);
     if (!groups.has(id)) groups.set(id, []);
     groups.get(id)!.push(card);
+    if (groupBy.length) rank.set(card.number, groupRank(card, groupBy, layout, cards));
   }
-  for (const list of groups.values()) list.sort((a, b) => b.updated.localeCompare(a.updated));
+  for (const list of groups.values()) {
+    list.sort((a, b) => {
+      const [ra, rb] = [rank.get(a.number) ?? [], rank.get(b.number) ?? []];
+      for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i]! - rb[i]!;
+      return b.updated.localeCompare(a.updated);
+    });
+  }
   return groups;
+}
+
+/** A column's cards cut into its groups, each with a heading like "High · Medium". One
+ *  group with no heading when nothing is grouped. */
+export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; cards: Card[] }[] {
+  if (groupBy.length === 0) return list.length ? [{ label: '', cards: list }] : [];
+  const out: { label: string; cards: Card[] }[] = [];
+  for (const card of list) {
+    const label = groupBy.map((kind) => columnLabel(columnFor(card, kind, layout), kind, layout.milestones)).join(' · ');
+    if (out.at(-1)?.label === label) out.at(-1)!.cards.push(card);
+    else out.push({ label, cards: [card] });
+  }
+  return out;
 }
 
 /** Where focus goes when the focused card leaves its column: the card that was below it,
@@ -176,11 +273,11 @@ export function inkOn(hex: string): string {
 /** What to paste into a coding agent's session to have it weigh in on some cards: where
  *  each stands now, what you think, and how it should answer. The agent has the repository;
  *  this gives it the question. */
-export function askPrompt(repo: string, asked: Card[], milestones: Map<number, Milestone>, view: string): string {
+export function askPrompt(repo: string, asked: Card[], milestones: Map<number, Milestone>, view: string, mapping?: Mapping): string {
   const lines = asked.map((c) => {
     const where = c.milestone === null ? 'no milestone' : milestones.get(c.milestone)?.title ?? `milestone ${c.milestone}`;
     const labels = c.labels.map((l) => l.name).join(', ') || 'none';
-    return `- ${repo}#${c.number} "${c.title}"\n  ${c.url}\n  Now: ${where}; priority ${priorityOf(c) || 'not set'}; effort ${effortOf(c) || 'not set'}; labels: ${labels}.`;
+    return `- ${repo}#${c.number} "${c.title}"\n  ${c.url}\n  Now: ${where}; priority ${priorityOf(c, mapping) || 'not set'}; effort ${effortOf(c, mapping) || 'not set'}; labels: ${labels}.`;
   });
   const one = asked.length === 1;
   return [

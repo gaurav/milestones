@@ -76,6 +76,9 @@ export interface BoardData {
   /** The owner's single-select issue fields and their options; empty for a user account. */
   fields: Record<string, string[]>;
   suggestions: Suggestion[];
+  /** What a label means in a field's terms, per kind: `prefix` is a regular expression for
+   *  the label's name before its colon, `values` maps what follows (lower-cased) to an option. */
+  labelValues?: Record<string, { field: string; prefix: string; values: Record<string, string> }>;
 }
 
 /** A change someone proposes — a coding agent, or the board's own rules — for you to
@@ -93,10 +96,15 @@ export interface Suggestion {
 
 export interface Move { issue: number; kind: Kind; value: Value | { add?: string[]; remove?: string[] } }
 
-/** The per-run token and the columns asked for with --from, from the URL fragment. */
-export function parseFragment(hash: string): { token: string; from: string[] } {
+/** The per-run token, and what --from, --by and --group asked for, from the URL fragment. */
+export function parseFragment(hash: string): { token: string; from: string[]; by: string; group: string[] } {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
-  return { token: params.get('t') ?? '', from: params.getAll('from') };
+  return {
+    token: params.get('t') ?? '',
+    from: params.getAll('from'),
+    by: params.get('by') ?? '',
+    group: (params.get('group') ?? '').split(',').filter(Boolean),
+  };
 }
 
 export class Api {
