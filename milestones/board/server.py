@@ -160,6 +160,9 @@ class Board:
                 "fields": {name: list(field["options"]) for name, field in self.fields.items()},
                 "suggestions": [s for s in self.suggestions.values()
                                 if s["status"] != "rejected"],
+                # The one table of what a label means, so a front end that sorts cards by
+                # priority reads "Priority: Critical" as the rules here do.
+                "labelValues": reconcile.KINDS,
             }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -696,7 +699,8 @@ def make_handler(board: Board, token: str):
 
 
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
-        shown: list[str] | None = None) -> None:
+        shown: list[str] | None = None, by: str | None = None,
+        group: str | None = None) -> None:
     board = Board(repo, buckets, sort_key, state_file=state_path(repo))
 
     def progress(what: str, seen: int, total: int) -> None:
@@ -713,6 +717,8 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     # The token rides in the fragment, which a browser never sends to a server or leaves
     # in a Referer; the page reads it and sends it back as a header.
     fragment = f"t={token}" + "".join(f"&from={quote_title(t)}" for t in shown or [])
+    # Hints for the page, like `from`: what the columns are, and the grouping within them.
+    fragment += (f"&by={by}" if by else "") + (f"&group={group}" if group else "")
     url = f"http://127.0.0.1:{server.server_address[1]}/#{fragment}"
     # Where `milestones suggest` finds this board. Imported here, as client imports this module.
     from .client import write_session

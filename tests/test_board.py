@@ -438,3 +438,10 @@ def test_brief_buckets_match_milestones_md():
     text = client.brief(DEFAULT_BUCKETS)
     assert "milestones suggest REF" in text and "- Critical: Must go into the next release" in text
     assert "Urgent, High, Medium, Low" in text
+
+
+def test_the_board_hands_the_page_its_label_table(monkeypatch):
+    snapshot = make_board(monkeypatch, []).snapshot()
+    assert snapshot["labelValues"] is reconcile.KINDS
+    assert snapshot["labelValues"]["priority"]["values"]["critical"] == "Urgent"
+    assert set(snapshot["labelValues"]["effort"]) == {"field", "prefix", "values"}

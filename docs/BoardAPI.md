@@ -12,7 +12,7 @@ URL, and is the place to start a new one.
 
 - The URL's fragment carries a token that is new on every start: `#t=<token>&from=<title>…`.
   `from` repeats once per `--from` given on the command line, and is only a hint about which
-  columns to show first.
+  columns to show first; `by` and `group` (from `--by` and `--group`) are hints of the same kind.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.
@@ -85,7 +85,7 @@ loses neither and a rejected suggestion is not made again.
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is what a label means in a field's terms, as `{priority: {field, prefix, values}, effort: {…}}` — `prefix` is a regular expression for the label's name before its colon, and `values` maps what follows it, lower-cased, to an option's name. |
 | `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
