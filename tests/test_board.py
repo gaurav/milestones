@@ -6,8 +6,8 @@ import pytest
 from milestones import gh
 from pathlib import Path
 
-from milestones.board import data, reconcile, server
-from milestones.cli import remote_repo, sort_key
+from milestones.board import client, data, reconcile, server
+from milestones.cli import DEFAULT_BUCKETS, remote_repo, sort_key, suggest_ref
 
 
 def issue_node(number, **extra):
@@ -380,3 +380,61 @@ def test_a_suggestion_that_could_never_be_accepted_is_refused(monkeypatch):
 
 def test_state_path_is_per_repo_under_the_state_home():
     assert server.state_path("o/r", {"XDG_STATE_HOME": "/s"}) == Path("/s/milestones/board-o-r.json")
+
+
+# --- milestones suggest -------------------------------------------------------------------
+
+def test_one_command_becomes_one_suggestion_per_change():
+    made = client.proposals(62, "own source, no conflicts", "opus", milestone="Needed soon",
+                            priority="medium", effort="none", add_labels=["new data source"],
+                            title="Add X", comment="note", close="not_planned")
+    assert [(p["kind"], p["value"]) for p in made] == [
+        ("milestone", "Needed soon"), ("priority", "medium"), ("effort", None),
+        ("labels", {"add": ["new data source"], "remove": []}), ("title", "Add X"),
+        ("comment", "note"), ("state", "not_planned")]
+    assert {(p["issue"], p["reason"], p["source"]) for p in made} == {
+        (62, "own source, no conflicts", "opus")}
+    assert client.proposals(1, "r", "s", milestone="none")[0]["value"] is None
+    with pytest.raises(SystemExit, match="Nothing to suggest"):
+        client.proposals(1, "r", "s")
+
+
+def test_a_suggestion_names_its_milestone_by_title(monkeypatch):
+    board = make_board(monkeypatch, [card(5)])
+    (s,) = board.suggest([{"issue": 5, "kind": "milestone", "value": " soon ",
+                           "reason": "r", "source": "opus"}])
+    assert s["value"] == 1
+    with pytest.raises(server.Refused, match="the open ones are: Needs triage, Soon"):
+        board.suggest([{"issue": 5, "kind": "milestone", "value": "v9", "source": "opus"}])
+    with pytest.raises(server.Refused, match="closed"):
+        board.suggest([{"issue": 5, "kind": "milestone", "value": "Old", "source": "opus"}])
+
+
+def test_suggest_refs_are_bare_numbers_inside_a_checkout():
+    assert suggest_ref("62", "o/r") == ("o/r", 62)
+    assert suggest_ref("#62", "o/r") == ("o/r", 62)
+    assert suggest_ref("a/b#7", "o/r") == ("a/b", 7)
+    assert suggest_ref("https://github.com/a/b/issues/7", None) == ("a/b", 7)
+    with pytest.raises(SystemExit, match="names no repo"):
+        suggest_ref("62", None)
+
+
+def test_a_running_board_is_found_by_repo_whatever_the_case(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    with pytest.raises(SystemExit, match="No board is running for o/r"):
+        client.find_session("o/r")
+    path = client.write_session("O/R", "http://127.0.0.1:1", "tok")
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert client.find_session("o/r")["token"] == "tok"
+    with pytest.raises(SystemExit, match="not answering"):
+        client.post(client.find_session("o/r"), "/api/v1/suggestions", {})
+
+
+def test_brief_buckets_match_milestones_md():
+    table = Path(__file__).parent.parent.joinpath("MILESTONES.md").read_text()
+    for bucket in DEFAULT_BUCKETS:
+        assert f"| `{bucket}`" in table
+        assert client.BUCKET_MEANINGS[bucket] in " ".join(table.split())
+    text = client.brief(DEFAULT_BUCKETS)
+    assert "milestones suggest REF" in text and "- Critical: Must go into the next release" in text
+    assert "Urgent, High, Medium, Low" in text

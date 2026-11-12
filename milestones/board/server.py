@@ -7,6 +7,7 @@ import mimetypes
 import os
 import queue
 import secrets
+import signal
 import sys
 import threading
 import time
@@ -429,6 +430,17 @@ class Board:
             if not all(isinstance(p, dict) for p in proposed):
                 raise Refused(400, "each suggestion is {issue, kind, value, reason, source}")
             for p in proposed:
+                if p.get("kind") == "milestone" and isinstance(p.get("value"), str):
+                    # By title, for a caller that has no way to know the numbers.
+                    found = [m for m in self.milestones.values()
+                             if m["title"].lower() == p["value"].strip().lower()]
+                    if not found:
+                        raise Refused(404, f"no milestone called {p['value']!r}; the open "
+                                           "ones are: " + ", ".join(sorted(
+                                               m["title"] for m in self.milestones.values()
+                                               if m["state"] == "open")))
+                    # An open one first: a closed namesake is not where anything should go.
+                    p["value"] = min(found, key=lambda m: m["state"] != "open")["number"]
                 self.normalise(p)
                 if str(p.get("source") or "").startswith("rule:"):
                     raise Refused(400, "a source starting 'rule:' is the board's own")
@@ -702,16 +714,23 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     # in a Referer; the page reads it and sends it back as a header.
     fragment = f"t={token}" + "".join(f"&from={quote_title(t)}" for t in shown or [])
     url = f"http://127.0.0.1:{server.server_address[1]}/#{fragment}"
+    # Where `milestones suggest` finds this board. Imported here, as client imports this module.
+    from .client import write_session
+    session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
     mode = "  (read-only: nothing will be written)" if board.read_only else ""
     print(f"{board.repo}: {len(board.cards)} open issues and pull requests{mode}\n{url}\n"
           "Ctrl-C to stop.", file=sys.stderr)
     if open_browser:
         webbrowser.open(url)
+    # A plain `kill` should end the board as Ctrl-C does, so that the session file goes and
+    # the closing lines are printed.
+    signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        session.unlink(missing_ok=True)
         # A write already handed to gh finishes or fails within its own timeout; give the
         # queue a moment, then say what never reached GitHub.
         deadline = time.time() + 10

@@ -89,7 +89,7 @@ loses neither and a rejected suggestion is not made again.
 | `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
-| `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
+| `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Here alone a `milestone` value may be a **title** (matched ignoring case), for a caller with no way to know the numbers. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
 | `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
@@ -110,6 +110,13 @@ a milestone.
 | `reload` | `{}` | a refresh finished; fetch the board again |
 
 A comment line arrives every 15 seconds to keep the connection open.
+
+## Finding a running board
+
+While it runs, a board keeps `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.session.json`
+(mode 0600) holding `{repo, url, token, pid}`, and removes it when it stops. That is how
+`milestones suggest` finds the board for a repo; anything else on the same machine can do the same.
+A file left behind by a board that was killed outright points at a port nothing answers on.
 
 ## Trying it
 

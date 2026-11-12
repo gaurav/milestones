@@ -1372,18 +1372,82 @@ def remote_repo(url: str) -> str | None:
 def cmd_board(config, args):
     """Open the triage board for one repo: the one named, or the checkout you are in."""
     # Imported here: the board is the one command with a server and a front end behind it.
-    from .board import server
+    from .board import client, server
+    if args.brief:
+        print(client.brief(config["buckets"]))
+        return
     if args.repo:
         repo = parse_repo(args.repo)
     else:
-        found = subprocess.run(["git", "remote", "get-url", "origin"],
-                               capture_output=True, text=True)
-        repo = remote_repo(found.stdout) if found.returncode == 0 else None
+        repo = cwd_repo()
         if repo is None:
             sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
                      "whose origin is on GitHub.")
     server.run(repo, config["buckets"], sort_key, port=args.port,
                open_browser=not args.no_open, shown=args.sources)
+
+
+def cwd_repo() -> str | None:
+    """The GitHub repo the current directory is a checkout of, by its origin."""
+    found = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+    return remote_repo(found.stdout) if found.returncode == 0 else None
+
+
+def suggest_ref(text: str, here: str | None) -> tuple[str, int]:
+    """(repo, number) for a ref given to `suggest`: OWNER/NAME#N or a URL anywhere, and a
+    bare N or #N inside a checkout, which is how an agent working in the repo names an issue."""
+    bare = re.fullmatch(r"#?(\d+)", text.strip())
+    if bare:
+        if here is None:
+            sys.exit(f"{text!r} names no repo, and this is not a checkout of one on GitHub. "
+                     "Give OWNER/NAME#N.")
+        return here, int(bare[1])
+    return parse_issue_ref(text)
+
+
+def cmd_suggest(config, args):
+    """Propose changes to an issue on a running board, for the person there to accept or
+    reject. Writes nothing to GitHub."""
+    from .board import client
+    source = args.source or os.environ.get("MILESTONES_SOURCE") or "agent"
+    here = cwd_repo()
+    by_repo: dict[str, list[dict]] = {}
+    if args.json:
+        try:
+            batch = json.load(sys.stdin)
+        except ValueError as error:
+            sys.exit(f"--json reads a JSON list from stdin: {error}")
+        if not isinstance(batch, list) or not all(isinstance(b, dict) and "ref" in b for b in batch):
+            sys.exit('--json reads a list of {"ref", "kind", "value", "reason"} from stdin.')
+        for b in batch:
+            repo, number = suggest_ref(str(b["ref"]), here)
+            by_repo.setdefault(repo, []).append(
+                {"issue": number, "kind": b.get("kind"), "value": b.get("value"),
+                 "reason": b.get("reason") or "", "source": b.get("source") or source})
+    else:
+        if not args.ref:
+            sys.exit("Give an issue: milestones suggest OWNER/NAME#N --priority high --reason ...")
+        if not args.reason:
+            sys.exit("Give a --reason: it is what the person at the board reads beside the "
+                     "suggestion.")
+        comment = args.comment
+        if args.comment_file:
+            comment = Path(args.comment_file).read_text()
+        repo, number = suggest_ref(args.ref, here)
+        by_repo[repo] = client.proposals(
+            number, args.reason, source, milestone=args.milestone, priority=args.priority,
+            effort=args.effort, add_labels=args.add_label, remove_labels=args.remove_label,
+            title=args.title, comment=comment, close=args.close)
+    for repo, proposed in by_repo.items():
+        added = client.post(client.find_session(repo), "/api/v1/suggestions",
+                            {"suggestions": proposed})["suggestions"]
+        for s in added:
+            print(f"suggested for {repo}#{s['issue']}: {s['kind']} → "
+                  f"{json.dumps(s['value'], ensure_ascii=False)}")
+        if len(added) < len(proposed):
+            print(f"({len(proposed) - len(added)} already suggested or already turned down; "
+                  "not repeated)")
+    print("Waiting on the person at the board to accept or reject.")
 
 
 def token_kind(scopes: str | None) -> str:
@@ -1971,7 +2035,31 @@ def main():
                             "`none` is the issues with no milestone)")
     board.add_argument("--port", type=int, default=0, help="default: any free port")
     board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
+    board.add_argument("--brief", action="store_true",
+                       help="print the briefing to give a coding agent that will suggest "
+                            "changes, and exit")
     board.set_defaults(func=cmd_board)
+
+    suggest = sub.add_parser("suggest", help="propose changes to an issue on a running board, "
+                                             "for the person there to accept or reject; "
+                                             "writes nothing itself")
+    suggest.add_argument("ref", nargs="?", metavar="REF",
+                         help="OWNER/NAME#N, an issue URL, or N inside the repo's checkout")
+    suggest.add_argument("--milestone", metavar="TITLE", help='"none" takes it off its milestone')
+    suggest.add_argument("--priority", metavar="P", help='e.g. urgent, high, medium, low; "none" clears')
+    suggest.add_argument("--effort", metavar="E", help='e.g. high, medium, low; "none" clears')
+    suggest.add_argument("--add-label", action="append", metavar="LABEL")
+    suggest.add_argument("--remove-label", action="append", metavar="LABEL")
+    suggest.add_argument("--title", help="a new title")
+    suggest.add_argument("--comment", help="a comment to post")
+    suggest.add_argument("--comment-file", metavar="PATH", help="a comment to post, from a file")
+    suggest.add_argument("--close", choices=["completed", "not_planned"])
+    suggest.add_argument("--reason", help="why, in a sentence or two; shown beside the suggestion")
+    suggest.add_argument("--source", help="who is suggesting, e.g. a model's name "
+                                          "(default: $MILESTONES_SOURCE, else 'agent')")
+    suggest.add_argument("--json", action="store_true",
+                         help='read a batch from stdin: [{"ref", "kind", "value", "reason"}]')
+    suggest.set_defaults(func=cmd_suggest)
 
     check = sub.add_parser("check",
                            help="milestones that need renaming, dating, closing or rolling over")
