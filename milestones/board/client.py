@@ -28,6 +28,19 @@ def write_session(repo: str, url: str, token: str) -> Path:
     return path
 
 
+def running_session(repo: str) -> dict | None:
+    """The session of a board that is still running for a repo, if there is one. A file left
+    by a board that was killed outright names a process that is gone, and counts for nothing."""
+    try:
+        session = find_session(repo)
+        os.kill(int(session["pid"]), 0)
+    except (SystemExit, KeyError, ValueError, TypeError, ProcessLookupError):
+        return None
+    except PermissionError:
+        pass  # it exists, and is someone else's
+    return session
+
+
 def find_session(repo: str) -> dict:
     """The running board for a repo, whatever case the name was typed in."""
     wanted = session_path(repo)
