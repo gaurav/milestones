@@ -701,6 +701,14 @@ def make_handler(board: Board, token: str):
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
         shown: list[str] | None = None, by: str | None = None,
         group: str | None = None) -> None:
+    # Imported here, as client imports this module.
+    from .client import running_session, write_session
+    other = running_session(repo)
+    if other:
+        # Two boards on one repo would each hold their own idea of the cards, overwrite each
+        # other's saved suggestions, and leave `milestones suggest` reaching only the newer.
+        raise SystemExit(f"A board is already running for {repo}: {other['url']}\n"
+                         f"Stop it first (Ctrl-C there, or kill {other['pid']}).")
     board = Board(repo, buckets, sort_key, state_file=state_path(repo))
 
     def progress(what: str, seen: int, total: int) -> None:
@@ -720,8 +728,7 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     # Hints for the page, like `from`: what the columns are, and the grouping within them.
     fragment += (f"&by={by}" if by else "") + (f"&group={group}" if group else "")
     url = f"http://127.0.0.1:{server.server_address[1]}/#{fragment}"
-    # Where `milestones suggest` finds this board. Imported here, as client imports this module.
-    from .client import write_session
+    # Where `milestones suggest` finds this board.
     session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
     mode = "  (read-only: nothing will be written)" if board.read_only else ""
     print(f"{board.repo}: {len(board.cards)} open issues and pull requests{mode}\n{url}\n"

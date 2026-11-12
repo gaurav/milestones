@@ -222,7 +222,8 @@ for you to accept or reject; nothing is written to GitHub until you accept. `sug
 `--title`, `--comment` or `--comment-file`, and `--close`. `--source` (or `MILESTONES_SOURCE` in
 the agent's environment) says who is suggesting, so two sessions on different models can look at
 the same issue and you can compare what each proposed. `milestones suggest --json` reads a batch
-from stdin. A board has to be running for the repo; `suggest` says so if one isn't.
+from stdin. A board has to be running for the repo; `suggest` says so if one isn't. There is one
+board per repo at a time: starting a second says where the first is.
 
 The page and the server share nothing but an HTTP API, described in
 [docs/BoardAPI.md](docs/BoardAPI.md), so a different front end — or a script — can use the same

@@ -214,7 +214,9 @@ far more than `_norm_issue` keeps.
   suggestion later.
 - `milestones suggest` finds a running board through the session file `board/client.py` writes
   (`board-<owner>-<repo>.session.json` beside the suggestions file, mode 0600, removed on exit;
-  SIGTERM is turned into the Ctrl-C path so `kill` cleans up too). It only ever POSTs
+  SIGTERM is turned into the Ctrl-C path so `kill` cleans up too). `server.run` refuses to start
+  a second board for a repo whose session file names a live process: two would overwrite each
+  other's saved suggestions. It only ever POSTs
   suggestions, so it is safe for an agent to run unprompted and in a read-only run alike.
 - `client.BUCKET_MEANINGS` repeats MILESTONES.md's bucket table for `board --brief`, and
   `test_brief_buckets_match_milestones_md` fails when either moves without the other.

@@ -430,6 +430,18 @@ def test_a_running_board_is_found_by_repo_whatever_the_case(tmp_path, monkeypatc
         client.post(client.find_session("o/r"), "/api/v1/suggestions", {})
 
 
+def test_a_board_counts_as_running_only_while_its_process_is(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    assert client.running_session("o/r") is None
+    path = client.write_session("o/r", "http://127.0.0.1:1", "tok")   # this process: alive
+    assert client.running_session("O/R")["url"] == "http://127.0.0.1:1"
+    # A pid no process has: what a board killed outright leaves behind.
+    path.write_text('{"repo": "o/r", "url": "u", "token": "t", "pid": 2147483646}')
+    assert client.running_session("o/r") is None
+    path.write_text('{"repo": "o/r", "url": "u", "token": "t"}')
+    assert client.running_session("o/r") is None
+
+
 def test_brief_buckets_match_milestones_md():
     table = Path(__file__).parent.parent.joinpath("MILESTONES.md").read_text()
     for bucket in DEFAULT_BUCKETS:
