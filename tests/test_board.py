@@ -4,7 +4,9 @@ fetch and the write swapped for fakes. Nothing here calls gh."""
 import pytest
 
 from milestones import gh
-from milestones.board import data, server
+from pathlib import Path
+
+from milestones.board import data, reconcile, server
 from milestones.cli import remote_repo, sort_key
 
 
@@ -92,17 +94,25 @@ def test_only_loopback_hosts_on_the_servers_own_port_are_served():
 
 
 def card(number, kind="issue", milestone=None, **extra):
-    return {"number": number, "kind": kind, "milestone": milestone, **extra}
+    return {"number": number, "id": f"N{number}", "kind": kind, "milestone": milestone,
+            "title": f"Card {number}", "labels": [], "comments": 0, **extra}
 
 
-def make_board(monkeypatch, cards, read_only=False, buckets=("Needs triage",), write=None):
+ORG_FIELDS = {"Priority": {"id": "F_P", "options": {"Urgent": "o1", "High": "o2",
+                                                   "Medium": "o3", "Low": "o4"}},
+              "Effort": {"id": "F_E", "options": {"High": "e1", "Medium": "e2", "Low": "e3"}}}
+
+
+def make_board(monkeypatch, cards, read_only=False, buckets=("Needs triage",), write=None,
+               fields=None, state_file=None):
     monkeypatch.setattr(gh, "read_only", lambda: read_only)
-    fetched = {"repo": "o/r", "cards": cards, "milestones": [
+    fetched = {"repo": "o/r", "cards": cards, "fields": fields or {},
+               "labels": [{"name": "bug", "color": "ff0000"}], "milestones": [
         {"number": 1, "title": "Soon", "state": "open", "due": None},
         {"number": 2, "title": "Needs triage", "state": "open", "due": None},
         {"number": 3, "title": "Old", "state": "closed", "due": None}]}
     board = server.Board("o/r", list(buckets), sort_key, fetch=lambda repo, progress: fetched,
-                         write=write or (lambda action: None))
+                         write=write or (lambda action: None), state_file=state_file)
     board.load()
     return board
 
@@ -133,7 +143,10 @@ def test_a_bad_request_refuses_the_whole_batch(monkeypatch):
     for bad, status in (({"issue": 6, "kind": "milestone", "value": 99}, 404),
                         ({"issue": 6, "kind": "milestone", "value": 3}, 409),   # closed
                         ({"issue": 9, "kind": "milestone", "value": 1}, 404),
-                        ({"issue": 6, "kind": "title", "value": "x"}, 400)):
+                        ({"issue": 6, "kind": "title", "value": " "}, 400),
+                        ({"issue": 6, "kind": "state", "value": "wontfix"}, 400),
+                        ({"issue": 6, "kind": "labels", "value": "bug"}, 400),
+                        ({"issue": 6, "kind": "assignee", "value": "x"}, 400)):
         with pytest.raises(server.Refused) as refused:
             board.submit([{"issue": 5, "kind": "milestone", "value": 1}, bad])
         assert refused.value.status == status
@@ -219,3 +232,151 @@ def test_closing_lines_say_what_never_reached_github():
     lines = server.closing_lines(snapshot)
     assert "1 written to o/r." in lines
     assert "  #6 → Soon  — gh failed:" in lines and "  #7 → no milestone" in lines
+
+
+# --- fields, labels and the other kinds ---------------------------------------------------
+
+def labels(*names):
+    return [{"name": n, "color": "cccccc"} for n in names]
+
+
+def test_a_priority_goes_to_the_field_where_the_owner_has_one(monkeypatch):
+    board = make_board(monkeypatch, [card(5), card(20, "pr")], fields=ORG_FIELDS)
+    (action,) = board.submit([{"issue": 5, "kind": "priority", "value": "high"}])
+    assert (action["kind"], action["value"], action["previous"]) == ("priority", "High", None)
+    assert board.cards[5]["fields"] == {"Priority": "High"}
+    (cleared,) = board.submit([{"issue": 5, "kind": "priority", "value": None}])
+    assert cleared["previous"] == "High" and board.cards[5]["fields"] == {}
+    for bad in ({"issue": 5, "kind": "priority", "value": "Asap"},
+                {"issue": 20, "kind": "effort", "value": "Low"}):   # a PR has no fields
+        with pytest.raises(server.Refused):
+            board.submit([bad])
+
+
+def test_a_priority_falls_back_to_a_label_where_there_is_no_field(monkeypatch):
+    board = make_board(monkeypatch, [card(5, labels=labels("bug", "Priority: Low"))])
+    (action,) = board.submit([{"issue": 5, "kind": "priority", "value": "high"}])
+    assert (action["kind"], action["value"]) == ("labels", ["bug", "Priority: High"])
+    assert action["previous"] == ["bug", "Priority: Low"]
+    # A label the repo knows keeps its colour; a new one is grey until GitHub answers.
+    assert board.cards[5]["labels"] == [{"name": "bug", "color": "ff0000"},
+                                        {"name": "Priority: High", "color": "ededed"}]
+    (cleared,) = board.submit([{"issue": 5, "kind": "priority", "value": None}])
+    assert cleared["value"] == ["bug"]
+
+
+def test_labels_take_a_whole_set_or_a_change_to_it(monkeypatch):
+    board = make_board(monkeypatch, [card(5, labels=labels("a", "b"))])
+    (action,) = board.submit([{"issue": 5, "kind": "labels",
+                               "value": {"add": ["c", "a"], "remove": ["b"]}}])
+    assert action["value"] == ["a", "c"]
+    assert board.submit([{"issue": 5, "kind": "labels", "value": ["a", "c", "a"]}]) == []
+
+
+def test_changes_in_one_batch_build_on_each_other(monkeypatch):
+    board = make_board(monkeypatch, [card(5)])
+    made = board.submit([{"issue": 5, "kind": "priority", "value": "high"},
+                         {"issue": 5, "kind": "labels", "value": {"add": ["bug"]}}])
+    assert [a["value"] for a in made] == [["Priority: High"], ["Priority: High", "bug"]]
+
+
+def test_title_state_and_comment_are_actions_too(monkeypatch):
+    board = make_board(monkeypatch, [card(5)])
+    made = board.submit([{"issue": 5, "kind": "title", "value": "  Better  "},
+                         {"issue": 5, "kind": "state", "value": "not_planned"},
+                         {"issue": 5, "kind": "comment", "value": "why"},
+                         {"issue": 5, "kind": "comment", "value": "why"}])
+    assert [(a["kind"], a["value"], a["previous"]) for a in made] == [
+        ("title", "Better", "Card 5"), ("state", "not_planned", None),
+        ("comment", "why", None), ("comment", "why", None)]   # a comment is never a no-op
+    assert board.cards[5]["title"] == "Better" and board.cards[5]["closed"] == "not_planned"
+
+
+def test_reconcile_reads_every_record_and_says_when_they_agree():
+    c = card(5, fields={"Priority": "High"}, labels=labels("Priority: High", "Size: M", "bug"))
+    assert reconcile.reconcile("priority", c) == {
+        "field": "High", "labels": [("Priority: High", "High")], "agreed": "High"}
+    assert reconcile.reconcile("effort", c)["agreed"] == "Medium"
+    c = card(5, fields={"Priority": "High"}, labels=labels("priority:critical"))
+    assert reconcile.reconcile("priority", c)["agreed"] is None
+    assert reconcile.label_value("priority", "Priority: Critical") == "Urgent"
+    assert reconcile.label_value("effort", "Size: XL") == "High"
+    assert reconcile.label_value("priority", "Priority: Someday") is None
+    assert reconcile.label_value("priority", "bug") is None
+
+
+def suggested(c):
+    return [(s["kind"], s["value"], s["source"])
+            for s in reconcile.rule_suggestions(c, ORG_FIELDS)]
+
+
+def test_rules_fill_the_field_from_a_label_then_retire_the_label():
+    assert suggested(card(5, labels=labels("Priority: Critical", "bug"))) == [
+        ("priority", "Urgent", "rule:priority-from-label")]
+    assert suggested(card(5, fields={"Priority": "Urgent"},
+                          labels=labels("Priority: Critical", "bug"))) == [
+        ("labels", {"add": [], "remove": ["Priority: Critical"]}, "rule:remove-old-label")]
+
+
+def test_rules_keep_the_field_when_a_label_disagrees_and_say_so():
+    c = card(5, fields={"Priority": "High", "Effort": "Low"},
+             labels=labels("Priority: Medium", "Size: S"))
+    (s,) = reconcile.rule_suggestions(c, ORG_FIELDS)
+    assert s["value"] == {"add": [], "remove": ["Priority: Medium", "Size: S"]}
+    assert "says High, but the label 'Priority: Medium' says otherwise" in s["reason"]
+    assert "Effort field already says Low" in s["reason"]
+
+
+def test_rules_leave_alone_what_they_cannot_settle():
+    assert suggested(card(5, labels=labels("Priority: High", "Priority: Low"))) == []
+    assert suggested(card(5, labels=labels("Priority: Someday"))) == []
+    assert suggested(card(20, "pr", labels=labels("Priority: High"))) == []
+    assert reconcile.rule_suggestions(card(5, labels=labels("Priority: High")), {}) == []
+
+
+def test_accepting_a_suggestion_makes_the_action_and_the_next_suggestion(monkeypatch):
+    board = make_board(monkeypatch, [card(5, labels=labels("Priority: High", "bug"))],
+                       fields=ORG_FIELDS)
+    (first,) = board.snapshot()["suggestions"]
+    assert (first["kind"], first["value"], first["status"]) == ("priority", "High", "open")
+    changed, actions = board.resolve([first["id"]], "accept")
+    assert actions[0]["kind"] == "priority" and board.cards[5]["fields"] == {"Priority": "High"}
+    assert first["status"] == "accepted" and first["action"] == actions[0]["id"]
+    # The field is now set, so the label repeating it is the next thing to go.
+    (second,) = [s for s in board.snapshot()["suggestions"] if s["status"] == "open"]
+    assert second["source"] == "rule:remove-old-label" and second in changed
+    board.resolve([second["id"]], "accept")
+    assert [l["name"] for l in board.cards[5]["labels"]] == ["bug"]
+    assert [s for s in board.snapshot()["suggestions"] if s["status"] == "open"] == []
+
+
+def test_a_rejected_suggestion_stays_rejected_across_runs(monkeypatch, tmp_path):
+    state = tmp_path / "state" / "board.json"
+    cards = lambda: [card(5, labels=labels("Priority: High"))]  # noqa: E731
+    board = make_board(monkeypatch, cards(), fields=ORG_FIELDS, state_file=state)
+    (rule,) = board.snapshot()["suggestions"]
+    (agent,) = board.suggest([{"issue": 5, "kind": "milestone", "value": 1,
+                               "reason": "blocks the release", "source": "opus"}])
+    assert board.suggest([{"issue": 5, "kind": "milestone", "value": 1, "source": "opus"}]) == []
+    board.resolve([rule["id"]], "reject")
+    board.load()   # a refetch must not bring it back
+    assert [s["source"] for s in board.snapshot()["suggestions"]] == ["opus"]
+
+    again = make_board(monkeypatch, cards(), fields=ORG_FIELDS, state_file=state)
+    (kept,) = again.snapshot()["suggestions"]   # the agent's, restored; the rule's, not remade
+    assert (kept["source"], kept["reason"], kept["status"]) == ("opus", "blocks the release", "open")
+
+
+def test_a_suggestion_that_could_never_be_accepted_is_refused(monkeypatch):
+    board = make_board(monkeypatch, [card(5)])
+    for bad in ({"issue": 5, "kind": "milestone", "value": 3, "source": "a"},     # closed
+                {"issue": 9, "kind": "title", "value": "x", "source": "a"},
+                {"issue": 5, "kind": "title", "value": "x", "source": "rule:mine"}):
+        with pytest.raises(server.Refused):
+            board.suggest([bad])
+    with pytest.raises(server.Refused):
+        board.resolve([1], "maybe")
+
+
+def test_state_path_is_per_repo_under_the_state_home():
+    assert server.state_path("o/r", {"XDG_STATE_HOME": "/s"}) == Path("/s/milestones/board-o-r.json")

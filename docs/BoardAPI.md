@@ -35,6 +35,7 @@ URL, and is the place to start a new one.
 | `fields` | issues only: the organisation's issue fields by name, e.g. `{"Priority": "High"}` |
 | `closingPrs`, `mentionedPrs` | issues only: `[{number, title, state, draft, url}]`; a pull request appears in one list, never both |
 | `draft`, `closes` | pull requests only: `closes` is `[{number, title, state}]`, issues in the same repo |
+| `closed` | absent until this session closes the card, then the reason; a refresh drops closed cards |
 
 **Milestone** — `{number, title, state, due, description, url}`; `state` is `"open"` or
 `"closed"`, `due` is `YYYY-MM-DD` or `null`.
@@ -44,22 +45,52 @@ URL, and is the place to start a new one.
 | Field | |
 | --- | --- |
 | `id` | counts up from 1 for the session |
-| `issue`, `kind`, `value`, `previous` | `kind` is `"milestone"`; `value` and `previous` are milestone numbers or `null` |
+| `issue`, `kind`, `value`, `previous` | what changed, by kind, below; `previous` is what the card held before |
 | `carriedBy` | the pull request whose move made this one, or `null` |
 | `status` | `pending` (queued or being written), `done`, `failed`, `would` (a read-only run: shown, never written), `reverted` (a failed action given up on) |
 | `error` | what `gh` said, for a `failed` action |
 
-A card always shows the `value` of its latest action that is not `reverted`, whatever that
-action's status: a failed write keeps what you asked for on screen until you retry it or revert it.
+A card always shows, for each kind, the `value` of its latest action of that kind that is not
+`reverted`, whatever that action's status: a failed write keeps what you asked for on screen until
+you retry it or revert it.
+
+**Kinds** — what an action can change, and the `value` each takes.
+
+| `kind` | `value` | Written as |
+| --- | --- | --- |
+| `milestone` | a milestone's number, or `null` for none | the issue's milestone |
+| `priority`, `effort` | an option's name (any case), or `null` to clear | the organisation's Priority or Effort issue field. Where the owner has no such field, a `Priority: X` or `Effort: X` label instead — the action that comes back is then of kind `labels`. A pull request has no fields: `400`. |
+| `labels` | the whole list of names, or a change `{add: [...], remove: [...]}` | the issue's label set. The action's `value` is always the resulting list. A name the repo hasn't got is created. |
+| `title` | text | the title |
+| `state` | `"completed"` or `"not_planned"` to close, `null` to reopen | the issue's state |
+| `comment` | Markdown | a new comment. Not card state: `previous` is `null`, and it cannot be undone. |
+
+**Suggestion** — a change someone proposes, for a person to accept or reject.
+
+| Field | |
+| --- | --- |
+| `id`, `issue`, `kind`, `value` | as an action's; a `labels` suggestion usually carries a change (`{add, remove}`), so that it still applies if the labels have moved on |
+| `reason` | why, in a sentence or two — shown beside it |
+| `source` | who proposes it: an agent's or a model's name, or `rule:<name>` for the board's own |
+| `status` | `open`, `accepted`, `rejected`, or `withdrawn` (a rule's suggestion that no longer applies) |
+| `action` | the action an accepted suggestion became |
+
+The board makes suggestions of its own from each card (`milestones/board/reconcile.py`): fill an
+empty Priority or Effort field from a `Priority:` or `Size:` label, then remove a label the field
+repeats or contradicts. Undecided suggestions from outside, and every rejection, are kept in
+`$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` (default `~/.local/state`), so a restart
+loses neither and a rejected suggestion is not made again.
 
 ## Endpoints
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order. |
-| `POST /api/v1/actions` | Body `{actions: [{issue, kind: "milestone", value}]}`. Applies them to the cards at once, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A move to where the card already is makes no action. One bad request refuses the whole batch: `400` unknown kind, `404` unknown issue or milestone, `409` closed milestone. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones. |
+| `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
+| `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
+| `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
 | `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. |
@@ -75,6 +106,7 @@ a milestone.
 | --- | --- | --- |
 | `action` | an Action | it is made, and each time its status changes |
 | `milestone` | a Milestone | one is created, reopened or re-dated |
+| `suggestion` | a Suggestion | one is added, accepted, rejected or withdrawn |
 | `reload` | `{}` | a refresh finished; fetch the board again |
 
 A comment line arrives every 15 seconds to keep the connection open.

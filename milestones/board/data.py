@@ -186,4 +186,26 @@ def fetch_board(repo: str, progress=lambda *a: None) -> dict:
         cards += [norm_pr(n, canonical) for n in nodes if n]
     milestones = [norm_milestone(m) for m in
                   gh.api(f"repos/{canonical}/milestones?state=all&per_page=100", paginate=True)]
-    return {"repo": canonical, "milestones": milestones, "cards": cards}
+    labels = [{"name": l["name"], "color": l["color"]} for l in
+              gh.api(f"repos/{canonical}/labels?per_page=100", paginate=True)]
+    return {"repo": canonical, "milestones": milestones, "cards": cards, "labels": labels,
+            "fields": fetch_fields(canonical.split("/")[0])}
+
+
+def norm_fields(nodes: list[dict]) -> dict:
+    """The organisation's single-select issue fields, as `{name: {id, options: {name: id}}}`.
+    The board writes Priority and Effort; the rest ride along for a front end to show."""
+    return {n["name"]: {"id": n["id"], "options": {o["name"]: o["id"] for o in n["options"]}}
+            for n in nodes if n and n.get("__typename") == "IssueFieldSingleSelect"}
+
+
+def fetch_fields(owner: str) -> dict:
+    """`norm_fields` for a repo's owner; nothing for a user account, which has no issue
+    fields and would answer the organisation query with NOT_FOUND."""
+    if gh.api(f"users/{owner}")["type"] != "Organization":
+        return {}
+    found = gh.graphql(
+        f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
+        "__typename ... on IssueFieldSingleSelect { id name options { id name } } } } } }",
+        owner)
+    return norm_fields(found["organization"]["issueFields"]["nodes"])
