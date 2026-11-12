@@ -12,7 +12,7 @@ URL, and is the place to start a new one.
 
 - The URL's fragment carries a token that is new on every start: `#t=<token>&from=<title>…`.
   `from` repeats once per `--from` given on the command line, and is only a hint about which
-  columns to show first.
+  columns to show first; `by` and `group` (from `--by` and `--group`) are hints of the same kind.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.
@@ -85,12 +85,13 @@ loses neither and a rejected suggestion is not made again.
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is what a label means in a field's terms, as `{priority: {field, prefix, values}, effort: {…}}` — `prefix` is a regular expression for the label's name before its colon, and `values` maps what follows it, lower-cased, to an option's name; `view` is what was last saved with `POST /api/v1/view`, or `{}`. |
 | `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
 | `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Here alone a `milestone` value may be a **title** (matched ignoring case), for a caller with no way to know the numbers. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
 | `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
+| `POST /api/v1/view` | Body `{by, group, shown}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, and the milestone numbers ticked (`0` for none). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
 | `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. |

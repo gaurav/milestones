@@ -4,14 +4,15 @@ import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
-  NONE, age, askPrompt, cardStatus, cardValue, columnOf, describe, effortOf, inkOn, linkedPrs, noFilters, pickerMatches,
-  priorityOf,
+  DIMENSIONS, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, linkedPrs, noFilters,
+  pickerMatches, priorityOf, sections,
 } from '../shared/logic.ts';
-import type { ColumnId } from '../shared/logic.ts';
+import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, change, columnTitle, columns, fatal, filters, focused, grouped, loading, milestones,
-  modal, move, moveToTitle, notify, openSuggestions, pending, readOnly, refresh, resolve, retry, revert, selected,
-  setDue, shown, start, step, targets, toast, toggleColumn, toggleSelected, trayOpen, undo, visibleColumns,
+  actions, board, cards, change, columnTitle, cycleDimension, dimension, fatal, filters, focused, groupBy, grouped,
+  layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
+  readOnly, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
+  targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
 } from '../shared/state.ts';
 
 const DRAG = 'application/x-milestones-cards';
@@ -37,8 +38,11 @@ function Card({ card }: { card: CardData }) {
   const isFocused = focused.value === card.number;
   const isSelected = selected.value.has(card.number);
   useEffect(() => { if (isFocused) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [isFocused]);
-  const priority = priorityOf(card);
-  const effort = effortOf(card);
+  // The chip for what the columns already say is left off: the column is the chip.
+  const priority = effectiveValue(card, 'priority', layout.value.mapping);
+  const effort = effectiveValue(card, 'effort', layout.value.mapping);
+  const milestone = dimension.value === 'milestone' || card.milestone === null ? undefined : milestones.value.get(card.milestone);
+  const fromLabel = 'Read from a label; the field is not set. Putting the card in a column sets the field.';
   const prs = linkedPrs(card);
   return (
     <div
@@ -61,8 +65,17 @@ function Card({ card }: { card: CardData }) {
         {card.title}
       </div>
       <div class="card-meta">
-        {priority && <span class={`chip priority p-${priority.toLowerCase()}`}>{priority}</span>}
-        {effort && <span class="chip effort">effort {effort}</span>}
+        {milestone && <span class="chip milestone">{milestone.title}</span>}
+        {priority.value && (dimension.value !== 'priority' || priority.from === 'label') && (
+          <span class={`chip priority p-${priority.value.toLowerCase()}`} title={priority.from === 'label' ? fromLabel : 'Priority'}>
+            {dimension.value === 'priority' ? 'from label' : `${priority.value}${priority.from === 'label' ? ' ·label' : ''}`}
+          </span>
+        )}
+        {effort.value && (dimension.value !== 'effort' || effort.from === 'label') && (
+          <span class="chip effort" title={effort.from === 'label' ? fromLabel : 'Effort'}>
+            {dimension.value === 'effort' ? 'from label' : `effort ${effort.value}${effort.from === 'label' ? ' ·label' : ''}`}
+          </span>
+        )}
         {card.type && <span class="chip type">{card.type}</span>}
         {card.labels.filter((l) => !/^(priority|size):/i.test(l.name)).map((l) => (
           <span class="label" style={{ background: `#${l.color}`, color: inkOn(l.color) }}>{l.name}</span>
@@ -84,7 +97,7 @@ function Card({ card }: { card: CardData }) {
   );
 }
 
-function DueDate({ id }: { id: ColumnId }) {
+function DueDate({ id }: { id: number }) {
   const [editing, setEditing] = useState(false);
   const milestone = milestones.value.get(id);
   if (!milestone) return null;
@@ -112,34 +125,45 @@ function DueDate({ id }: { id: ColumnId }) {
 function Column({ id, index }: { id: ColumnId; index: number }) {
   const [over, setOver] = useState(false);
   const list = grouped.value.get(id) ?? [];
-  const milestone = milestones.value.get(id);
+  const byMilestone = dimension.value === 'milestone';
+  const milestone = byMilestone ? milestones.value.get(id as number) : undefined;
   const closed = milestone?.state === 'closed';
-  const total = [...cards.value.values()].filter((c) => columnOf(c) === id).length;
+  const total = totals.value.get(id) ?? 0;
+  const groups = sections(list, groupBy.value.filter((k) => k !== dimension.value), layout.value);
   return (
     <section
-      class={`column${over ? ' over' : ''}${closed ? ' closed' : ''}`}
+      class={`column${over ? ' over' : ''}${closed ? ' closed' : ''}${id === NONE && !byMilestone ? ' inbox' : ''}`}
       onDragOver={(e) => { if (!closed && e.dataTransfer?.types.includes(DRAG)) { e.preventDefault(); setOver(true); } }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => {
         setOver(false);
         const dragged = e.dataTransfer?.getData(DRAG);
-        if (dragged) { e.preventDefault(); move(JSON.parse(dragged), id); }
+        if (dragged) { e.preventDefault(); place(JSON.parse(dragged), id); }
       }}
     >
       <header>
         <div class="column-title">
-          {index < 9 && <kbd>{index + 1}</kbd>}
-          {milestone ? <a href={milestone.url} target="_blank" rel="noreferrer">{milestone.title}</a> : 'No milestone'}
+          {index < 9 && <kbd>{byMilestone ? index + 1 : index}</kbd>}
+          {milestone ? <a href={milestone.url} target="_blank" rel="noreferrer">{milestone.title}</a> : columnTitle(id)}
           {closed && <span class="chip closed">closed</span>}
         </div>
         <div class="column-sub">
           <span>{list.length === total ? total : `${list.length} of ${total}`}</span>
-          {id !== NONE && <DueDate id={id} />}
-          <button class="hide" title="Hide this column" onClick={() => toggleColumn(id)}>×</button>
+          {byMilestone && id !== NONE && <DueDate id={id as number} />}
+          {byMilestone && <button class="hide" title="Hide this column" onClick={() => toggleColumn(id)}>×</button>}
         </div>
       </header>
       <div class="cards">
-        {list.map((card) => <Card key={card.number} card={card} />)}
+        {groups.map((g) => (
+          <>
+            {g.label && (
+              <button class="group-head" title="Select this group" onClick={() => selectAll(g.cards.map((c) => c.number))}>
+                {g.label} <small>{g.cards.length}</small>
+              </button>
+            )}
+            {g.cards.map((card) => <Card key={card.number} card={card} />)}
+          </>
+        ))}
         {list.length === 0 && <div class="empty">{total ? 'Nothing matches the filters.' : 'Empty.'}</div>}
       </div>
     </section>
@@ -340,7 +364,7 @@ function LabelsDialog() {
 function AskDialog() {
   const [view, setView] = useState('');
   const asked = targets().map((n) => cards.value.get(n)!).filter(Boolean);
-  const prompt = askPrompt(board.value?.repo ?? '', asked, milestones.value, view);
+  const prompt = askPrompt(board.value?.repo ?? '', asked, milestones.value, view, layout.value.mapping);
   const close = () => { modal.value = null; };
   const copy = async () => {
     try {
@@ -417,24 +441,54 @@ function Picker() {
   );
 }
 
+/** Which milestones are on show. In the milestone view they are the columns; in the
+ *  priority and effort views they are the scope — whose cards are being sorted. */
 function ColumnsMenu() {
+  const all = milestoneColumns.value;
+  const count = (id: ColumnId) => [...cards.value.values()].filter((c) => (c.milestone ?? NONE) === id).length;
   return (
     <details class="menu">
-      <summary>Columns ({visibleColumns.value.length}/{columns.value.length})</summary>
+      <summary>{dimension.value === 'milestone' ? 'Columns' : 'In milestones'} ({shown.value.length}/{all.length})</summary>
       <div class="menu-body">
         <div class="menu-actions">
-          <button onClick={() => { shown.value = [...columns.value]; }}>All</button>
+          <button onClick={() => { shown.value = [...all]; }}>All</button>
           <button onClick={() => { shown.value = []; }}>None</button>
         </div>
-        {columns.value.map((id) => (
+        {all.map((id) => (
           <label>
             <input type="checkbox" checked={shown.value.includes(id)} onChange={() => toggleColumn(id)} />
-            {columnTitle(id)}{milestones.value.get(id)?.state === 'closed' ? ' (closed)' : ''}
-            <small>{[...cards.value.values()].filter((c) => columnOf(c) === id).length}</small>
+            {columnTitle(id, 'milestone')}{milestones.value.get(id as number)?.state === 'closed' ? ' (closed)' : ''}
+            <small>{count(id)}</small>
           </label>
         ))}
       </div>
     </details>
+  );
+}
+
+const GROUPINGS: { label: string; by: DimKind[] }[] = [
+  { label: 'No grouping', by: [] },
+  { label: 'Group by priority', by: ['priority'] },
+  { label: 'Group by effort', by: ['effort'] },
+  { label: 'Group by priority, then effort', by: ['priority', 'effort'] },
+  { label: 'Group by milestone', by: ['milestone'] },
+];
+
+/** What the columns are, and what the cards in a column are grouped by. */
+function ViewControls() {
+  const current = groupBy.value.join(',');
+  return (
+    <>
+      <span class="segmented" title="What the columns are (v)">
+        {DIMENSIONS.map((d) => (
+          <button class={dimension.value === d.kind ? 'on' : ''} onClick={() => setDimension(d.kind)}>{d.title}</button>
+        ))}
+      </span>
+      <select value={current} title="Group the cards within each column; click a group's heading to select it"
+        onChange={(e) => { groupBy.value = (e.target as HTMLSelectElement).value.split(',').filter(Boolean) as DimKind[]; }}>
+        {GROUPINGS.filter((g) => !g.by.includes(dimension.value) || g.by.length > 1).map((g) => <option value={g.by.join(',')}>{g.label}</option>)}
+      </select>
+    </>
   );
 }
 
@@ -443,13 +497,19 @@ function Toolbar() {
   const set = (patch: Partial<typeof f>) => { filters.value = { ...f, ...patch }; };
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
-  const priorities = [...new Set(all.map(priorityOf).filter(Boolean))].sort();
+  const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
   const active = JSON.stringify(f) !== JSON.stringify(noFilters);
   const unsaved = pending.value;
   return (
     <header class="toolbar">
       <strong>{board.value?.repo}</strong>
       {readOnly.value && <span class="chip would" title="MILESTONES_PERMISSIONS=read: moves are shown here and not written to GitHub">read-only</span>}
+      <ViewControls />
+      {dimension.value !== 'milestone' && scope.value && (
+        <span class="chip" title="Only cards on these milestones are being sorted. Change it under 'In milestones'.">
+          in {shown.value.length <= 3 ? shown.value.map((id) => columnTitle(id, 'milestone')).join(', ') : `${shown.value.length} milestones`}
+        </span>
+      )}
       <input id="search" type="search" placeholder="Search (/)" value={f.text}
         onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
@@ -479,7 +539,8 @@ function Toolbar() {
         <summary>Keys</summary>
         <div class="menu-body keys">
           <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
-          <div><kbd>1</kbd>–<kbd>9</kbd> move to that column</div><div><kbd>0</kbd> take off its milestone</div>
+          <div><kbd>v</kbd> columns by milestone, priority, effort</div>
+          <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
           <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
           <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
           <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
@@ -510,8 +571,14 @@ function onKey(e: KeyboardEvent) {
   else if (key === 'z') undo();
   else if (key === 'o') { const c = focused.value === null ? undefined : cards.value.get(focused.value); if (c) window.open(c.url, '_blank', 'noreferrer'); }
   else if (key === '/') document.getElementById('search')?.focus();
-  else if (key === '0') move(targets(), NONE);
-  else if (/^[1-9]$/.test(key)) { const to = visibleColumns.value[Number(key) - 1]; if (to !== undefined) move(targets(), to); }
+  else if (key === 'v') cycleDimension();
+  else if (key === '0') place(targets(), NONE);
+  else if (/^[1-9]$/.test(key)) {
+    // In the priority and effort views the unset column is 0's, so 1 is the first real one.
+    const real = dimension.value === 'milestone' ? visibleColumns.value : visibleColumns.value.filter((id) => id !== NONE);
+    const to = real[Number(key) - 1];
+    if (to !== undefined) place(targets(), to);
+  }
   else return;
   e.preventDefault();
 }

@@ -169,6 +169,32 @@ and **Revert**. Closing the tab with writes outstanding asks first, and stopping
 Ctrl-C lists anything that never reached GitHub. With `MILESTONES_PERMISSIONS=read` the board is a
 sandbox: cards move, are marked *not written*, and nothing is sent.
 
+### Sorting by priority and effort first
+
+The columns need not be milestones. **Milestone | Priority | Effort** in the toolbar (or `v`)
+changes what they are, and everything else stays the same: a number key, a drag, or `0` to clear
+puts a card in a column, and that is written as the milestone, the priority or the effort. So a
+backlog can be triaged in passes:
+
+1. Tick the milestones you are working through under **Columns**. In the other two views that
+   selection is the scope: only those milestones' cards are sorted.
+2. Switch to **Priority**. The first column, *No priority*, is the inbox; `1`–`4` send the focused
+   card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
+   that column. Its count is what is left.
+3. Switch to **Effort** and do the same.
+4. Back in **Milestone**, choose *Group by priority, then effort*. Each column is now cut into
+   groups — "Urgent · Low", "High · Medium" — judged cards first. Click a group's heading to select
+   it, and one key sends the whole group to a milestone.
+
+A card stands in the column of what was recorded about it, wherever that was: the field, or else a
+label read in the field's terms (`Priority: Critical` under Urgent, `Size: M` under Medium), marked
+*from label*. Putting it in a column sets the field. Pull requests are left out of the priority
+and effort views where the owner has those fields, since a pull request cannot hold one.
+
+The board opens the way you left it — the view, the grouping and the milestones ticked — unless
+you say otherwise: `milestones board --by priority --group effort`, or `--from`, wins. `p`, `e` and `m` still set
+priority, effort and milestone whatever the columns are.
+
 ### Asking a coding agent
 
 The board does not run an agent; it gives one a way in. Start your coding agent wherever it works
@@ -452,7 +478,8 @@ What it deliberately leaves out:
 - **No local state or cache of GitHub.** Every command reads GitHub fresh, so nothing can go
   stale except GitHub's own listings, which lag writes by a few seconds. Every decision lives on
   GitHub; the one thing kept locally is what the board has *not* decided yet — suggestions still
-  waiting, and the ones you turned down, so that they aren't made again.
+  waiting, and the ones you turned down, so that they aren't made again — and how you last had
+  the board laid out.
 - **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
 - **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
   `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would

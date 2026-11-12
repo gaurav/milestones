@@ -1384,7 +1384,7 @@ def cmd_board(config, args):
             sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
                      "whose origin is on GitHub.")
     server.run(repo, config["buckets"], sort_key, port=args.port,
-               open_browser=not args.no_open, shown=args.sources)
+               open_browser=not args.no_open, shown=args.sources, by=args.by, group=args.group)
 
 
 def cwd_repo() -> str | None:
@@ -2033,6 +2033,10 @@ def main():
     board.add_argument("--from", dest="sources", action="append", metavar="MILESTONE",
                        help="show only these milestones' columns to begin with (repeatable; "
                             "`none` is the issues with no milestone)")
+    board.add_argument("--by", choices=["milestone", "priority", "effort"],
+                       help="what the columns are to begin with (default: milestone)")
+    board.add_argument("--group", choices=["priority", "effort", "priority,effort", "milestone"],
+                       help="group the cards within each column to begin with")
     board.add_argument("--port", type=int, default=0, help="default: any free port")
     board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
     board.add_argument("--brief", action="store_true",

@@ -104,6 +104,10 @@ class Board:
         self.fields: dict = {}
         self.suggestions: dict[int, dict] = {}
         self.rejected: set[str] = set()
+        # How the board was last looked at: what the columns were, the grouping, and which
+        # milestones were ticked. The page's business; kept here because each run is on a new
+        # port, which a browser treats as a new site with empty storage.
+        self.view: dict = {}
         self._restored: list[dict] = []
         self._read_state()
         self.fetch, self.write = fetch, write or self._write
@@ -160,6 +164,10 @@ class Board:
                 "fields": {name: list(field["options"]) for name, field in self.fields.items()},
                 "suggestions": [s for s in self.suggestions.values()
                                 if s["status"] != "rejected"],
+                # The one table of what a label means, so a front end that sorts cards by
+                # priority reads "Priority: Critical" as the rules here do.
+                "labelValues": reconcile.KINDS,
+                "view": self.view,
             }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -373,6 +381,7 @@ class Board:
         except (OSError, ValueError):
             return
         self.rejected = set(kept.get("rejected") or [])
+        self.view = kept["view"] if isinstance(kept.get("view"), dict) else {}
         self._restored = [s for s in kept.get("open") or [] if isinstance(s, dict)]
 
     def _save_state(self) -> None:
@@ -380,7 +389,7 @@ class Board:
         while open — the rule will make it again — only remembered once rejected."""
         if self.state_file is None:
             return
-        kept = {"rejected": sorted(self.rejected),
+        kept = {"view": self.view, "rejected": sorted(self.rejected),
                 "open": [{k: s[k] for k in ("issue", "kind", "value", "reason", "source")}
                          for s in self.suggestions.values()
                          if s["status"] == "open" and not s["source"].startswith("rule:")]}
@@ -422,6 +431,20 @@ class Board:
         proposed = [p for card in cards.values() if not card.get("closed")
                     for p in reconcile.rule_suggestions(card, self.fields)]
         return changed + self._add_suggestions(proposed)
+
+    def set_view(self, view: dict) -> dict:
+        """Remember how the board is being looked at, for the next run."""
+        dims = ("milestone", "priority", "effort")
+        by, group, shown = view.get("by"), view.get("group"), view.get("shown")
+        if (by not in dims or not isinstance(group, list) or any(g not in dims for g in group)
+                or not isinstance(shown, list)
+                or any(isinstance(n, bool) or not isinstance(n, int) for n in shown)):
+            raise Refused(400, "a view is {by: milestone|priority|effort, group: [...], "
+                               "shown: [milestone numbers, 0 for none]}")
+        with self.lock:
+            self.view = {"by": by, "group": group, "shown": shown}
+            self._save_state()
+            return self.view
 
     def suggest(self, proposed: list[dict]) -> list[dict]:
         """Take suggestions from outside — a coding agent, a script. Each is checked as an
@@ -628,6 +651,8 @@ def make_handler(board: Board, token: str):
                     for suggestion in changed:
                         board.publish("suggestion", suggestion)
                     return self._json(200, {"suggestions": changed, "actions": actions})
+                if method == "POST" and rest == ["view"]:
+                    return self._json(200, {"view": board.set_view(self._body())})
                 if method == "POST" and rest == ["milestones"]:
                     body = self._body()
                     return self._json(200, {"milestone": board.ensure_milestone(
@@ -696,7 +721,8 @@ def make_handler(board: Board, token: str):
 
 
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
-        shown: list[str] | None = None) -> None:
+        shown: list[str] | None = None, by: str | None = None,
+        group: str | None = None) -> None:
     # Imported here, as client imports this module.
     from .client import running_session, write_session
     other = running_session(repo)
@@ -721,6 +747,8 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     # The token rides in the fragment, which a browser never sends to a server or leaves
     # in a Referer; the page reads it and sends it back as a header.
     fragment = f"t={token}" + "".join(f"&from={quote_title(t)}" for t in shown or [])
+    # Hints for the page, like `from`: what the columns are, and the grouping within them.
+    fragment += (f"&by={by}" if by else "") + (f"&group={group}" if group else "")
     url = f"http://127.0.0.1:{server.server_address[1]}/#{fragment}"
     # Where `milestones suggest` finds this board.
     session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
