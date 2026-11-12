@@ -169,6 +169,36 @@ and **Revert**. Closing the tab with writes outstanding asks first, and stopping
 Ctrl-C lists anything that never reached GitHub. With `MILESTONES_PERMISSIONS=read` the board is a
 sandbox: cards move, are marked *not written*, and nothing is sent.
 
+### Asking a coding agent
+
+The board does not run an agent; it gives one a way in. Start your coding agent wherever it works
+best — in the repo's own checkout, where it can read the code — and give it the briefing once:
+
+```sh
+milestones board --brief        # what the buckets mean, the rules, and the command below
+```
+
+Then, on a card (or a selection), press `a`: say what you think — "medium priority, medium effort,
+because we can add this as its own identifier source that won't conflict with existing ones" — and
+the board copies a prompt carrying the issue, where it stands now, and your view. Paste it into the
+agent's session. The agent reads the issue and the code, argues if it disagrees, and when you have
+settled it, proposes the changes:
+
+```sh
+milestones suggest 62 --priority medium --effort medium --milestone "Needed soon" \
+    --add-label "new data source" \
+    --reason "Own identifier source; overlaps MeSH on about 40 IDs, see src/createcompendia" \
+    --source opus
+```
+
+Each change arrives on the board as its own suggestion, with the reason and the source beside it,
+for you to accept or reject; nothing is written to GitHub until you accept. `suggest` takes
+`OWNER/NAME#N`, a URL, or a bare number inside the repo's checkout, and also `--remove-label`,
+`--title`, `--comment` or `--comment-file`, and `--close`. `--source` (or `MILESTONES_SOURCE` in
+the agent's environment) says who is suggesting, so two sessions on different models can look at
+the same issue and you can compare what each proposed. `milestones suggest --json` reads a batch
+from stdin. A board has to be running for the repo; `suggest` says so if one isn't.
+
 The page and the server share nothing but an HTTP API, described in
 [docs/BoardAPI.md](docs/BoardAPI.md), so a different front end — or a script — can use the same
 server.
@@ -176,6 +206,10 @@ server.
 ## Commands
 
 ```sh
+milestones board [OWNER/NAME] [--from M]  # the triage board in your browser; see above
+milestones suggest REF --priority high --reason "..."   # propose a change on a running
+                                         # board, for the person there to accept or reject
+
 milestones doctor                        # which token and permissions are in effect, and
                                          # what that token can read
 

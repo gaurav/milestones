@@ -212,6 +212,15 @@ far more than `_norm_issue` keeps.
   `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` — the tool's only local state. Point
   `XDG_STATE_HOME` at a scratch directory when testing, or a test rejection will hide a real
   suggestion later.
+- `milestones suggest` finds a running board through the session file `board/client.py` writes
+  (`board-<owner>-<repo>.session.json` beside the suggestions file, mode 0600, removed on exit;
+  SIGTERM is turned into the Ctrl-C path so `kill` cleans up too). It only ever POSTs
+  suggestions, so it is safe for an agent to run unprompted and in a read-only run alike.
+- `client.BUCKET_MEANINGS` repeats MILESTONES.md's bucket table for `board --brief`, and
+  `test_brief_buckets_match_milestones_md` fails when either moves without the other.
+- The board deliberately embeds no agent. An agent pointed at a bare issue has too little
+  context; the one in the repo's checkout, in a conversation, has plenty — so the board hands it
+  a prompt (`askPrompt` in `ui/shared/logic.ts`) and takes its answer back as suggestions.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.
