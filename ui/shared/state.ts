@@ -122,7 +122,7 @@ function take(data: BoardData, first: boolean) {
     groupBy.value = view.group;
     detailOpen.value = view.detail;
     rememberView();
-    document.title = `${data.repo} · milestones board`;
+    document.title = `milestones: ${data.repo}`;   // the tool first, so its tabs sort and search together
   }
   if (focused.value === null || !cards.value.has(focused.value)) {
     const top = visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean);
