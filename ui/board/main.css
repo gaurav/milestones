@@ -131,3 +131,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 6px 2px 2px; font-weight: 600; color: var(--muted); position: sticky; top: -6px; background: var(--panel); z-index: 1; }
 .group-head:hover { color: var(--accent); }
 .chip.milestone { border: 1px solid var(--line); background: none; }
+.banner { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+.banner.rehearsal { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }
+.banner.waiting { background: var(--select); }
+.banner code { font: 11px ui-monospace, monospace; color: var(--muted); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }

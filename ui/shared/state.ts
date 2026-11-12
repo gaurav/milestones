@@ -2,7 +2,7 @@
 // functions; nothing else talks to the API.
 import { computed, effect, signal } from '@preact/signals';
 import { Api, parseFragment } from './api.ts';
-import type { Action, BoardData, Card, Kind, Milestone, Move, Suggestion, Value } from './api.ts';
+import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
   DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialView,
   latestAction, nextFocus, noFilters, unsettled, withValue,
@@ -32,6 +32,10 @@ export const selected = signal<Set<number>>(new Set());
 export const modal = signal<Kind | 'ask' | null>(null);
 export const suggestions = signal<Map<number, Suggestion>>(new Map());
 export const trayOpen = signal(false);
+/** Where the plan file is and how many changes it holds. */
+export const planInfo = signal<PlanInfo>({ path: null, count: 0 });
+/** Whether the read-only notice has been given: once is enough to say it. */
+let warned = false;
 /** Batches of changes made here, newest last, for `z`. Each entry is one card's way back. */
 const undoStack: { issue: number; kind: Kind; previous: Value }[][] = [];
 
@@ -107,6 +111,7 @@ function take(data: BoardData, first: boolean) {
   milestones.value = new Map(data.milestones.map((m) => [m.number, m]));
   actions.value = new Map(data.actions.map((a) => [a.id, a]));
   suggestions.value = new Map(data.suggestions.map((s) => [s.id, s]));
+  planInfo.value = data.plan ?? { path: null, count: 0 };
   if (first) {
     const view = initialView(fragment, data.view, milestoneColumns.value, data.milestones);
     shown.value = view.shown;
@@ -149,6 +154,7 @@ export async function start() {
     action: applyAction,
     milestone: (m) => { milestones.value = new Map(milestones.value).set(m.number, m); },
     suggestion: applySuggestion,
+    plan: (p) => { planInfo.value = p; },
     reload: () => { api.board().then((data) => take(data, false)).catch(() => {}); },
   });
 }
@@ -200,6 +206,10 @@ async function submit(moves: Move[], undoable = true, advance = true): Promise<b
     const made = await api.act(moves);
     made.forEach(applyAction);
     if (undoable) remember(made);
+    if (readOnly.value && made.length && !warned) {
+      warned = true;
+      say('Read-only: this was not written to GitHub. It is kept in the plan file, and a writable board can apply it.');
+    }
     const now = here ? cards.value.get(here.number) : undefined;
     if (advance && now && (currentColumn(now) !== before || !(grouped.value.get(before) ?? []).some((c) => c.number === now.number))) {
       // It left its column (or the view): carry on with the card that was below it, so a
@@ -260,6 +270,23 @@ export async function resolve(ids: number[], decision: 'accept' | 'reject') {
   } catch (error) {
     say((error as Error).message);
   }
+}
+
+/** On a writable board: turn the plan a read-only session left into suggestions. */
+export async function reviewPlan() {
+  try {
+    const result = await api.reviewPlan();
+    result.suggestions.forEach(applySuggestion);
+    trayOpen.value = result.suggestions.length > 0;
+    say(`${result.suggestions.length} planned change${result.suggestions.length === 1 ? '' : 's'} to review under Suggestions`
+      + (result.dropped ? `; ${result.dropped} left out as already made or no longer possible.` : '.'));
+  } catch (error) {
+    say((error as Error).message);
+  }
+}
+
+export async function discardPlan() {
+  try { await api.discardPlan(); } catch (error) { say((error as Error).message); }
 }
 
 export async function retry(id: number) {

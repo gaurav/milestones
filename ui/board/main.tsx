@@ -9,9 +9,9 @@ import {
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, change, columnTitle, cycleDimension, dimension, fatal, filters, focused, groupBy, grouped,
+  actions, board, cards, change, columnTitle, cycleDimension, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
-  readOnly, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
+  planInfo, readOnly, reviewPlan, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
 } from '../shared/state.ts';
 
@@ -20,7 +20,7 @@ const DRAG = 'application/x-milestones-cards';
 function Status({ action }: { action: Action | undefined }) {
   if (!action) return null;
   if (action.status === 'pending') return <span class="status saving" title="Writing to GitHub…">saving…</span>;
-  if (action.status === 'would') return <span class="status would" title="Read-only: not written to GitHub">not written</span>;
+  if (action.status === 'would') return <span class="status would" title="Read-only: not written to GitHub; kept in the plan file">planned</span>;
   if (action.status === 'failed') {
     return (
       <span class="status failed" title={action.error ?? ''}>
@@ -555,6 +555,31 @@ function Toolbar() {
 
 const MODAL_KEYS: Record<string, Kind | 'ask'> = { a: 'ask', m: 'milestone', p: 'priority', e: 'effort', L: 'labels', t: 'title', c: 'comment', x: 'state' };
 
+/** What becomes of changes made here, said where it can't be missed: on a read-only board
+ *  they go to the plan file, not GitHub; on a writable one, a plan may be waiting. */
+function PlanBanner() {
+  const { path, count } = planInfo.value;
+  if (readOnly.value) {
+    return (
+      <div class="banner rehearsal">
+        <strong>Read-only.</strong> Nothing you do here is written to GitHub.{' '}
+        {count === 0
+          ? 'Changes you make are kept in a plan file as you go, for a writable board to apply later.'
+          : <>Your <strong>{count} change{count === 1 ? '' : 's'}</strong> {count === 1 ? 'is' : 'are'} kept in the plan file, for a writable board to apply later.</>}
+        {path && <code title="A JSON file a person or a coding agent can read">{path}</code>}
+      </div>
+    );
+  }
+  if (count === 0) return null;
+  return (
+    <div class="banner waiting">
+      A read-only session left a plan of <strong>{count} change{count === 1 ? '' : 's'}</strong>. None {count === 1 ? 'has' : 'have'} been written.
+      <button class="primary" onClick={reviewPlan}>Review as suggestions</button>
+      <button onClick={() => { if (confirm(`Discard the plan of ${count} change${count === 1 ? '' : 's'}? This deletes the plan file.`)) discardPlan(); }}>Discard</button>
+    </div>
+  );
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.metaKey || e.ctrlKey || e.altKey || modal.value) return;
   const tag = (e.target as HTMLElement).tagName;
@@ -598,6 +623,7 @@ function App() {
   return (
     <>
       <Toolbar />
+      <PlanBanner />
       <main>
         <div class="columns">
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}
