@@ -82,6 +82,17 @@ the issues it closes: an open issue a pull request closes goes on the same miles
 request if it has no milestone yet. One that already has a milestone keeps it, since that was
 somebody's decision; say so if the two look inconsistent rather than moving it.
 
+## Priority and effort
+
+Priority (Urgent, High, Medium, Low) and effort (High, Medium, Low) belong in the organisation's
+issue fields of those names. Over the years they have also been written as `Priority: High` and
+`Size: M` labels, and in project fields, and an issue may carry more than one.
+
+Read them from wherever they are. Write them in one place: the issue field, or the label only
+where the repository's owner has no such field. When a label says what the field should and the
+field is empty, fill the field; once the field is set, the label that repeats it can go. When the
+two disagree, the field stands — say so rather than silently choosing, since somebody set each.
+
 ## For coding agents
 
 - Set a milestone on an issue when the right one is clear. When it isn't, leave the issue without

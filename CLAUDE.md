@@ -194,6 +194,24 @@ far more than `_norm_issue` keeps.
   `--no-open --port N`. Playwright's `dragTo` scrolls the target into view mid-drag, so a card in
   a column that is off-screen picks up whatever card ends under the pointer — drag between columns
   that are both visible.
+- An action's kind decides how its value is read off a card and put on one: `card_value` and
+  `set_card_value` in `server.py`, mirrored by `cardValue` and `withValue` in `ui/shared/logic.ts`.
+  A new kind needs all four, a branch in `Board.normalise` and `Board._write`, a row in
+  `docs/BoardAPI.md`, and `describe` in `logic.ts`.
+- `Board.submit` normalises each request twice: once up front so a bad one refuses the whole
+  batch, and again as it is applied, against the card as the earlier requests left it. Computing
+  every value from the starting card made two label changes in one batch overwrite each other.
+- `gaurav` is a user account with no issue fields, so a live run there exercises the label
+  fallback for priority and never `setIssueFieldValue`. **The field write from the board has not
+  been run against a real organisation**; it is the same mutation `set_priority` makes, with
+  `delete: true` to clear. The fallback creates a `Priority: X` label in the repo, which outlives
+  an undo — delete it after a test (`gh api -X DELETE "repos/gaurav/milestones/labels/Priority:%20High"`).
+- GitHub does not say when an issue field was last changed, so `reconcile.rule_suggestions` can't
+  prefer "whichever is newer" between a field and a label; the field wins and the reason says so.
+- The board keeps undecided outside suggestions and all rejections in
+  `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` — the tool's only local state. Point
+  `XDG_STATE_HOME` at a scratch directory when testing, or a test rejection will hide a real
+  suggestion later.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.

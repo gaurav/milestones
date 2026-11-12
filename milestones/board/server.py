@@ -4,6 +4,7 @@ front end needs nothing from this file but that."""
 
 import json
 import mimetypes
+import os
 import queue
 import secrets
 import sys
@@ -16,7 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import gh
 from ..cli import TRIAGE_BUCKET
-from . import data
+from . import data, reconcile
 
 STATIC = Path(__file__).parent / "static"
 TOKEN_HEADER = "X-Milestones-Token"
@@ -40,6 +41,53 @@ class Refused(Exception):
         self.status = status
 
 
+KINDS = ("milestone", "priority", "effort", "labels", "title", "state", "comment")
+CLOSE_REASONS = ("completed", "not_planned")
+# A label GitHub has no colour for yet (one this session is about to create) is shown grey.
+NO_COLOUR = "ededed"
+
+
+def card_value(card: dict, kind: str):
+    """What a card holds for an action kind — the shape an action's `value` and `previous`
+    take. A comment is not state: there is nothing to read back or put back."""
+    if kind in reconcile.KINDS:
+        return (card.get("fields") or {}).get(reconcile.KINDS[kind]["field"])
+    if kind == "labels":
+        return [l["name"] for l in card["labels"]]
+    if kind == "state":
+        return card.get("closed")
+    if kind == "comment":
+        return None
+    return card[kind]
+
+
+def set_card_value(card: dict, kind: str, value, colours: dict[str, str]) -> None:
+    if kind in reconcile.KINDS:
+        fields = card.setdefault("fields", {})
+        if value is None:
+            fields.pop(reconcile.KINDS[kind]["field"], None)
+        else:
+            fields[reconcile.KINDS[kind]["field"]] = value
+    elif kind == "labels":
+        card["labels"] = [{"name": n, "color": colours.get(n, NO_COLOUR)} for n in value]
+    elif kind == "state":
+        card["closed"] = value
+    elif kind != "comment":
+        card[kind] = value
+
+
+def state_path(repo: str, environ=None) -> Path:
+    """Where a repo's undecided suggestions are kept between runs. Decisions live on GitHub;
+    this is only what hasn't been decided yet, and what was turned down."""
+    environ = os.environ if environ is None else environ
+    home = Path(environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return home / "milestones" / f"board-{repo.replace('/', '-')}.json"
+
+
+def suggestion_key(s: dict) -> str:
+    return json.dumps([s["issue"], s["kind"], s["value"], s["source"]], sort_keys=True)
+
+
 class Board:
     """One repo's cards and milestones, and the log of what this session did to them.
 
@@ -48,8 +96,15 @@ class Board:
     network, and two moves of one issue can't arrive out of order."""
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
-                 write=None):
+                 write=None, state_file: Path | None = None):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
+        self.state_file = state_file
+        self.labels: list[dict] = []
+        self.fields: dict = {}
+        self.suggestions: dict[int, dict] = {}
+        self.rejected: set[str] = set()
+        self._restored: list[dict] = []
+        self._read_state()
         self.fetch, self.write = fetch, write or self._write
         self.lock = threading.RLock()
         self.repo, self.cards, self.milestones = repo, {}, {}
@@ -66,11 +121,21 @@ class Board:
             self.repo = fetched["repo"]
             self.milestones = {m["number"]: m for m in fetched["milestones"]}
             self.cards = {c["number"]: c for c in fetched["cards"]}
+            self.labels = fetched.get("labels", [])
+            self.fields = fetched.get("fields", {})
             # What this session changed and GitHub hasn't confirmed is still the truth
             # here: a refetch must not put a card back where a failed write left it.
             for action in self.actions.values():
                 if action["status"] in (*UNSETTLED, "would") and action["issue"] in self.cards:
-                    self.cards[action["issue"]][action["kind"]] = action["value"]
+                    set_card_value(self.cards[action["issue"]], action["kind"], action["value"],
+                                   self._colours())
+            # Suggestions kept from the last run, for the issues that are still open.
+            restored, self._restored = self._restored, []
+            self._add_suggestions([s for s in restored if s["issue"] in self.cards])
+            self._rules(self.cards)
+
+    def _colours(self) -> dict[str, str]:
+        return {l["name"]: l["color"] for l in self.labels}
 
     def parked(self) -> int | None:
         """The open Needs triage milestone's number, if the config uses that bucket."""
@@ -90,6 +155,10 @@ class Board:
                 "columns": data.column_order(milestones, self.buckets, self.sort_key),
                 "cards": list(self.cards.values()),
                 "actions": list(self.actions.values()),
+                "labels": self.labels,
+                "fields": {name: list(field["options"]) for name, field in self.fields.items()},
+                "suggestions": [s for s in self.suggestions.values()
+                                if s["status"] != "rejected"],
             }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -101,41 +170,95 @@ class Board:
     def _new_action(self, issue: int, kind: str, value, carried_by: int | None = None) -> dict:
         card = self.cards[issue]
         action = {"id": len(self.actions) + 1, "issue": issue, "kind": kind, "value": value,
-                  "previous": card[kind], "carriedBy": carried_by, "error": None,
+                  "previous": card_value(card, kind), "carriedBy": carried_by, "error": None,
                   "status": "would" if self.read_only else "pending"}
         self.actions[action["id"]] = action
-        card[kind] = value
+        set_card_value(card, kind, value, self._colours())
         return action
+
+    def normalise(self, request: dict) -> tuple[str, object]:
+        """Check one requested change and return the (kind, value) to act on, which is not
+        always the pair asked for: a priority goes to a label where the owner has no
+        Priority field, and a label change given as {add, remove} becomes the set that
+        results. Raises Refused for anything that can't be done."""
+        kind, value = request.get("kind"), request.get("value")
+        if kind not in KINDS:
+            raise Refused(400, f"unknown action kind: {kind!r}")
+        card = self.cards.get(request.get("issue"))
+        if card is None:
+            raise Refused(404, f"no open issue or pull request #{request.get('issue')}")
+        if kind == "milestone":
+            if value is not None:
+                milestone = self.milestones.get(value)
+                if milestone is None:
+                    raise Refused(404, f"no milestone number {value!r}")
+                if milestone["state"] != "open":
+                    raise Refused(409, f"milestone '{milestone['title']}' is closed; "
+                                       "reopen it first")
+        elif kind in reconcile.KINDS:
+            spec = reconcile.KINDS[kind]
+            field = self.fields.get(spec["field"])
+            if field is None:
+                # No such field for this owner (a user account, or an organisation that
+                # hasn't made one): the label is the fallback, and the only record.
+                if value is not None and not isinstance(value, str):
+                    raise Refused(400, f"{kind} must be a name or null")
+                keep = [n for n in card_value(card, "labels")
+                        if n not in reconcile.labels_about(kind, card)]
+                label = f"{spec['field']}: {value.strip().capitalize()}" if value else None
+                return "labels", keep + ([label] if label else [])
+            if card["kind"] != "issue":
+                raise Refused(400, f"#{card['number']} is a pull request, which has no "
+                                   f"{spec['field']} field")
+            if value is not None:
+                names = {name.lower(): name for name in field["options"]}
+                if not isinstance(value, str) or value.lower() not in names:
+                    raise Refused(400, f"{spec['field']} is one of {', '.join(field['options'])}"
+                                       f", or null; not {value!r}")
+                value = names[value.lower()]
+        elif kind == "labels":
+            current = card_value(card, "labels")
+            if isinstance(value, dict):
+                remove = set(value.get("remove") or [])
+                value = [n for n in current if n not in remove] + [
+                    n for n in value.get("add") or [] if n not in current]
+            if not isinstance(value, list) or not all(isinstance(n, str) and n for n in value):
+                raise Refused(400, "labels is a list of names, or {add: [...], remove: [...]}")
+            value = list(dict.fromkeys(value))
+        elif kind in ("title", "comment"):
+            if not isinstance(value, str) or not value.strip():
+                raise Refused(400, f"a {kind} needs some text")
+            value = value.strip()
+        elif kind == "state":
+            if value is not None and value not in CLOSE_REASONS:
+                raise Refused(400, f"state is one of {', '.join(CLOSE_REASONS)} to close, "
+                                   "or null to reopen")
+        return kind, value
 
     def submit(self, requests: list[dict]) -> list[dict]:
         """Apply a batch of changes to the cards and queue their writes. All or none: one
         bad request refuses the batch before anything has moved."""
         with self.lock:
+            if not all(isinstance(r, dict) for r in requests):
+                raise Refused(400, "each action is {issue, kind, value}")
             for request in requests:
-                if request.get("kind") != "milestone":
-                    raise Refused(400, f"unknown action kind: {request.get('kind')!r}")
-                if request.get("issue") not in self.cards:
-                    raise Refused(404, f"no open issue or pull request #{request.get('issue')}")
-                value = request.get("value")
-                if value is not None:
-                    milestone = self.milestones.get(value)
-                    if milestone is None:
-                        raise Refused(404, f"no milestone number {value!r}")
-                    if milestone["state"] != "open":
-                        raise Refused(409, f"milestone '{milestone['title']}' is closed; "
-                                           "reopen it first")
+                self.normalise(request)
             made = []
-            moving = {r["issue"] for r in requests}
+            moving = {r["issue"] for r in requests if r["kind"] == "milestone"}
             for request in requests:
-                card = self.cards[request["issue"]]
-                if card["milestone"] == request["value"]:
-                    continue  # already there: nothing to write, as in the triage walk
-                made.append(self._new_action(card["number"], "milestone", request["value"]))
-                if card["kind"] == "pr" and request["value"] is not None:
+                # Normalised again, against the card as the earlier requests in this batch
+                # left it: a priority that becomes a label, then a label change, must not
+                # each start from the labels the card had before either.
+                issue, (kind, value) = request["issue"], self.normalise(request)
+                card = self.cards[issue]
+                if kind != "comment" and card_value(card, kind) == value:
+                    continue  # already so: nothing to write, as in the triage walk
+                made.append(self._new_action(issue, kind, value))
+                if kind == "milestone" and card["kind"] == "pr" and value is not None:
                     # A pull request is triaged for the issues it closes too.
                     for number in data.carried_by(card, self._issues(), self.parked()):
                         if number not in moving:
-                            made.append(self._new_action(number, "milestone", request["value"],
+                            made.append(self._new_action(number, "milestone", value,
                                                          carried_by=card["number"]))
             for action in made:
                 if action["status"] == "pending":
@@ -165,7 +288,8 @@ class Board:
                      and a["kind"] == action["kind"] and a["id"] > action_id
                      and a["status"] != "reverted"]
             if not later:
-                self.cards[action["issue"]][action["kind"]] = action["previous"]
+                set_card_value(self.cards[action["issue"]], action["kind"], action["previous"],
+                               self._colours())
             return action
 
     def _action(self, action_id: int) -> dict:
@@ -175,13 +299,44 @@ class Board:
 
     def _write(self, action: dict) -> None:
         """Make one action's write. Raises SystemExit (gh's failure) if it didn't take."""
-        answer = gh.api(f"repos/{self.repo}/issues/{action['issue']}", method="PATCH",
-                        body={"milestone": action["value"]})
-        # GitHub's answer rather than its status: a PATCH can succeed and leave the
-        # milestone as it was, for a token that may edit the issue but not triage it.
-        got = (answer.get("milestone") or {}).get("number")
-        if got != action["value"]:
-            raise SystemExit(f"GitHub kept #{action['issue']} on milestone {got!r}")
+        kind, value, number = action["kind"], action["value"], action["issue"]
+        issue = f"repos/{self.repo}/issues/{number}"
+        owner = self.repo.split("/")[0]
+        if kind == "milestone":
+            answer = gh.api(issue, method="PATCH", body={"milestone": value})
+            # GitHub's answer rather than its status: a PATCH can succeed and leave the
+            # milestone as it was, for a token that may edit the issue but not triage it.
+            got = (answer.get("milestone") or {}).get("number")
+            if got != value:
+                raise SystemExit(f"GitHub kept #{number} on milestone {got!r}")
+        elif kind in reconcile.KINDS:
+            name = reconcile.KINDS[kind]["field"]
+            field = self.fields[name]
+            change = (f'singleSelectOptionId: "{field["options"][value]}"' if value is not None
+                      else "delete: true")
+            gh.mutate(f"set #{number}'s {name} field to {value}",
+                      f'mutation {{ setIssueFieldValue(input: {{issueId: '
+                      f'"{self.cards[number]["id"]}", issueFields: [{{fieldId: "{field["id"]}", '
+                      f"{change}}}]}}) {{ clientMutationId }} }}", owner)
+        elif kind == "labels":
+            # PUT replaces the set, and makes any label the repo hasn't got.
+            answer = gh.api(f"{issue}/labels", method="PUT", body={"labels": value})
+            got = sorted(l["name"].lower() for l in answer)
+            if got != sorted(n.lower() for n in value):
+                raise SystemExit(f"GitHub left #{number} with the labels {', '.join(got)}")
+            with self.lock:
+                known = self._colours()
+                self.labels += [{"name": l["name"], "color": l["color"]} for l in answer
+                                if l["name"] not in known]
+                set_card_value(self.cards[number], "labels", [l["name"] for l in answer],
+                               self._colours())
+        elif kind == "title":
+            gh.api(issue, method="PATCH", body={"title": value})
+        elif kind == "state":
+            gh.api(issue, method="PATCH", body={"state": "open"} if value is None
+                   else {"state": "closed", "state_reason": value})
+        elif kind == "comment":
+            gh.api(f"{issue}/comments", method="POST", body={"body": value})
 
     def work(self) -> None:
         """The writer thread: one write at a time, in the order the changes were made."""
@@ -206,6 +361,112 @@ class Board:
     def unsettled(self) -> list[dict]:
         with self.lock:
             return [a for a in self.actions.values() if a["status"] in UNSETTLED]
+
+    # --- suggestions ---------------------------------------------------------------------
+
+    def _read_state(self) -> None:
+        if self.state_file is None:
+            return
+        try:
+            kept = json.loads(self.state_file.read_text())
+        except (OSError, ValueError):
+            return
+        self.rejected = set(kept.get("rejected") or [])
+        self._restored = [s for s in kept.get("open") or [] if isinstance(s, dict)]
+
+    def _save_state(self) -> None:
+        """Keep what is undecided and what was turned down. A rule's suggestion is not kept
+        while open — the rule will make it again — only remembered once rejected."""
+        if self.state_file is None:
+            return
+        kept = {"rejected": sorted(self.rejected),
+                "open": [{k: s[k] for k in ("issue", "kind", "value", "reason", "source")}
+                         for s in self.suggestions.values()
+                         if s["status"] == "open" and not s["source"].startswith("rule:")]}
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self.state_file.write_text(json.dumps(kept, indent=2))
+        except OSError as error:
+            print(f"warning: could not save suggestions to {self.state_file}: {error}",
+                  file=sys.stderr)
+
+    def _add_suggestions(self, proposed: list[dict]) -> list[dict]:
+        """Record suggestions, skipping one already open and one already turned down."""
+        added = []
+        standing = {suggestion_key(s) for s in self.suggestions.values() if s["status"] == "open"}
+        for p in proposed:
+            suggestion = {"id": len(self.suggestions) + 1, "issue": p["issue"],
+                          "kind": p["kind"], "value": p["value"],
+                          "reason": str(p.get("reason") or ""),
+                          "source": str(p.get("source") or "someone"),
+                          "status": "open", "action": None}
+            key = suggestion_key(suggestion)
+            if key in standing or key in self.rejected:
+                continue
+            standing.add(key)
+            self.suggestions[suggestion["id"]] = suggestion
+            added.append(suggestion)
+        return added
+
+    def _rules(self, cards: dict[int, dict]) -> list[dict]:
+        """Bring the board's own suggestions for these cards up to date: the open ones are
+        dropped and made again from the cards as they now stand."""
+        changed = []
+        for s in self.suggestions.values():
+            if s["status"] == "open" and s["source"].startswith("rule:") and s["issue"] in cards:
+                s["status"] = "withdrawn"
+                changed.append(s)
+        self.suggestions = {i: s for i, s in self.suggestions.items()
+                            if s["status"] != "withdrawn"}
+        proposed = [p for card in cards.values() if not card.get("closed")
+                    for p in reconcile.rule_suggestions(card, self.fields)]
+        return changed + self._add_suggestions(proposed)
+
+    def suggest(self, proposed: list[dict]) -> list[dict]:
+        """Take suggestions from outside — a coding agent, a script. Each is checked as an
+        action would be, so one that could never be accepted is refused now, with why."""
+        with self.lock:
+            if not all(isinstance(p, dict) for p in proposed):
+                raise Refused(400, "each suggestion is {issue, kind, value, reason, source}")
+            for p in proposed:
+                self.normalise(p)
+                if str(p.get("source") or "").startswith("rule:"):
+                    raise Refused(400, "a source starting 'rule:' is the board's own")
+            added = self._add_suggestions(proposed)
+            self._save_state()
+            return added
+
+    def resolve(self, ids: list[int], decision: str) -> tuple[list[dict], list[dict]]:
+        """Accept or reject suggestions: (the suggestions that changed, the actions made).
+        Accepting makes the ordinary action, so it is written, retried and undone like one."""
+        if decision not in ("accept", "reject"):
+            raise Refused(400, "decision is accept or reject")
+        with self.lock:
+            chosen = []
+            for i in ids:
+                if i not in self.suggestions:
+                    raise Refused(404, f"no suggestion {i}")
+                if self.suggestions[i]["status"] == "open":
+                    chosen.append(self.suggestions[i])
+            actions = []
+            if decision == "accept":
+                actions = self.submit([{k: s[k] for k in ("issue", "kind", "value")}
+                                       for s in chosen])
+                made = {(a["issue"], a["kind"]): a["id"] for a in actions if not a["carriedBy"]}
+                for s in chosen:
+                    kind = self.normalise(s)[0] if s["issue"] in self.cards else s["kind"]
+                    s.update(status="accepted", action=made.get((s["issue"], kind)))
+            else:
+                for s in chosen:
+                    s["status"] = "rejected"
+                    self.rejected.add(suggestion_key(s))
+            # Accepting one can make another moot, or due: a field just filled from a label
+            # is what makes that label redundant.
+            touched = {s["issue"]: self.cards[s["issue"]] for s in chosen
+                       if s["issue"] in self.cards}
+            changed = chosen + (self._rules(touched) if decision == "accept" else [])
+            self._save_state()
+            return changed, actions
 
     # --- milestones ----------------------------------------------------------------------
 
@@ -336,6 +597,25 @@ def make_handler(board: Board, token: str):
                     action = getattr(board, rest[2])(int(rest[1]))
                     board.publish("action", action)
                     return self._json(200, {"action": action})
+                if method == "POST" and rest == ["suggestions"]:
+                    proposed = self._body().get("suggestions")
+                    if not isinstance(proposed, list):
+                        raise Refused(400, "send {suggestions: [{issue, kind, value, reason, "
+                                           "source}, ...]}")
+                    added = board.suggest(proposed)
+                    for suggestion in added:
+                        board.publish("suggestion", suggestion)
+                    return self._json(200, {"suggestions": added})
+                if method == "POST" and rest == ["suggestions", "resolve"]:
+                    body = self._body()
+                    if not isinstance(body.get("ids"), list):
+                        raise Refused(400, "send {ids: [...], decision: 'accept' | 'reject'}")
+                    changed, actions = board.resolve(body["ids"], body.get("decision"))
+                    for action in actions:
+                        board.publish("action", action)
+                    for suggestion in changed:
+                        board.publish("suggestion", suggestion)
+                    return self._json(200, {"suggestions": changed, "actions": actions})
                 if method == "POST" and rest == ["milestones"]:
                     body = self._body()
                     return self._json(200, {"milestone": board.ensure_milestone(
@@ -405,7 +685,7 @@ def make_handler(board: Board, token: str):
 
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
         shown: list[str] | None = None) -> None:
-    board = Board(repo, buckets, sort_key)
+    board = Board(repo, buckets, sort_key, state_file=state_path(repo))
 
     def progress(what: str, seen: int, total: int) -> None:
         label = "issues" if what == "issues" else "pull requests"
@@ -456,7 +736,10 @@ def closing_lines(snapshot: dict) -> list[str]:
         left = [a for a in actions if a["status"] == status]
         if left:
             lines.append(f"{len(left)} {label}:")
-            lines += [f"  #{a['issue']} → {titles.get(a['value'], 'no milestone')}"
+            lines += [f"  #{a['issue']} " + (
+                          f"→ {titles.get(a['value'], 'no milestone')}"
+                          if a.get("kind", "milestone") == "milestone"
+                          else f"{a['kind']}: {json.dumps(a['value'], ensure_ascii=False)[:60]}")
                       + (f"  — {a['error'].splitlines()[0]}" if a["error"] else "")
                       for a in left]
     return lines

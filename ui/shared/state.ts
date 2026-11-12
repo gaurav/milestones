@@ -2,9 +2,9 @@
 // functions; nothing else talks to the API.
 import { computed, signal } from '@preact/signals';
 import { Api, parseFragment } from './api.ts';
-import type { Action, BoardData, Card, Milestone } from './api.ts';
+import type { Action, BoardData, Card, Kind, Milestone, Move, Suggestion, Value } from './api.ts';
 import {
-  NONE, allColumns, columnOf, group, initialColumns, latestAction, nextFocus, noFilters, unsettled,
+  NONE, allColumns, columnOf, group, initialColumns, latestAction, nextFocus, noFilters, unsettled, withValue,
 } from './logic.ts';
 import type { ColumnId, Filters } from './logic.ts';
 
@@ -22,9 +22,12 @@ export const filters = signal<Filters>(noFilters);
 export const shown = signal<ColumnId[]>([]);
 export const focused = signal<number | null>(null);
 export const selected = signal<Set<number>>(new Set());
-export const picking = signal(false);
-/** Batches of moves made here, newest last, for `z`. Each entry is one card's way back. */
-const undoStack: { issue: number; previous: number | null }[][] = [];
+/** Which dialog is open: the milestone picker, or the editor for one kind. */
+export const modal = signal<Kind | null>(null);
+export const suggestions = signal<Map<number, Suggestion>>(new Map());
+export const trayOpen = signal(false);
+/** Batches of changes made here, newest last, for `z`. Each entry is one card's way back. */
+const undoStack: { issue: number; kind: Kind; previous: Value }[][] = [];
 
 export const columns = computed<ColumnId[]>(() =>
   board.value ? allColumns(board.value.columns, [...milestones.value.values()], [...cards.value.values()]) : []);
@@ -32,6 +35,7 @@ export const grouped = computed(() => group([...cards.value.values()], filters.v
 export const visibleColumns = computed(() => columns.value.filter((id) => shown.value.includes(id)));
 export const pending = computed(() => unsettled(actions.value.values()));
 export const readOnly = computed(() => board.value?.permissions === 'read');
+export const openSuggestions = computed(() => [...suggestions.value.values()].filter((s) => s.status === 'open'));
 
 export function columnTitle(id: ColumnId): string {
   return id === NONE ? 'No milestone' : milestones.value.get(id)?.title ?? `Milestone ${id}`;
@@ -47,6 +51,7 @@ function take(data: BoardData, first: boolean) {
   cards.value = new Map(data.cards.map((c) => [c.number, c]));
   milestones.value = new Map(data.milestones.map((m) => [m.number, m]));
   actions.value = new Map(data.actions.map((a) => [a.id, a]));
+  suggestions.value = new Map(data.suggestions.map((s) => [s.id, s]));
   if (first) {
     shown.value = initialColumns(columns.value, data.milestones, fragment.from);
     document.title = `${data.repo} · milestones board`;
@@ -70,6 +75,7 @@ export async function start() {
   api.events({
     action: applyAction,
     milestone: (m) => { milestones.value = new Map(milestones.value).set(m.number, m); },
+    suggestion: applySuggestion,
     reload: () => { api.board().then((data) => take(data, false)).catch(() => {}); },
   });
 }
@@ -80,16 +86,23 @@ export async function refresh() {
   loading.value = false;
 }
 
-/** Record an action, and make its card show what the latest action on it says. */
+/** Record an action, and make its card show what the latest action of that kind says. */
 export function applyAction(action: Action) {
   const all = new Map(actions.value).set(action.id, action);
   actions.value = all;
   const card = cards.value.get(action.issue);
-  if (!card) return;
-  const latest = latestAction(all.values(), action.issue);
+  if (!card || action.kind === 'comment') return;
+  const latest = latestAction(all.values(), action.issue, action.kind);
   // No action left standing means the reverted one was the only one: back to before it.
   const value = latest ? latest.value : action.previous;
-  if (card.milestone !== value) cards.value = new Map(cards.value).set(card.number, { ...card, milestone: value });
+  cards.value = new Map(cards.value).set(card.number, withValue(card, action.kind, value, board.value?.labels ?? []));
+}
+
+export function applySuggestion(suggestion: Suggestion) {
+  const next = new Map(suggestions.value);
+  if (suggestion.status === 'open' || suggestion.status === 'accepted') next.set(suggestion.id, suggestion);
+  else next.delete(suggestion.id);
+  suggestions.value = next;
 }
 
 /** The focused card, or the whole selection when the focused card is part of it. */
@@ -98,8 +111,27 @@ export function targets(of: number | null = focused.value): number[] {
   return selected.value.has(of) ? [...selected.value] : [of];
 }
 
-/** Move cards to a column. Shows the move at once; the server queues the write. */
-export async function move(issues: number[], to: ColumnId, remember = true) {
+function remember(made: Action[]) {
+  const back = made.filter((a) => a.kind !== 'comment').map((a) => ({ issue: a.issue, kind: a.kind, previous: a.previous }));
+  if (back.length) undoStack.push(back);
+}
+
+/** Send changes to the server, which applies them and queues the writes; show the result. */
+async function submit(moves: Move[], undoable = true): Promise<boolean> {
+  if (moves.length === 0) return true;
+  try {
+    const made = await api.act(moves);
+    made.forEach(applyAction);
+    if (undoable) remember(made);
+    return true;
+  } catch (error) {
+    say((error as Error).message);
+    return false;
+  }
+}
+
+/** Move cards to a column. */
+export async function move(issues: number[], to: ColumnId) {
   const value = to === NONE ? null : to;
   const moving = issues.map((n) => cards.value.get(n)).filter((c): c is Card => !!c && c.milestone !== value);
   if (moving.length === 0) return;
@@ -114,39 +146,34 @@ export async function move(issues: number[], to: ColumnId, remember = true) {
     const from = grouped.value.get(columnOf(cards.value.get(focused.value)!)) ?? [];
     focused.value = nextFocus(from, leaving, focused.value) ?? focused.value;
   }
-  const back = moving.map((c) => ({ issue: c.number, previous: c.milestone }));
-  const next = new Map(cards.value);
-  for (const c of moving) next.set(c.number, { ...c, milestone: value });
-  cards.value = next;
   selected.value = new Set();
-  try {
-    const made = await api.act(moving.map((c) => ({ issue: c.number, kind: 'milestone' as const, value })));
-    made.forEach(applyAction);
-    if (remember) undoStack.push(back);
-  } catch (error) {
-    // Refused before anything was queued: put the cards back.
-    const restore = new Map(cards.value);
-    for (const b of back) {
-      const c = restore.get(b.issue);
-      if (c) restore.set(b.issue, { ...c, milestone: b.previous });
-    }
-    cards.value = restore;
-    say((error as Error).message);
-  }
+  await submit(moving.map((c) => ({ issue: c.number, kind: 'milestone' as const, value })));
 }
 
-/** Undo the last batch of moves made here. Undo is a move like any other, so it is written
- *  to GitHub too. */
+/** Change one kind on some cards: a priority, a title, the labels… */
+export async function change(issues: number[], kind: Kind, value: Move['value']) {
+  await submit(issues.map((issue) => ({ issue, kind, value })));
+}
+
+/** Undo the last batch of changes made here. Undo is a change like any other, so it is
+ *  written to GitHub too. */
 export async function undo() {
   const batch = undoStack.pop();
   if (!batch) { say('Nothing to undo.'); return; }
-  const by = new Map<ColumnId, number[]>();
-  for (const b of batch) {
-    const to = b.previous ?? NONE;
-    by.set(to, [...(by.get(to) ?? []), b.issue]);
-  }
-  for (const [to, issues] of by) await move(issues, to, false);
+  await submit(batch.map((b) => ({ issue: b.issue, kind: b.kind, value: b.previous })).reverse(), false);
   focused.value = batch[0]!.issue;
+}
+
+export async function resolve(ids: number[], decision: 'accept' | 'reject') {
+  if (ids.length === 0) return;
+  try {
+    const result = await api.resolve(ids, decision);
+    result.actions.forEach(applyAction);
+    result.suggestions.forEach(applySuggestion);
+    remember(result.actions);
+  } catch (error) {
+    say((error as Error).message);
+  }
 }
 
 export async function retry(id: number) {
