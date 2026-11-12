@@ -16,7 +16,8 @@ actually has, and a repo is free to use only some of them.
 ## Setup
 
 Requires Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and an authenticated
-[`gh`](https://cli.github.com/) (all API calls go through it; there is no other auth).
+[`gh`](https://cli.github.com/) (all API calls go through it; a token of your own choosing is
+optional, see [Tokens and read-only runs](#tokens-and-read-only-runs)).
 
 ```sh
 uv tool install --editable .
@@ -91,9 +92,81 @@ Every command is described below; this is the order they are useful in.
 put together. It is written for the people and coding agents working in the repos themselves,
 so it says nothing about this tool.
 
+## Tokens and read-only runs
+
+Out of the box every call is made as whoever `gh auth login` signed in, which usually means a
+token that can push code as well as move issues. An env file narrows that. Copy
+[`env.default`](env.default) to `.env` in the directory you run `milestones` from, or to
+`~/.config/milestones.env`; a variable set in your shell wins over both, and only `MILESTONES_*`
+lines are read from a file.
+
+| Setting | What it does |
+| --- | --- |
+| `MILESTONES_GH_TOKEN` | The token `gh` is handed for every call. Unset: `gh`'s own login. |
+| `MILESTONES_GH_TOKEN_<OWNER>` | A token for calls about one owner's repos (`NCATSTranslator` → `_NCATSTRANSLATOR`, `my-org` → `_MY_ORG`). |
+| `MILESTONES_PERMISSIONS` | `write` (the default) or `read`. |
+
+With `MILESTONES_PERMISSIONS=read` nothing is written, whatever the token could do: `setup` says
+what it would create, `rollover` and `assign` list what they would move and stop, the `triage` walk
+says where each issue would go, and `check -i` reports each fix it would have made. It is the way
+to see what the tool suggests for your repos before letting it act.
+
+A fine-grained personal access token keeps the tool to what it should touch — Issues and Pull
+requests read and write, Metadata read, and organisation Projects read, with nothing for
+Contents. Such a token belongs to **one owner**, so repos under a second owner need a second
+token: that is what the per-owner setting is for. A search across every tracked repo goes out on
+the default token, which only has to be able to *read* them.
+
+`milestones doctor` shows which env files were found, the mode, which token each owner's calls
+use (the setting's name, never the token), who that token signs in as, and whether it can read
+projects and organisation issue fields.
+
+## The board
+
+```sh
+npm install && npm run build      # once, and after pulling changes to ui/
+milestones board NCATSTranslator/Babel --from Critical --from "Babel v1.19" --from none
+```
+
+`milestones board` opens one repo in your browser as a column per milestone, with every open
+issue and pull request as a card. Run it with no repo from inside a checkout and it takes that
+checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is the issues with no
+milestone); the rest are under **Columns**, including any closed milestone that still has open
+work on it.
+
+A card shows what has already been decided about it, wherever that was written down: its labels,
+the organisation's Priority and Effort fields (or a `Priority:`/`Size:` label where the field is
+unset), its issue type, the pull requests that close or mention it, sub-issues, age and comments.
+The pane on the right has the description and the rest.
+
+There are three ways to move a card, and they are the same write:
+
+- **Keys**: `j`/`k` and `h`/`l` move the focus; `1`–`9` send the focused card to that column and
+  `0` takes it off its milestone; `space` selects, and then a key moves the whole selection; `z`
+  undoes; `o` opens the card on GitHub; `/` searches.
+- **Drag** a card, or a selection, onto a column.
+- **`m`** opens a picker over every milestone in the repo, open or closed, for when there are more
+  than nine or you want a new one. It asks before reopening a closed milestone or creating one.
+
+Moving a pull request also moves the open issues it closes that nobody has placed yet, as the
+`triage` walk does. A column's due date is a button: click it to change the date.
+
+Every move is written to GitHub as you make it, in order, while you carry on. A card whose write
+is in flight says *saving…*; one whose write failed keeps the place you gave it and gains **Retry**
+and **Revert**. Closing the tab with writes outstanding asks first, and stopping the server with
+Ctrl-C lists anything that never reached GitHub. With `MILESTONES_PERMISSIONS=read` the board is a
+sandbox: cards move, are marked *not written*, and nothing is sent.
+
+The page and the server share nothing but an HTTP API, described in
+[docs/BoardAPI.md](docs/BoardAPI.md), so a different front end — or a script — can use the same
+server.
+
 ## Commands
 
 ```sh
+milestones doctor                        # which token and permissions are in effect, and
+                                         # what that token can read
+
 milestones status [--json]               # the default command (bare `milestones` runs it):
                                          # all open milestones across configured repos by
                                          # due date, with open/closed issue counts, open
@@ -339,5 +412,12 @@ What it deliberately leaves out:
 ## Development
 
 ```sh
-uv run pytest
+uv run pytest                     # the Python: pure functions only, nothing calls gh
+npm run typecheck && npm test     # the board's front end, in ui/
+npm run dev                       # rebuild the front end on every change
 ```
+
+The front end is TypeScript and Preact with signals, bundled by esbuild into
+`milestones/board/static/` (not checked in) — the same stack as
+[chaff](https://github.com/gaurav/triage), so that components can move between the two. Node is
+needed to build it and for nothing else; the Python package has no runtime dependencies.

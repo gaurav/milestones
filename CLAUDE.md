@@ -150,3 +150,50 @@ walk's write paths, create a scratch milestone with no due date and no issues �
 raises `rename`, `undated` and `empty` together, so a single walk reaches the rename, the date and
 the delete prompts, and `[d]` clears it up at the end. Tests (`uv run pytest`) cover only the
 pure functions; keep it that way rather than mocking `gh`.
+
+Every write goes through `gh._refuse_write`: `gh.api` with any method but GET, and `gh.mutate`
+for a GraphQL mutation. That is what makes `MILESTONES_PERMISSIONS=read` trustworthy, so never
+send a mutation through `gh.graphql`, which can't tell a write from a read. The refusal is
+`gh.ReadOnly`, a `SystemExit` like every other failed call, so `check -i` and the priority writes
+report it and carry on as they do for a failure; `rollover`, `assign`, `setup` and the `triage`
+walk ask `gh.read_only()` first and print a preview instead, because a refusal at their first
+write would show one line of a plan that has many.
+
+Tokens are per owner (`env.token_key`), because a fine-grained token belongs to one resource
+owner: `gh.api` reads the owner off the REST path (`gh.path_owner`), and `gh.graphql`/`gh.mutate`
+take it as an argument — pass it for any query about a single owner. `doctor` tells a classic
+token from a fine-grained one by the `X-OAuth-Scopes` header, which only a classic token sends.
+Not yet verified live: whether a fine-grained token can read or write organisation issue fields
+(`doctor`'s "issue fields" probe answers the read half the day someone runs it with one).
+
+`gh.settings()` is cached for the run, so a test that wants a mode monkeypatches `gh.settings`
+rather than the environment.
+
+## The board
+
+`milestones board` is `milestones/board/` (stdlib server) plus `ui/` (Preact, built by `npm run
+build` into `milestones/board/static/`, which is gitignored). They share only the API in
+`docs/BoardAPI.md`: change an endpoint and that file changes in the same commit. Keep `cli.py` out
+of it beyond the subparser — the board has its own fetch (`board/data.py`), because a card needs
+far more than `_norm_issue` keeps.
+
+- The `Board` applies a change to its cards first and writes after, from one worker thread, in
+  order. A failed write leaves the new value on the card (`load()` re-applies unsettled actions
+  after a refetch for the same reason); only `revert` puts it back.
+- One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
+  PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
+  type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that
+  mentions an issue without closing it; those come from `timelineItems(itemTypes:
+  [CROSS_REFERENCED_EVENT])`. `projectItems { totalCount }` is readable without `read:project`;
+  a project's title and fields are not.
+- Taking an issue off its milestone is `PATCH` with `{"milestone": null}`, which needs
+  `gh.api(body=...)` (`--input -`); `-F milestone=null` sends the string.
+- There is no browser tool in an agent session unless the Chrome extension is connected. A
+  headless check works with the Playwright in `~/code/prcoder/node_modules`:
+  `createRequire('/Users/gaurav/code/prcoder/')('playwright')`, against a board started with
+  `--no-open --port N`. Playwright's `dragTo` scrolls the target into view mid-drag, so a card in
+  a column that is off-screen picks up whatever card ends under the pointer — drag between columns
+  that are both visible.
+- Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
+  gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
+  `MILESTONES_PERMISSIONS=read`.
