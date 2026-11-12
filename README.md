@@ -191,7 +191,8 @@ label read in the field's terms (`Priority: Critical` under Urgent, `Size: M` un
 *from label*. Putting it in a column sets the field. Pull requests are left out of the priority
 and effort views where the owner has those fields, since a pull request cannot hold one.
 
-`milestones board --by priority --group effort` starts in a view. `p`, `e` and `m` still set
+The board opens the way you left it — the view, the grouping and the milestones ticked — unless
+you say otherwise: `milestones board --by priority --group effort`, or `--from`, wins. `p`, `e` and `m` still set
 priority, effort and milestone whatever the columns are.
 
 ### Asking a coding agent
@@ -477,7 +478,8 @@ What it deliberately leaves out:
 - **No local state or cache of GitHub.** Every command reads GitHub fresh, so nothing can go
   stale except GitHub's own listings, which lag writes by a few seconds. Every decision lives on
   GitHub; the one thing kept locally is what the board has *not* decided yet — suggestions still
-  waiting, and the ones you turned down, so that they aren't made again.
+  waiting, and the ones you turned down, so that they aren't made again — and how you last had
+  the board laid out.
 - **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
 - **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
   `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would

@@ -86,6 +86,26 @@ export function initialColumns(all: ColumnId[], milestones: Milestone[], from: s
   return shown.length ? shown : all;
 }
 
+/** How the board opens: what the command line asked for, else how it was last left, else
+ *  everything by milestone. A saved milestone that has since gone is dropped, and a saved
+ *  selection with none left counts as no selection. */
+export function initialView(
+  asked: { from: string[]; by: string; group: string[] },
+  saved: { by?: string; group?: string[]; shown?: number[] } | undefined,
+  all: ColumnId[],
+  milestones: Milestone[],
+): { by: DimKind; group: DimKind[]; shown: ColumnId[] } {
+  const kinds = DIMENSIONS.map((d) => d.kind as string);
+  const kept = (saved?.shown ?? []).filter((id) => all.includes(id));
+  const by = [asked.by, saved?.by].find((k) => k && kinds.includes(k)) ?? 'milestone';
+  const group = asked.group.length ? asked.group : saved?.group ?? [];
+  return {
+    by: by as DimKind,
+    group: group.filter((g) => kinds.includes(g)) as DimKind[],
+    shown: asked.from.length || kept.length === 0 ? initialColumns(all, milestones, asked.from) : kept,
+  };
+}
+
 /** What a view needs to know to lay cards out: which dimension the columns are, the
  *  board's milestone order and fields, and the label table. */
 export interface Layout {

@@ -457,3 +457,17 @@ def test_the_board_hands_the_page_its_label_table(monkeypatch):
     assert snapshot["labelValues"] is reconcile.KINDS
     assert snapshot["labelValues"]["priority"]["values"]["critical"] == "Urgent"
     assert set(snapshot["labelValues"]["effort"]) == {"field", "prefix", "values"}
+
+
+def test_the_view_is_remembered_between_runs(monkeypatch, tmp_path):
+    state = tmp_path / "board.json"
+    board = make_board(monkeypatch, [], state_file=state)
+    assert board.snapshot()["view"] == {}
+    view = {"by": "priority", "group": ["effort"], "shown": [0, 1]}
+    assert board.set_view({**view, "extra": "dropped"}) == view
+    for bad in ({"by": "labels", "group": [], "shown": []}, {"by": "priority", "group": ["x"], "shown": []},
+                {"by": "priority", "group": [], "shown": ["Soon"]}, {"by": "priority", "group": [], "shown": [True]},
+                {}):
+        with pytest.raises(server.Refused):
+            board.set_view(bad)
+    assert make_board(monkeypatch, [], state_file=state).snapshot()["view"] == view

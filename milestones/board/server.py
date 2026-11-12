@@ -104,6 +104,10 @@ class Board:
         self.fields: dict = {}
         self.suggestions: dict[int, dict] = {}
         self.rejected: set[str] = set()
+        # How the board was last looked at: what the columns were, the grouping, and which
+        # milestones were ticked. The page's business; kept here because each run is on a new
+        # port, which a browser treats as a new site with empty storage.
+        self.view: dict = {}
         self._restored: list[dict] = []
         self._read_state()
         self.fetch, self.write = fetch, write or self._write
@@ -163,6 +167,7 @@ class Board:
                 # The one table of what a label means, so a front end that sorts cards by
                 # priority reads "Priority: Critical" as the rules here do.
                 "labelValues": reconcile.KINDS,
+                "view": self.view,
             }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -376,6 +381,7 @@ class Board:
         except (OSError, ValueError):
             return
         self.rejected = set(kept.get("rejected") or [])
+        self.view = kept["view"] if isinstance(kept.get("view"), dict) else {}
         self._restored = [s for s in kept.get("open") or [] if isinstance(s, dict)]
 
     def _save_state(self) -> None:
@@ -383,7 +389,7 @@ class Board:
         while open — the rule will make it again — only remembered once rejected."""
         if self.state_file is None:
             return
-        kept = {"rejected": sorted(self.rejected),
+        kept = {"view": self.view, "rejected": sorted(self.rejected),
                 "open": [{k: s[k] for k in ("issue", "kind", "value", "reason", "source")}
                          for s in self.suggestions.values()
                          if s["status"] == "open" and not s["source"].startswith("rule:")]}
@@ -425,6 +431,20 @@ class Board:
         proposed = [p for card in cards.values() if not card.get("closed")
                     for p in reconcile.rule_suggestions(card, self.fields)]
         return changed + self._add_suggestions(proposed)
+
+    def set_view(self, view: dict) -> dict:
+        """Remember how the board is being looked at, for the next run."""
+        dims = ("milestone", "priority", "effort")
+        by, group, shown = view.get("by"), view.get("group"), view.get("shown")
+        if (by not in dims or not isinstance(group, list) or any(g not in dims for g in group)
+                or not isinstance(shown, list)
+                or any(isinstance(n, bool) or not isinstance(n, int) for n in shown)):
+            raise Refused(400, "a view is {by: milestone|priority|effort, group: [...], "
+                               "shown: [milestone numbers, 0 for none]}")
+        with self.lock:
+            self.view = {"by": by, "group": group, "shown": shown}
+            self._save_state()
+            return self.view
 
     def suggest(self, proposed: list[dict]) -> list[dict]:
         """Take suggestions from outside — a coding agent, a script. Each is checked as an
@@ -631,6 +651,8 @@ def make_handler(board: Board, token: str):
                     for suggestion in changed:
                         board.publish("suggestion", suggestion)
                     return self._json(200, {"suggestions": changed, "actions": actions})
+                if method == "POST" and rest == ["view"]:
+                    return self._json(200, {"view": board.set_view(self._body())})
                 if method == "POST" and rest == ["milestones"]:
                     body = self._body()
                     return self._json(200, {"milestone": board.ensure_milestone(

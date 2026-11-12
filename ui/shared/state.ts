@@ -1,10 +1,10 @@
 // The board's state and everything a view may do to it. Views read the signals and call the
 // functions; nothing else talks to the API.
-import { computed, signal } from '@preact/signals';
+import { computed, effect, signal } from '@preact/signals';
 import { Api, parseFragment } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, Suggestion, Value } from './api.ts';
 import {
-  DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialColumns,
+  DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialView,
   latestAction, nextFocus, noFilters, unsettled, withValue,
 } from './logic.ts';
 import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
@@ -108,16 +108,31 @@ function take(data: BoardData, first: boolean) {
   actions.value = new Map(data.actions.map((a) => [a.id, a]));
   suggestions.value = new Map(data.suggestions.map((s) => [s.id, s]));
   if (first) {
-    shown.value = initialColumns(milestoneColumns.value, data.milestones, fragment.from);
-    const kinds = DIMENSIONS.map((d) => d.kind as string);
-    if (kinds.includes(fragment.by)) dimension.value = fragment.by as DimKind;
-    groupBy.value = fragment.group.filter((g) => kinds.includes(g)) as DimKind[];
+    const view = initialView(fragment, data.view, milestoneColumns.value, data.milestones);
+    shown.value = view.shown;
+    dimension.value = view.by;
+    groupBy.value = view.group;
+    rememberView();
     document.title = `${data.repo} · milestones board`;
   }
   if (focused.value === null || !cards.value.has(focused.value)) {
     const top = visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean);
     focused.value = top?.number ?? null;
   }
+}
+
+/** Tell the server how the board is being looked at whenever that changes, so the next run
+ *  opens the same way. Storage in the browser would not do: each run is on a new port. */
+function rememberView() {
+  let last = '';
+  effect(() => {
+    const view = { by: dimension.value, group: groupBy.value, shown: shown.value.filter((id): id is number => typeof id === 'number') };
+    const now = JSON.stringify(view);
+    const first = last === '';
+    if (now === last) return;
+    last = now;
+    if (!first) api.saveView(view).catch(() => {});
+  });
 }
 
 export async function start() {

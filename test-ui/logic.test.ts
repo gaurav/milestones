@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, group, inView, initialColumns, inkOn, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, group, inView, initialColumns, initialView, inkOn, latestAction, matches, nextFocus,
   noFilters, pickerMatches, priorityOf, sections, unsettled, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -199,4 +199,16 @@ test('the prompt for an agent says where the issue stands and what you think', (
   assert.match(prompt, /What I think: medium effort, own source\n/);
   assert.match(prompt, /milestones suggest 62 \.\.\. --reason/);
   assert.match(askPrompt('o/r', [c, card(63)], ms, ''), /these 2 issues[\s\S]*nothing yet[\s\S]*milestones suggest N /);
+});
+
+test('the board opens as asked, else as it was left, else everything by milestone', () => {
+  const ms = [milestone(7, 'Critical'), milestone(8, 'v1')];
+  const all = [NONE, 7, 8];
+  const none = { from: [], by: '', group: [] };
+  assert.deepEqual(initialView(none, undefined, all, ms), { by: 'milestone', group: [], shown: all });
+  const saved = { by: 'priority', group: ['effort'], shown: [7, 99] };   // 99 has since gone
+  assert.deepEqual(initialView(none, saved, all, ms), { by: 'priority', group: ['effort'], shown: [7] });
+  assert.deepEqual(initialView({ from: ['v1'], by: 'effort', group: ['priority'] }, saved, all, ms),
+    { by: 'effort', group: ['priority'], shown: [8] });
+  assert.deepEqual(initialView(none, { by: 'nonsense', group: ['x'], shown: [99] }, all, ms), { by: 'milestone', group: [], shown: all });
 });

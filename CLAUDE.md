@@ -233,6 +233,9 @@ far more than `_norm_issue` keeps.
   lets `step` and `nextFocus` ignore grouping; `sections` cuts that list into headed runs for
   drawing. `submit` in `ui/shared/state.ts` moves the focus on when a change takes the focused card
   out of its column, in any view.
+- The page's layout (view, grouping, ticked milestones) is saved through `POST /api/v1/view` into
+  the state file, not `localStorage`: each run is on a new port, which a browser treats as a new
+  origin. `initialView` in `logic.ts` decides precedence: flags, then saved, then defaults.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.
