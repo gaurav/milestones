@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import termios
 import textwrap
@@ -1360,6 +1361,31 @@ def cmd_assign(config, args):
         print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
 
 
+def remote_repo(url: str) -> str | None:
+    """OWNER/NAME from a git remote's URL, in either spelling git uses for GitHub; None for
+    a remote that is somewhere else."""
+    match = re.fullmatch(r"(?:git@github\.com:|ssh://git@github\.com/|https?://github\.com/)"
+                         r"([^/\s]+)/([^/\s]+?)(?:\.git)?/?", url.strip())
+    return f"{match[1]}/{match[2]}" if match else None
+
+
+def cmd_board(config, args):
+    """Open the triage board for one repo: the one named, or the checkout you are in."""
+    # Imported here: the board is the one command with a server and a front end behind it.
+    from .board import server
+    if args.repo:
+        repo = parse_repo(args.repo)
+    else:
+        found = subprocess.run(["git", "remote", "get-url", "origin"],
+                               capture_output=True, text=True)
+        repo = remote_repo(found.stdout) if found.returncode == 0 else None
+        if repo is None:
+            sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
+                     "whose origin is on GitHub.")
+    server.run(repo, config["buckets"], sort_key, port=args.port,
+               open_browser=not args.no_open, shown=args.sources)
+
+
 def token_kind(scopes: str | None) -> str:
     """What `doctor` says about a token, from the X-OAuth-Scopes header of a call made with
     it. Only a classic token sends that header; a fine-grained one sends none, and what it
@@ -1935,6 +1961,18 @@ def main():
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
     setup.set_defaults(func=cmd_setup)
+    board = sub.add_parser("board", help="triage one repo's issues on a board in your browser, "
+                                         "a column per milestone; every move is written "
+                                         "to GitHub as you make it")
+    board.add_argument("repo", nargs="?", metavar="OWNER/NAME",
+                       help="default: the origin of the checkout you are in")
+    board.add_argument("--from", dest="sources", action="append", metavar="MILESTONE",
+                       help="show only these milestones' columns to begin with (repeatable; "
+                            "`none` is the issues with no milestone)")
+    board.add_argument("--port", type=int, default=0, help="default: any free port")
+    board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
+    board.set_defaults(func=cmd_board)
+
     check = sub.add_parser("check",
                            help="milestones that need renaming, dating, closing or rolling over")
     # Nothing to walk if the findings are going out as JSON.
