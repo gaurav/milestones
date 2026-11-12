@@ -23,7 +23,7 @@ export const shown = signal<ColumnId[]>([]);
 export const focused = signal<number | null>(null);
 export const selected = signal<Set<number>>(new Set());
 /** Which dialog is open: the milestone picker, or the editor for one kind. */
-export const modal = signal<Kind | null>(null);
+export const modal = signal<Kind | 'ask' | null>(null);
 export const suggestions = signal<Map<number, Suggestion>>(new Map());
 export const trayOpen = signal(false);
 /** Batches of changes made here, newest last, for `z`. Each entry is one card's way back. */
@@ -36,6 +36,8 @@ export const visibleColumns = computed(() => columns.value.filter((id) => shown.
 export const pending = computed(() => unsettled(actions.value.values()));
 export const readOnly = computed(() => board.value?.permissions === 'read');
 export const openSuggestions = computed(() => [...suggestions.value.values()].filter((s) => s.status === 'open'));
+
+export function notify(message: string) { say(message); }
 
 export function columnTitle(id: ColumnId): string {
   return id === NONE ? 'No milestone' : milestones.value.get(id)?.title ?? `Milestone ${id}`;
