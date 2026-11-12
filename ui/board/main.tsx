@@ -2,15 +2,16 @@
 // Everything it knows about GitHub comes through ui/shared/.
 import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Action, Card as CardData } from '../shared/api.ts';
+import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
-  NONE, age, columnOf, effortOf, inkOn, latestAction, linkedPrs, noFilters, pickerMatches, priorityOf,
+  NONE, age, cardStatus, cardValue, columnOf, describe, effortOf, inkOn, linkedPrs, noFilters, pickerMatches,
+  priorityOf,
 } from '../shared/logic.ts';
 import type { ColumnId } from '../shared/logic.ts';
 import {
-  actions, board, cards, columnTitle, columns, fatal, filters, focused, grouped, loading, milestones,
-  move, moveToTitle, pending, picking, readOnly, refresh, retry, revert, selected, setDue, shown, start,
-  step, targets, toast, toggleColumn, toggleSelected, undo, visibleColumns,
+  actions, board, cards, change, columnTitle, columns, fatal, filters, focused, grouped, loading, milestones,
+  modal, move, moveToTitle, openSuggestions, pending, readOnly, refresh, resolve, retry, revert, selected,
+  setDue, shown, start, step, targets, toast, toggleColumn, toggleSelected, trayOpen, undo, visibleColumns,
 } from '../shared/state.ts';
 
 const DRAG = 'application/x-milestones-cards';
@@ -42,7 +43,7 @@ function Card({ card }: { card: CardData }) {
   return (
     <div
       ref={ref}
-      class={`card${isFocused ? ' focused' : ''}${isSelected ? ' selected' : ''}`}
+      class={`card${isFocused ? ' focused' : ''}${isSelected ? ' selected' : ''}${card.closed ? ' is-closed' : ''}`}
       draggable
       onClick={(e) => {
         if (e.shiftKey || e.metaKey || e.ctrlKey) toggleSelected(card.number);
@@ -56,6 +57,7 @@ function Card({ card }: { card: CardData }) {
       <div class="card-title">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>{' '}
         {card.kind === 'pr' && <span class="chip pr">{card.draft ? 'draft PR' : 'PR'}</span>}
+        {card.closed && <span class="chip closed">closed</span>}
         {card.title}
       </div>
       <div class="card-meta">
@@ -73,7 +75,10 @@ function Card({ card }: { card: CardData }) {
         {(card.closes?.length ?? 0) > 0 && <span title="issues this pull request closes">closes {card.closes!.map((c) => `#${c.number}`).join(' ')}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
         {card.assignees.length > 0 && <span title="assignees">@{card.assignees.join(' @')}</span>}
-        <Status action={latestAction(actions.value.values(), card.number)} />
+        {openSuggestions.value.some((s) => s.issue === card.number) && (
+          <span class="suggested" title="Has suggestions waiting for you">✎ {openSuggestions.value.filter((s) => s.issue === card.number).length}</span>
+        )}
+        <Status action={cardStatus(actions.value.values(), card.number)} />
       </div>
     </div>
   );
@@ -172,8 +177,158 @@ function Detail() {
         {(card.mentionedPrs?.length ?? 0) > 0 && <><dt>Mentioned in</dt><dd>{card.mentionedPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {(card.closes?.length ?? 0) > 0 && <><dt>Closes</dt><dd>{card.closes!.map((c) => <div>#{c.number} {c.title} <small>({c.state.toLowerCase()})</small></div>)}</dd></>}
       </dl>
+      <Suggestions list={openSuggestions.value.filter((s) => s.issue === card.number)} />
       <iframe class="body" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc={doc} title="Description" />
     </aside>
+  );
+}
+
+function SuggestionRow({ s, withIssue }: { s: Suggestion; withIssue?: boolean }) {
+  const card = cards.value.get(s.issue);
+  return (
+    <li class="suggestion">
+      <div class="suggestion-what">
+        {withIssue && <a href="#" onClick={(e) => { e.preventDefault(); focused.value = s.issue; }}>#{s.issue}</a>}{' '}
+        <strong>{describe(s.kind, s.value, milestones.value)}</strong>
+        {withIssue && card && <small> — {card.title}</small>}
+      </div>
+      {s.reason && <div class="suggestion-why">{s.reason}</div>}
+      <div class="suggestion-foot">
+        <small>{s.source.replace(/^rule:/, 'board rule: ')}</small>
+        <button onClick={() => resolve([s.id], 'accept')}>Accept</button>
+        <button onClick={() => resolve([s.id], 'reject')}>Reject</button>
+      </div>
+    </li>
+  );
+}
+
+function Suggestions({ list }: { list: Suggestion[] }) {
+  if (list.length === 0) return null;
+  return (
+    <section class="suggestions">
+      <h3>Suggested</h3>
+      <ul>{list.map((s) => <SuggestionRow key={s.id} s={s} />)}</ul>
+    </section>
+  );
+}
+
+/** Every open suggestion, by who made it, with a way to take a whole source at once. */
+function Tray() {
+  const bySource = new Map<string, Suggestion[]>();
+  for (const s of openSuggestions.value) bySource.set(s.source, [...(bySource.get(s.source) ?? []), s]);
+  return (
+    <aside class="detail tray">
+      <h2>Suggestions <button class="close" onClick={() => { trayOpen.value = false; }}>×</button></h2>
+      {bySource.size === 0 && <p class="empty">Nothing is waiting for you.</p>}
+      {[...bySource].map(([source, list]) => (
+        <section class="suggestions">
+          <h3>
+            {source.replace(/^rule:/, 'board rule: ')} <small>({list.length})</small>
+            <button onClick={() => { if (confirm(`Accept all ${list.length} from ${source}? Each is written to GitHub.`)) resolve(list.map((s) => s.id), 'accept'); }}>Accept all</button>
+            <button onClick={() => { if (confirm(`Reject all ${list.length} from ${source}?`)) resolve(list.map((s) => s.id), 'reject'); }}>Reject all</button>
+          </h3>
+          <ul>{list.slice(0, 200).map((s) => <SuggestionRow key={s.id} s={s} withIssue />)}</ul>
+          {list.length > 200 && <p class="empty">…and {list.length - 200} more.</p>}
+        </section>
+      ))}
+    </aside>
+  );
+}
+
+const CHOICES: Partial<Record<Kind, { title: string; options(): { label: string; value: string | null }[] }>> = {
+  priority: { title: 'Priority', options: () => [...(board.value?.fields['Priority'] ?? ['Urgent', 'High', 'Medium', 'Low']).map((o) => ({ label: o, value: o })), { label: 'Clear', value: null }] },
+  effort: { title: 'Effort', options: () => [...(board.value?.fields['Effort'] ?? ['High', 'Medium', 'Low']).map((o) => ({ label: o, value: o })), { label: 'Clear', value: null }] },
+  state: { title: 'Close', options: () => [{ label: 'Close as completed', value: 'completed' }, { label: 'Close as not planned', value: 'not_planned' }, { label: 'Reopen', value: null }] },
+};
+
+/** A short list to pick one of, by number key or click: priority, effort, close. */
+function Choice({ kind }: { kind: Kind }) {
+  const spec = CHOICES[kind]!;
+  const options = spec.options();
+  const issues = targets();
+  const close = () => { modal.value = null; };
+  const choose = (value: string | null) => { close(); change(issues, kind, value); };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') close();
+      const option = options[Number(e.key) - 1];
+      if (option) { e.preventDefault(); choose(option.value); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+  return (
+    <div class="overlay" onClick={close}>
+      <div class="picker" onClick={(e) => e.stopPropagation()}>
+        <div class="picker-head">{spec.title} for {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`}</div>
+        <ul>{options.map((o, i) => <li onClick={() => choose(o.value)}><span><kbd>{i + 1}</kbd> {o.label}</span></li>)}</ul>
+      </div>
+    </div>
+  );
+}
+
+/** A title to edit, or a comment to write. */
+function TextDialog({ kind }: { kind: 'title' | 'comment' }) {
+  const issues = targets();
+  const card = cards.value.get(issues[0]!);
+  const [text, setText] = useState(kind === 'title' ? card?.title ?? '' : '');
+  const close = () => { modal.value = null; };
+  const save = () => { if (text.trim()) { close(); change(kind === 'title' ? issues.slice(0, 1) : issues, kind, text); } };
+  const keys = (e: KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') close();
+    else if (e.key === 'Enter' && (kind === 'title' || e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+  };
+  return (
+    <div class="overlay" onClick={close}>
+      <div class="picker wide" onClick={(e) => e.stopPropagation()}>
+        <div class="picker-head">{kind === 'title' ? `Retitle #${issues[0]}` : `Comment on ${issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`}`}</div>
+        {kind === 'title'
+          ? <input autoFocus value={text} onInput={(e) => setText((e.target as HTMLInputElement).value)} onKeyDown={keys} />
+          : <textarea autoFocus rows={8} placeholder="Markdown. ⌘↵ or Ctrl+↵ to post." value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onKeyDown={keys} />}
+        <div class="picker-foot"><button onClick={close}>Cancel</button><button class="primary" onClick={save}>{kind === 'title' ? 'Save' : 'Comment'}</button></div>
+      </div>
+    </div>
+  );
+}
+
+/** Toggle labels on the focused card or the selection; each toggle is one change. */
+function LabelsDialog() {
+  const [text, setText] = useState('');
+  const [at, setAt] = useState(0);
+  const issues = targets();
+  const has = (name: string) => issues.every((n) => (cardValue(cards.value.get(n)!, 'labels') as string[]).includes(name));
+  const words = text.trim().toLowerCase();
+  const found = (board.value?.labels ?? []).filter((l) => l.name.toLowerCase().includes(words));
+  const rows = [...found.map((l) => l.name), ...(words && !found.some((l) => l.name.toLowerCase() === words) ? [`+${text.trim()}`] : [])];
+  const toggle = (row: string | undefined) => {
+    if (!row) return;
+    const name = row.startsWith('+') ? row.slice(1) : row;
+    change(issues, 'labels', has(name) ? { remove: [name] } : { add: [name] });
+  };
+  return (
+    <div class="overlay" onClick={() => { modal.value = null; }}>
+      <div class="picker" onClick={(e) => e.stopPropagation()}>
+        <div class="picker-head">Labels for {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`} — ↵ toggles, esc closes</div>
+        <input autoFocus placeholder="Type a label's name" value={text}
+          onInput={(e) => { setText((e.target as HTMLInputElement).value); setAt(0); }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Escape') modal.value = null;
+            else if (e.key === 'ArrowDown') { e.preventDefault(); setAt(Math.min(rows.length - 1, at + 1)); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setAt(Math.max(0, at - 1)); }
+            else if (e.key === 'Enter') toggle(rows[at]);
+          }} />
+        <ul>
+          {rows.map((row, i) => (
+            <li class={i === at ? 'at' : ''} onMouseEnter={() => setAt(i)} onClick={() => toggle(row)}>
+              <span>{row.startsWith('+') ? `Create “${row.slice(1)}”` : `${has(row) ? '✓' : '　'} ${row}`}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }
 
@@ -195,9 +350,9 @@ function Picker() {
   }));
   if ('no milestone'.includes(text.trim().toLowerCase())) rows.push({ label: 'No milestone', hint: 'take it off its milestone', go: () => move(issues, NONE) });
   if (text.trim() && !exact) rows.push({ label: `Create “${text.trim()}”`, hint: 'a new milestone', go: () => moveToTitle(issues, text.trim()) });
-  const choose = (row: Row | undefined) => { if (row) { picking.value = false; row.go(); } };
+  const choose = (row: Row | undefined) => { if (row) { modal.value = null; row.go(); } };
   return (
-    <div class="overlay" onClick={() => { picking.value = false; }}>
+    <div class="overlay" onClick={() => { modal.value = null; }}>
       <div class="picker" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">Move {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`} to…</div>
         <input
@@ -207,7 +362,7 @@ function Picker() {
           onInput={(e) => { setText((e.target as HTMLInputElement).value); setAt(0); }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            if (e.key === 'Escape') picking.value = false;
+            if (e.key === 'Escape') modal.value = null;
             else if (e.key === 'ArrowDown') { e.preventDefault(); setAt(Math.min(rows.length - 1, at + 1)); }
             else if (e.key === 'ArrowUp') { e.preventDefault(); setAt(Math.max(0, at - 1)); }
             else if (e.key === 'Enter') choose(rows[at]);
@@ -278,6 +433,9 @@ function Toolbar() {
       {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
         {unsaved.filter((a) => a.status === 'failed').length ? `${unsaved.filter((a) => a.status === 'failed').length} not saved` : `saving ${unsaved.length}…`}
       </span>}
+      <button class={openSuggestions.value.length ? 'has-suggestions' : ''} onClick={() => { trayOpen.value = !trayOpen.value; }} title="What the board's rules and your agents propose (s)">
+        Suggestions ({openSuggestions.value.length})
+      </button>
       <ColumnsMenu />
       <button onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
       <details class="menu">
@@ -286,6 +444,9 @@ function Toolbar() {
           <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
           <div><kbd>1</kbd>–<kbd>9</kbd> move to that column</div><div><kbd>0</kbd> take off its milestone</div>
           <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
+          <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
+          <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
+          <div><kbd>s</kbd> suggestions</div>
           <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
           <div>Drag a card, or a selection, onto a column.</div>
         </div>
@@ -294,8 +455,10 @@ function Toolbar() {
   );
 }
 
+const MODAL_KEYS: Record<string, Kind> = { m: 'milestone', p: 'priority', e: 'effort', L: 'labels', t: 'title', c: 'comment', x: 'state' };
+
 function onKey(e: KeyboardEvent) {
-  if (e.metaKey || e.ctrlKey || e.altKey || picking.value) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || modal.value) return;
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const key = e.key;
@@ -305,7 +468,8 @@ function onKey(e: KeyboardEvent) {
   else if (key === 'l' || key === 'ArrowRight') step(1, 0);
   else if (key === ' ') { if (focused.value !== null) toggleSelected(focused.value); }
   else if (key === 'Escape') selected.value = new Set();
-  else if (key === 'm') { if (targets().length) picking.value = true; }
+  else if (key in MODAL_KEYS) { if (targets().length) modal.value = MODAL_KEYS[key]!; }
+  else if (key === 's') trayOpen.value = !trayOpen.value;
   else if (key === 'z') undo();
   else if (key === 'o') { const c = focused.value === null ? undefined : cards.value.get(focused.value); if (c) window.open(c.url, '_blank', 'noreferrer'); }
   else if (key === '/') document.getElementById('search')?.focus();
@@ -335,9 +499,12 @@ function App() {
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}
           {visibleColumns.value.length === 0 && <p class="empty">No columns shown. Pick some under Columns.</p>}
         </div>
-        <Detail />
+        {trayOpen.value ? <Tray /> : <Detail />}
       </main>
-      {picking.value && <Picker />}
+      {modal.value === 'milestone' && <Picker />}
+      {(modal.value === 'priority' || modal.value === 'effort' || modal.value === 'state') && <Choice kind={modal.value} />}
+      {(modal.value === 'title' || modal.value === 'comment') && <TextDialog kind={modal.value} />}
+      {modal.value === 'labels' && <LabelsDialog />}
       {toast.value && <div class="toast" onClick={() => { toast.value = ''; }}>{toast.value}</div>}
     </>
   );

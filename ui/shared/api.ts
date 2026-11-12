@@ -31,6 +31,8 @@ export interface Card {
   // Pull requests only.
   draft?: boolean;
   closes?: { number: number; title: string; state: string }[];
+  /** Set once this session closes the card: the reason. A refresh drops closed cards. */
+  closed?: string | null;
 }
 
 export interface Milestone {
@@ -44,12 +46,17 @@ export interface Milestone {
 
 export type ActionStatus = 'pending' | 'done' | 'failed' | 'would' | 'reverted';
 
+export type Kind = 'milestone' | 'priority' | 'effort' | 'labels' | 'title' | 'state' | 'comment';
+/** What a kind's value is: a milestone number, a field option's name, label names, text,
+ *  a close reason; null clears it (and reopens, for state). */
+export type Value = number | string | string[] | null;
+
 export interface Action {
   id: number;
   issue: number;
-  kind: 'milestone';
-  value: number | null;
-  previous: number | null;
+  kind: Kind;
+  value: Value;
+  previous: Value;
   carriedBy: number | null;
   error: string | null;
   status: ActionStatus;
@@ -64,9 +71,27 @@ export interface BoardData {
   columns: number[];
   cards: Card[];
   actions: Action[];
+  /** Every label the repo has. */
+  labels: Label[];
+  /** The owner's single-select issue fields and their options; empty for a user account. */
+  fields: Record<string, string[]>;
+  suggestions: Suggestion[];
 }
 
-export interface Move { issue: number; kind: 'milestone'; value: number | null }
+/** A change someone proposes — a coding agent, or the board's own rules — for you to
+ *  accept or reject. A labels suggestion's value is a change: {add, remove}. */
+export interface Suggestion {
+  id: number;
+  issue: number;
+  kind: Kind;
+  value: Value | { add?: string[]; remove?: string[] };
+  reason: string;
+  source: string;
+  status: 'open' | 'accepted' | 'rejected' | 'withdrawn';
+  action: number | null;
+}
+
+export interface Move { issue: number; kind: Kind; value: Value | { add?: string[]; remove?: string[] } }
 
 /** The per-run token and the columns asked for with --from, from the URL fragment. */
 export function parseFragment(hash: string): { token: string; from: string[] } {
@@ -107,11 +132,15 @@ export class Api {
   async setDue(number: number, due: string | null): Promise<Milestone> {
     return (await this.call<{ milestone: Milestone }>('PATCH', `/milestones/${number}`, { due })).milestone;
   }
+  resolve(ids: number[], decision: 'accept' | 'reject'): Promise<{ suggestions: Suggestion[]; actions: Action[] }> {
+    return this.call('POST', '/suggestions/resolve', { ids, decision });
+  }
   /** Server-sent events: every action as it changes state, every milestone as it changes. */
-  events(on: { action(a: Action): void; milestone(m: Milestone): void; reload(): void }): EventSource {
+  events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; reload(): void }): EventSource {
     const source = new EventSource(`/api/v1/events?token=${encodeURIComponent(this.token)}`);
     source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
+    source.addEventListener('suggestion', (e) => on.suggestion(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('reload', () => on.reload());
     return source;
   }

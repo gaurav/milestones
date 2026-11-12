@@ -1,6 +1,6 @@
 // Pure board logic: what a view needs to decide, with no DOM and no signals, so it can be
 // tested under `node --test` and reused by a view that looks nothing like the first.
-import type { Action, Card, Milestone } from './api.ts';
+import type { Action, Card, Kind, Label, Milestone, Suggestion, Value } from './api.ts';
 
 /** A column is a milestone's number, or NONE for the issues that have no milestone. */
 export const NONE = 0;
@@ -90,13 +90,68 @@ export function nextFocus(column: Card[], leaving: Set<number>, focused: number)
   return null;
 }
 
-/** The action that decides what a card shows: the latest one on it that wasn't reverted. */
-export function latestAction(actions: Iterable<Action>, issue: number): Action | undefined {
+/** The action that decides what a card shows for a kind: the latest one that wasn't reverted. */
+export function latestAction(actions: Iterable<Action>, issue: number, kind: Kind): Action | undefined {
   let latest: Action | undefined;
   for (const a of actions) {
-    if (a.issue === issue && a.status !== 'reverted' && (!latest || a.id > latest.id)) latest = a;
+    if (a.issue === issue && a.kind === kind && a.status !== 'reverted' && (!latest || a.id > latest.id)) latest = a;
   }
   return latest;
+}
+
+/** The one action a card's status line is about: a failed write before one in flight
+ *  before one a read-only run didn't make, the newest of each. */
+export function cardStatus(actions: Iterable<Action>, issue: number): Action | undefined {
+  const rank = { failed: 3, pending: 2, would: 1, done: 0, reverted: 0 } as const;
+  let worst: Action | undefined;
+  for (const a of actions) {
+    if (a.issue !== issue || rank[a.status] === 0) continue;
+    if (!worst || rank[a.status] > rank[worst.status] || (rank[a.status] === rank[worst.status] && a.id > worst.id)) worst = a;
+  }
+  return worst;
+}
+
+const FIELD: Partial<Record<Kind, string>> = { priority: 'Priority', effort: 'Effort' };
+
+/** What a card holds for an action kind, in the shape an action's value takes. */
+export function cardValue(card: Card, kind: Kind): Value {
+  if (kind === 'milestone') return card.milestone;
+  if (kind === 'title') return card.title;
+  if (kind === 'labels') return card.labels.map((l) => l.name);
+  if (kind === 'state') return card.closed ?? null;
+  const field = FIELD[kind];
+  return field ? (card.fields?.[field] as string | undefined) ?? null : null;
+}
+
+/** A copy of the card with one kind's value changed. `known` gives a label its colour. */
+export function withValue(card: Card, kind: Kind, value: Value, known: Label[]): Card {
+  if (kind === 'milestone') return { ...card, milestone: value as number | null };
+  if (kind === 'title') return { ...card, title: value as string };
+  if (kind === 'state') return { ...card, closed: value as string | null };
+  if (kind === 'labels') {
+    const colour = new Map(known.map((l) => [l.name, l.color]));
+    return { ...card, labels: (value as string[]).map((name) => ({ name, color: colour.get(name) ?? 'ededed' })) };
+  }
+  const field = FIELD[kind];
+  if (!field) return card;
+  const fields = { ...card.fields };
+  if (value === null) delete fields[field]; else fields[field] = value as string;
+  return { ...card, fields };
+}
+
+/** A suggestion or an action in a few words: "Set Priority to High", "Remove label 'x'". */
+export function describe(kind: Kind, value: Suggestion['value'], milestones: Map<number, Milestone>): string {
+  if (kind === 'milestone') return value === null ? 'Take off its milestone' : `Move to ${milestones.get(value as number)?.title ?? `milestone ${value}`}`;
+  if (kind === 'priority' || kind === 'effort') return value === null ? `Clear ${FIELD[kind]}` : `Set ${FIELD[kind]} to ${value}`;
+  if (kind === 'title') return `Retitle: ${value}`;
+  if (kind === 'comment') return `Comment: ${value}`;
+  if (kind === 'state') return value === null ? 'Reopen' : `Close as ${String(value).replace('_', ' ')}`;
+  if (Array.isArray(value)) return `Set labels to ${value.length ? value.join(', ') : 'none'}`;
+  const change = value as { add?: string[]; remove?: string[] };
+  const parts = [];
+  if (change.add?.length) parts.push(`Add label${change.add.length > 1 ? 's' : ''} ${change.add.join(', ')}`);
+  if (change.remove?.length) parts.push(`Remove label${change.remove.length > 1 ? 's' : ''} ${change.remove.join(', ')}`);
+  return parts.join('; ') || 'No change';
 }
 
 export const unsettled = (actions: Iterable<Action>) =>

@@ -3,8 +3,8 @@ import { test } from 'node:test';
 import { parseFragment } from '../ui/shared/api.ts';
 import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import {
-  NONE, age, allColumns, effortOf, group, initialColumns, inkOn, latestAction, matches, nextFocus,
-  noFilters, pickerMatches, priorityOf, unsettled,
+  NONE, age, allColumns, cardStatus, cardValue, describe, effortOf, group, initialColumns, inkOn, latestAction, matches, nextFocus,
+  noFilters, pickerMatches, priorityOf, unsettled, withValue,
 } from '../ui/shared/logic.ts';
 
 const card = (number: number, extra: Partial<Card> = {}): Card => ({
@@ -15,7 +15,7 @@ const card = (number: number, extra: Partial<Card> = {}): Card => ({
 const milestone = (number: number, title: string, state: 'open' | 'closed' = 'open'): Milestone =>
   ({ number, title, state, due: null, description: '', url: '' });
 const action = (id: number, issue: number, status: Action['status'], value: number | null = 1): Action =>
-  ({ id, issue, kind: 'milestone', value, previous: null, carriedBy: null, error: null, status });
+  ({ id, issue, kind: 'milestone' as const, value, previous: null, carriedBy: null, error: null, status });
 
 test('the fragment carries the token and the columns asked for', () => {
   assert.deepEqual(parseFragment('#t=abc&from=Critical&from=Babel%20v1.19'), { token: 'abc', from: ['Critical', 'Babel v1.19'] });
@@ -72,9 +72,41 @@ test('focus moves to the card below the one leaving, else the one above', () => 
 
 test('the latest action that was not reverted decides a card', () => {
   const all = [action(1, 5, 'done', 1), action(2, 5, 'failed', 2), action(3, 5, 'reverted', 3), action(4, 6, 'pending', 9)];
-  assert.equal(latestAction(all, 5)!.id, 2);
-  assert.equal(latestAction(all, 7), undefined);
+  assert.equal(latestAction(all, 5, 'milestone')!.id, 2);
+  assert.equal(latestAction(all, 5, 'title'), undefined);
+  assert.equal(latestAction(all, 7, 'milestone'), undefined);
   assert.deepEqual(unsettled(all).map((a) => a.id), [2, 4]);
+});
+
+test('a card reports its worst unsettled action', () => {
+  const all = [action(1, 5, 'done'), action(2, 5, 'would'), action(3, 5, 'pending'), action(4, 5, 'failed'), action(5, 5, 'pending')];
+  assert.equal(cardStatus(all, 5)!.id, 4);
+  assert.equal(cardStatus([action(1, 5, 'done'), action(2, 5, 'reverted')], 5), undefined);
+});
+
+test('a card value is read and written by kind', () => {
+  const known = [{ name: 'bug', color: 'ff0000' }];
+  let c = card(1, { labels: [{ name: 'bug', color: 'ff0000' }], fields: { Priority: 'High' } });
+  assert.equal(cardValue(c, 'priority'), 'High');
+  assert.equal(cardValue(c, 'effort'), null);
+  assert.deepEqual(cardValue(c, 'labels'), ['bug']);
+  c = withValue(c, 'priority', null, known);
+  assert.deepEqual(c.fields, {});
+  c = withValue(c, 'labels', ['bug', 'new'], known);
+  assert.deepEqual(c.labels, [{ name: 'bug', color: 'ff0000' }, { name: 'new', color: 'ededed' }]);
+  assert.equal(withValue(c, 'state', 'not_planned', known).closed, 'not_planned');
+  assert.equal(withValue(c, 'milestone', 7, known).milestone, 7);
+});
+
+test('changes are described in a few words', () => {
+  const ms = new Map([[7, milestone(7, 'Needed soon')]]);
+  assert.equal(describe('milestone', 7, ms), 'Move to Needed soon');
+  assert.equal(describe('milestone', null, ms), 'Take off its milestone');
+  assert.equal(describe('priority', 'High', ms), 'Set Priority to High');
+  assert.equal(describe('effort', null, ms), 'Clear Effort');
+  assert.equal(describe('state', 'not_planned', ms), 'Close as not planned');
+  assert.equal(describe('labels', { add: ['a'], remove: ['b', 'c'] }, ms), 'Add label a; Remove labels b, c');
+  assert.equal(describe('labels', [], ms), 'Set labels to none');
 });
 
 test('ages are coarse', () => {
