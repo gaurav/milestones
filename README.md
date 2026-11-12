@@ -166,8 +166,29 @@ accepting is an ordinary change, written and undone like any other, and a reject
 Every move is written to GitHub as you make it, in order, while you carry on. A card whose write
 is in flight says *saving…*; one whose write failed keeps the place you gave it and gains **Retry**
 and **Revert**. Closing the tab with writes outstanding asks first, and stopping the server with
-Ctrl-C lists anything that never reached GitHub. With `MILESTONES_PERMISSIONS=read` the board is a
-sandbox: cards move, are marked *not written*, and nothing is sent.
+Ctrl-C lists anything that never reached GitHub.
+
+### Rehearsing read-only
+
+With `MILESTONES_PERMISSIONS=read` nothing is sent to GitHub, and the board says so in a banner
+across the top and again the first time you change something. What you do is not lost: cards are
+marked *planned*, and the net change to each is saved as you go to a **plan file**
+(`~/.local/state/milestones/board-<owner>-<repo>.plan.json`), whose path the banner shows. It is
+plain JSON with a line of English per change, so you — or a coding agent — can read what was
+decided:
+
+```json
+{"issue": 62, "kind": "milestone", "value": 30, "previous": null,
+ "title": "Add X as an identifier source", "summary": "#62: milestone → Needed soon (was none)"}
+```
+
+A change you undo leaves the plan, and a plan with nothing in it is removed. Start the board
+read-only again and it picks the plan up where you left it. Start it writable and it tells you a
+plan is waiting: **Review as suggestions** puts each planned change in the suggestions list, to
+accept or reject like any other, and **Discard** deletes the plan. Nothing is applied without that
+review. A change whose card has moved on since — someone set the priority by hand in the
+meantime — says so beside the suggestion, and one that has already been made, or whose issue has
+closed, is left out and counted.
 
 ### Sorting by priority and effort first
 
@@ -478,8 +499,8 @@ What it deliberately leaves out:
 - **No local state or cache of GitHub.** Every command reads GitHub fresh, so nothing can go
   stale except GitHub's own listings, which lag writes by a few seconds. Every decision lives on
   GitHub; the one thing kept locally is what the board has *not* decided yet — suggestions still
-  waiting, and the ones you turned down, so that they aren't made again — and how you last had
-  the board laid out.
+  waiting, the ones you turned down, so that they aren't made again, the changes of a read-only
+  session until they are reviewed — and how you last had the board laid out.
 - **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
 - **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
   `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would
