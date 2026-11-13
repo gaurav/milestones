@@ -284,20 +284,23 @@ export function group(cards: Card[], f: Filters, layout: Layout, scope: Set<Colu
 }
 
 /** A column's cards cut into its groups, each with a heading like "High · M". One group with
- *  no heading when nothing is grouped. `level` is where the group stands in the first dimension
- *  it is grouped by — 1 for Urgent or XL, counting down the options, and 0 where that is unset —
- *  which is what a heading's colour is taken from. A milestone has no such scale: -1, but for
- *  the cards with none, which are unset like any other. */
-export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; level: number; cards: Card[] }[] {
-  if (groupBy.length === 0) return list.length ? [{ label: '', level: 0, cards: list }] : [];
-  const out: { label: string; level: number; cards: Card[] }[] = [];
-  const first = groupBy[0]!;
+ *  no heading when nothing is grouped. `parts` is the heading a dimension at a time, each with
+ *  its `level`: where it stands in that dimension — 1 for Urgent or XL, counting down the
+ *  options, and 0 where it is unset — which is what its colour is taken from, so that
+ *  "High · S" shows both at a glance. A milestone has no such scale: -1, but for the cards with
+ *  none, which are unset like any other. */
+export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; parts: { text: string; level: number }[]; cards: Card[] }[] {
+  if (groupBy.length === 0) return list.length ? [{ label: '', parts: [], cards: list }] : [];
+  const out: { label: string; parts: { text: string; level: number }[]; cards: Card[] }[] = [];
   for (const card of list) {
-    const label = groupBy.map((kind) => columnLabel(columnFor(card, kind, layout), kind, layout.milestones)).join(' · ');
+    const at = groupBy.map((kind) => columnFor(card, kind, layout));
+    const label = groupBy.map((kind, i) => columnLabel(at[i]!, kind, layout.milestones)).join(' · ');
     if (out.at(-1)?.label === label) { out.at(-1)!.cards.push(card); continue; }
-    const at = columnFor(card, first, layout);
-    const level = first === 'milestone' ? (at === NONE ? 0 : -1) : optionsOf(first, layout.mapping).indexOf(String(at)) + 1;
-    out.push({ label, level, cards: [card] });
+    const parts = groupBy.map((kind, i) => ({
+      text: columnLabel(at[i]!, kind, layout.milestones),
+      level: kind === 'milestone' ? (at[i] === NONE ? 0 : -1) : optionsOf(kind, layout.mapping).indexOf(String(at[i])) + 1,
+    }));
+    out.push({ label, parts, cards: [card] });
   }
   return out;
 }

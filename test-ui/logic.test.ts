@@ -129,9 +129,11 @@ test('cards group within a column, judged ones first, and cut into headed sectio
   assert.deepEqual(sections(list, ['priority', 'effort'], l).map((s) => [s.label, s.cards.length]),
     [['Urgent · L', 1], ['Urgent · S', 2], ['Low · No effort', 1], ['No priority · No effort', 1]]);
   // A heading's level is its place in the first grouping: Urgent 1, Low 4, unset 0.
-  assert.deepEqual(sections(list, ['priority', 'effort'], l).map((s) => s.level), [1, 1, 4, 0]);
-  assert.deepEqual(sections(list, ['effort'], l).map((s) => [s.label, s.level]), [['L', 2], ['S', 4], ['No effort', 0]]);
-  assert.deepEqual(sections([...list, card(9, { milestone: 7 })], ['milestone'], l).map((s) => s.level), [0, -1]);
+  const levels = (by: DimKind[], cs = list) => sections(cs, by, l).map((s) => s.parts.map((p) => p.level));
+  assert.deepEqual(levels(['priority', 'effort']), [[1, 2], [1, 4], [4, 0], [0, 0]]);
+  assert.deepEqual(sections(list, ['priority', 'effort'], l)[0]!.parts.map((p) => p.text), ['Urgent', 'L']);
+  assert.deepEqual(levels(['effort']), [[2], [4], [0]]);
+  assert.deepEqual(levels(['milestone'], [...list, card(9, { milestone: 7 })]), [[0], [-1]]);
   assert.deepEqual(sections(list, [], l).map((s) => [s.label, s.cards.length]), [['', 5]]);
   assert.deepEqual(sections([], ['priority'], l), []);
 });
