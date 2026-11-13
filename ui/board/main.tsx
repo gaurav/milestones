@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
-  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel,
+  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, isValueLabel,
   estimatedEffort, keyedOptions, noFilters, optionForKey, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
@@ -228,24 +228,23 @@ function Places({ card, onCard = false }: { card: CardData; onCard?: boolean }) 
   // only, since the panel has room to say what is actually set.
   const estimate = onCard ? estimatedEffort(card, layout.value.mapping) : null;
   const estimateTip = estimate && `Estimated from ${estimate.lines} lines changed (+${card.additions} −${card.deletions}): `
-    + `size ${estimate.size}${estimate.value ? `, about ${estimate.value} effort` : ''}.`;
+    + `size ${estimate.size}.`;
   const value = (kind: 'priority' | 'effort') => {
     // Shown even when the layout shows effort: its heading then says "no effort", which the
     // estimate adds to rather than repeats.
     const guess = kind === 'effort' ? estimate : null;
-    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) {
-      return guess && <span class="tag estimate" title={`${estimateTip} A pull request can't hold the Effort field.`}>~{guess.size}</span>;
-    }
     const found = effectiveValue(card, kind, layout.value.mapping);
-    const fromLabel = found.from === 'label';
+    // Read from somewhere other than the standard label, which is where it is kept.
+    const source = found.from === 'field' ? 'field' : found.from === 'other' ? 'old label' : '';
+    const fromLabel = source !== '';
     const guessed = !found.value && guess;
     if (!shown(kind) && !fromLabel && !guessed) return null;
-    const text = !shown(kind) && fromLabel ? 'from label'
-      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}`
+    const text = !shown(kind) && fromLabel ? `from ${source}`
+      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ` ·${source}` : ''}`
       : guessed ? `~${guess.size}` : `no ${kind}`;
     return (
       <button class={`place${found.value ? '' : ' unset'}${guessed ? ' estimate' : ''}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
-        title={guessed ? `${estimateTip} Set it (e).` : `${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
+        title={guessed ? `${estimateTip} Set it (e).` : `${FIELD_OF[kind]}${fromLabel ? `, read from ${source === 'field' ? 'the organisation field' : 'another label'}; no ${FIELD_OF[kind]}: label is set` : ''}: change it (${kind[0]})`} onClick={open(kind)}>
         {text}
       </button>
     );
@@ -379,7 +378,7 @@ type ChoiceOption = { label: string; value: string | null; keys: number[] };
 /** Priority and effort take their numbers from `keyedOptions`, so a key is the same level on
  *  both, and Clear is 0, as it is in their column views; closing is numbered down the list. */
 const levels = (kind: 'priority' | 'effort'): ChoiceOption[] => [
-  ...keyedOptions(kind, board.value?.fields ?? {}).map((o) => ({ label: o.value, value: o.value, keys: o.keys })),
+  ...keyedOptions(kind, layout.value.mapping).map((o) => ({ label: o.value, value: o.value, keys: o.keys })),
   { label: 'Clear', value: null, keys: [0] },
 ];
 const CHOICES: Partial<Record<Kind, { title: string; options(): ChoiceOption[] }>> = {
@@ -751,7 +750,7 @@ function Toolbar() {
             <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
             <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
             <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
-            <div>priority, effort: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low on both</div>
+            <div>priority: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low; effort: <kbd>1</kbd>–<kbd>5</kbd> XS to XL</div>
             <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
             <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
             <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
@@ -815,7 +814,7 @@ function onKey(e: KeyboardEvent) {
     // In the priority and effort views a key is a level, the same on both (`keyedOptions`), and
     // does nothing while that level's column is hidden; in the milestone view it is a position.
     const kind = dimension.value;
-    const to = kind === 'milestone' ? visibleColumns.value[Number(key) - 1] : optionForKey(kind, Number(key), layout.value.fields);
+    const to = kind === 'milestone' ? visibleColumns.value[Number(key) - 1] : optionForKey(kind, Number(key), layout.value.mapping);
     if (to !== undefined && visibleColumns.value.includes(to)) place(targets(), to);
   }
   else return;

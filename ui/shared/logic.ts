@@ -14,15 +14,19 @@ export const DIMENSIONS: { kind: DimKind; title: string }[] = [
 export const NONE = 0;
 export type ColumnId = number | string;
 
-/** What a label says about a kind, as the server's reconcile table has it. */
-export interface LabelValues { field: string; prefix: string; values: Record<string, string> }
+/** What a label says about a kind, as the server's reconcile table has it: the options (each
+ *  written as the standard label `<field>: <option>`), the prefixes other labels have used and
+ *  what their spellings mean as an option, and the repo's own labels that stand for one. */
+export interface LabelValues { field: string; prefix: string; values: Record<string, string>; options?: string[]; aliases?: Record<string, string> }
 export type Mapping = Partial<Record<'priority' | 'effort', LabelValues>>;
 /** Enough to read a label's raw text when a server sends no table. */
 export const PLAIN_MAPPING: Mapping = {
-  priority: { field: 'Priority', prefix: 'priority', values: {} },
-  effort: { field: 'Effort', prefix: '(?:size|effort)', values: {} },
+  priority: { field: 'Priority', prefix: 'priority', values: {}, options: ['Urgent', 'High', 'Medium', 'Low'] },
+  effort: { field: 'Effort', prefix: '(?:size|effort)', values: {}, options: ['XS', 'S', 'M', 'L', 'XL'] },
 };
-const DEFAULT_OPTIONS = { priority: ['Urgent', 'High', 'Medium', 'Low'], effort: ['High', 'Medium', 'Low'] };
+/** A priority's or effort's options, in column order. */
+export const optionsOf = (kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): string[] =>
+  mapping[kind]?.options ?? PLAIN_MAPPING[kind]!.options!;
 
 export interface Filters {
   text: string;
@@ -35,18 +39,24 @@ export interface Filters {
 }
 export const noFilters: Filters = { text: '', label: '', priority: '', kind: '', hasPr: false, unlabelled: false, author: '' };
 
-/** A card's priority or effort wherever it was recorded, and where: the organisation's
- *  field first, then a label, read in the field's terms ("Priority: Critical" is Urgent,
- *  "Size: M" is Medium). A label the table doesn't know is given as written. */
-export function effectiveValue(card: Card, kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): { value: string; from: 'field' | 'label' | '' } {
+/** A card's priority or effort wherever it was recorded, and where: its standard label
+ *  ("Priority: High", `from: 'label'`) first, since that is the record; then any other label
+ *  that says one (`'other'`: "Priority: Critical" is Urgent, "Size: M" is M, and a repo's own
+ *  label is what the table's aliases say); then the organisation's field (`'field'`), read in
+ *  the same terms. A label the table doesn't know is given as written. */
+export function effectiveValue(card: Card, kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): { value: string; from: 'label' | 'other' | 'field' | '' } {
   const spec = mapping[kind] ?? PLAIN_MAPPING[kind]!;
-  const field = card.fields?.[spec.field];
-  if (typeof field === 'string' && field) return { value: field, from: 'field' };
   const pattern = new RegExp(`^${spec.prefix}\\s*:\\s*(.+)$`, 'i');
-  for (const label of card.labels) {
-    const raw = pattern.exec(label.name.trim())?.[1]?.trim();
-    if (raw) return { value: spec.values[raw.toLowerCase()] ?? raw, from: 'label' };
-  }
+  const said = card.labels.map((label) => {
+    const name = label.name.trim();
+    const raw = pattern.exec(name)?.[1]?.trim();
+    const value = spec.aliases?.[name.toLowerCase()] ?? (raw ? spec.values[raw.toLowerCase()] ?? raw : '');
+    return { value, standard: optionsOf(kind, mapping).includes(value) && name.toLowerCase() === `${spec.field}: ${value}`.toLowerCase() };
+  }).filter((s) => s.value);
+  const label = said.find((s) => s.standard) ?? said[0];
+  if (label) return { value: label.value, from: label.standard ? 'label' : 'other' };
+  const field = card.fields?.[spec.field];
+  if (typeof field === 'string' && field) return { value: spec.values[field.toLowerCase()] ?? field, from: 'field' };
   return { value: '', from: '' };
 }
 
@@ -65,16 +75,16 @@ export function isValueLabel(name: string, mapping: Mapping = PLAIN_MAPPING): bo
 export const SIZES: [string, number][] = [['XS', 50], ['S', 100], ['M', 200], ['L', 500], ['XL', 1000]];
 export const sizeOf = (lines: number) => SIZES.find(([, under]) => lines < under)?.[0] ?? 'XXL';
 
-/** A pull request's effort, estimated from its size and read through the effort label table
- *  (`Size: M` is Medium, so an M-sized change is about Medium effort); XXL reads as XL does.
- *  Only shown, never written or used to place a card: an estimate is not a decision. `value` is
- *  empty when the table doesn't say. Null for an issue, or a server that sends no sizes. */
+/** A pull request's effort, estimated from its size: the bands are the effort options, and XXL
+ *  reads as XL does. Only shown, never written or used to place a card: an estimate is not a
+ *  decision. `value` is empty when the options don't include it. Null for an issue, or a server
+ *  that sends no sizes. */
 export function estimatedEffort(card: Card, mapping: Mapping = PLAIN_MAPPING): { size: string; lines: number; value: string } | null {
   if (card.kind !== 'pr' || card.additions === undefined || card.deletions === undefined) return null;
   const lines = card.additions + card.deletions;
   const size = sizeOf(lines);
-  const values = mapping.effort?.values ?? {};
-  return { size, lines, value: values[size.toLowerCase()] ?? (size === 'XXL' ? values.xl ?? '' : '') };
+  const value = size === 'XXL' ? 'XL' : size;
+  return { size, lines, value: optionsOf('effort', mapping).includes(value) ? value : '' };
 }
 
 export const priorityOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'priority', mapping).value;
@@ -193,17 +203,11 @@ export interface Layout {
   kind: DimKind;
   /** Open milestones' numbers in order, from the server. */
   order: number[];
-  /** The owner's single-select fields and their options. */
-  fields: Record<string, string[]>;
   mapping: Mapping;
   milestones: Milestone[];
 }
 
 export const FIELD_OF = { priority: 'Priority', effort: 'Effort' } as const;
-
-/** Whether the owner has the issue field a dimension writes to. Without it the value lives
- *  in a label, which a pull request can carry; with it, a pull request has nowhere to. */
-export const hasField = (kind: DimKind, fields: Record<string, string[]>) => kind !== 'milestone' && FIELD_OF[kind] in fields;
 
 /** Whether the board's layout already says a card's value for `kind`: the columns are that
  *  dimension, or the cards are grouped by it under headings. A card leaves such a value off, as
@@ -214,43 +218,25 @@ export const shownByLayout = (kind: DimKind, dimension: DimKind, groupBy: readon
 /** A dimension's columns in order, the unset one first. */
 export function dimColumns(kind: DimKind, layout: Layout, cards: Card[]): ColumnId[] {
   if (kind === 'milestone') return allColumns(layout.order, layout.milestones, cards);
-  return [NONE, ...(layout.fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind])];
+  return [NONE, ...optionsOf(kind, layout.mapping)];
 }
 
-/** A priority's or effort's options, each with the number keys that pick it. The two share one
- *  scale, so that a key means the same level on both: priority's options number it from 1
- *  (Urgent, High, Medium, Low), and each of effort's takes the number of the priority option
- *  with its name (High 2, Medium 3, Low 4). A number with no such option picks the next one down
- *  the list (or the last), so effort's 1 is High as well as its 2. The match is by name rather than by a table
- *  of levels: `reconcile.KINDS` is the server's, and the field's options are what can be written.
- *  Where one of a kind's options has no priority namesake — an owner's own scale, or an effort of
- *  XL, which would want to share 1 with Urgent — that kind is numbered by position instead. */
-export function keyedOptions(kind: 'priority' | 'effort', fields: Record<string, string[]>): { value: string; keys: number[] }[] {
-  const options = fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind];
-  const scale = (fields[FIELD_OF.priority] ?? DEFAULT_OPTIONS.priority).map((o) => o.toLowerCase());
-  const at = options.map((o) => scale.indexOf(o.toLowerCase()));
-  if (at.some((i) => i < 0) || at.some((i, n) => n > 0 && i <= at[n - 1]!)) {
-    return options.map((value, i) => ({ value, keys: [i + 1] }));
-  }
-  const keyed = options.map((value) => ({ value, keys: [] as number[] }));
-  for (let i = 0; i < scale.length; i++) {
-    const n = at.findIndex((a) => a >= i);
-    keyed[n < 0 ? keyed.length - 1 : n]!.keys.push(i + 1);
-  }
-  return keyed;
+/** A priority's or effort's options, each with the number key that picks it: its place in the
+ *  list, so 1 is Urgent for priority and XS for effort. */
+export function keyedOptions(kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): { value: string; keys: number[] }[] {
+  return optionsOf(kind, mapping).map((value, i) => ({ value, keys: [i + 1] }));
 }
 
 /** The priority or effort a number key picks, or undefined for a number that picks none. */
-export const optionForKey = (kind: 'priority' | 'effort', key: number, fields: Record<string, string[]>) =>
-  keyedOptions(kind, fields).find((o) => o.keys.includes(key))?.value;
+export const optionForKey = (kind: 'priority' | 'effort', key: number, mapping?: Mapping) =>
+  keyedOptions(kind, mapping).find((o) => o.keys.includes(key))?.value;
 
 /** The column a card stands in for a dimension. A priority or effort that isn't one of the
  *  options — a label the table doesn't know — is unset as far as the columns go. */
 export function columnFor(card: Card, kind: DimKind, layout: Layout): ColumnId {
   if (kind === 'milestone') return card.milestone ?? NONE;
   const value = effectiveValue(card, kind, layout.mapping).value.toLowerCase();
-  const options = layout.fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind];
-  return options.find((o) => o.toLowerCase() === value) ?? NONE;
+  return optionsOf(kind, layout.mapping).find((o) => o.toLowerCase() === value) ?? NONE;
 }
 
 export function columnLabel(id: ColumnId, kind: DimKind, milestones: Milestone[]): string {
@@ -259,11 +245,9 @@ export function columnLabel(id: ColumnId, kind: DimKind, milestones: Milestone[]
 }
 
 /** Whether a card belongs in a view at all. Sorting by priority or effort is done over the
- *  milestones in `scope` (null for all of them), and leaves out pull requests where the value
- *  would have to go in a field a pull request hasn't got. */
+ *  milestones in `scope` (null for all of them), pull requests included: both are labels. */
 export function inView(card: Card, layout: Layout, scope: Set<ColumnId> | null): boolean {
   if (layout.kind === 'milestone') return true;
-  if (card.kind === 'pr' && hasField(layout.kind, layout.fields)) return false;
   return scope === null || scope.has(card.milestone ?? NONE);
 }
 
@@ -342,7 +326,9 @@ export function cardStatus(actions: Iterable<Action>, issue: number): Action | u
   return worst;
 }
 
-const FIELD: Partial<Record<Kind, string>> = { priority: 'Priority', effort: 'Effort' };
+/** The organisation field a `*-field` kind clears. Priority and effort themselves are labels:
+ *  the server answers a request for one with a `labels` action, so no action is of those kinds. */
+const FIELD: Partial<Record<Kind, string>> = { 'priority-field': 'Priority', 'effort-field': 'Effort' };
 
 /** What a card holds for an action kind, in the shape an action's value takes. */
 export function cardValue(card: Card, kind: Kind): Value {
@@ -373,7 +359,8 @@ export function withValue(card: Card, kind: Kind, value: Value, known: Label[]):
 /** A suggestion or an action in a few words: "Set Priority to High", "Remove label 'x'". */
 export function describe(kind: Kind, value: Suggestion['value'], milestones: Map<number, Milestone>): string {
   if (kind === 'milestone') return value === null ? 'Take off its milestone' : `Move to ${milestones.get(value as number)?.title ?? `milestone ${value}`}`;
-  if (kind === 'priority' || kind === 'effort') return value === null ? `Clear ${FIELD[kind]}` : `Set ${FIELD[kind]} to ${value}`;
+  if (kind === 'priority' || kind === 'effort') return value === null ? `Clear ${FIELD_OF[kind]}` : `Set ${FIELD_OF[kind]} to ${value}`;
+  if (kind === 'priority-field' || kind === 'effort-field') return value === null ? `Clear the ${FIELD[kind]} field` : `Set the ${FIELD[kind]} field back to ${value}`;
   if (kind === 'title') return `Retitle: ${value}`;
   if (kind === 'comment') return `Comment: ${value}`;
   if (kind === 'state') return value === null ? 'Reopen' : `Close as ${String(value).replace('_', ' ')}`;

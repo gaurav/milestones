@@ -49,7 +49,7 @@ export interface Milestone {
 
 export type ActionStatus = 'pending' | 'done' | 'failed' | 'would' | 'reverted';
 
-export type Kind = 'milestone' | 'priority' | 'effort' | 'labels' | 'title' | 'state' | 'comment';
+export type Kind = 'milestone' | 'priority' | 'effort' | 'labels' | 'title' | 'state' | 'comment' | 'priority-field' | 'effort-field';
 /** What a kind's value is: a milestone number, a field option's name, label names, text,
  *  a close reason; null clears it (and reopens, for state). */
 export type Value = number | string | string[] | null;
@@ -81,7 +81,7 @@ export interface BoardData {
   suggestions: Suggestion[];
   /** What a label means in a field's terms, per kind: `prefix` is a regular expression for
    *  the label's name before its colon, `values` maps what follows (lower-cased) to an option. */
-  labelValues?: Record<string, { field: string; prefix: string; values: Record<string, string> }>;
+  labelValues?: Record<string, { field: string; prefix: string; values: Record<string, string>; options?: string[]; aliases?: Record<string, string> }>;
   /** How the board was last looked at, if it has been; see `View`. */
   view?: Partial<View>;
   plan?: PlanInfo;

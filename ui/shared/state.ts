@@ -45,7 +45,6 @@ const undoStack: { issue: number; kind: Kind; previous: Value }[][] = [];
 export const layout = computed<Layout>(() => ({
   kind: dimension.value,
   order: board.value?.columns ?? [],
-  fields: board.value?.fields ?? {},
   mapping: board.value?.labelValues ?? PLAIN_MAPPING,
   milestones: [...milestones.value.values()],
 }));

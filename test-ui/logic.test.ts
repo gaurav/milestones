@@ -27,12 +27,12 @@ test('the URL carries the token in its fragment and the view asked for in its qu
   assert.equal(parseLocation('?t=abc', '').token, '');
 });
 
-test('priority and effort are read from the field first, then a label', () => {
-  assert.equal(priorityOf(card(1, { fields: { Priority: 'High' }, labels: [{ name: 'Priority: Medium', color: 'fff' }] })), 'High');
-  assert.equal(priorityOf(card(1, { labels: [{ name: 'Priority: Medium', color: 'fff' }] })), 'Medium');
+test('priority and effort are read from the standard label first, then another label, then the field', () => {
+  assert.equal(priorityOf(card(1, { fields: { Priority: 'High' }, labels: [{ name: 'Priority: Medium', color: 'fff' }] })), 'Medium');
+  assert.equal(priorityOf(card(1, { fields: { Priority: 'High' } })), 'High');
   assert.equal(priorityOf(card(1)), '');
   assert.equal(effortOf(card(1, { labels: [{ name: 'Size: M', color: 'fff' }] })), 'M');
-  assert.equal(effortOf(card(1, { fields: { Effort: 'Low' } })), 'Low');
+  assert.equal(effortOf(card(1, { fields: { Effort: 'Low' } })), 'Low');   // no table: as written
 });
 
 test('filters combine, and a bare number matches the issue number', () => {
@@ -64,12 +64,13 @@ test('--from picks columns by title, and falls back to all of them', () => {
 });
 
 const MAPPING: Mapping = {
-  priority: { field: 'Priority', prefix: 'priority', values: { critical: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' } },
-  effort: { field: 'Effort', prefix: '(?:size|effort)', values: { s: 'Low', m: 'Medium', l: 'High', low: 'Low' } },
+  priority: { field: 'Priority', prefix: 'priority', options: ['Urgent', 'High', 'Medium', 'Low'],
+    values: { critical: 'Urgent', urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }, aliases: { p0: 'Urgent' } },
+  effort: { field: 'Effort', prefix: '(?:size|effort)', options: ['XS', 'S', 'M', 'L', 'XL'],
+    values: { xs: 'XS', s: 'S', m: 'M', l: 'L', xl: 'XL', low: 'S', medium: 'M', high: 'L' } },
 };
-const ORG = { Priority: ['Urgent', 'High', 'Medium', 'Low'], Effort: ['High', 'Medium', 'Low'] };
-const layout = (kind: DimKind, fields: Record<string, string[]> = ORG): Layout =>
-  ({ kind, order: [7, 8], fields, mapping: MAPPING, milestones: [milestone(7, 'Critical'), milestone(8, 'v1')] });
+const layout = (kind: DimKind): Layout =>
+  ({ kind, order: [7, 8], mapping: MAPPING, milestones: [milestone(7, 'Critical'), milestone(8, 'v1')] });
 const label = (name: string) => ({ name, color: 'ffffff' });
 
 test('cards group by milestone column, freshest first', () => {
@@ -78,19 +79,25 @@ test('cards group by milestone column, freshest first', () => {
   assert.deepEqual(groups.get(7)!.map((c) => c.number), [2]);
 });
 
-test('a value is read from the field, else from a label in the field\'s terms', () => {
-  assert.deepEqual(effectiveValue(card(1, { fields: { Priority: 'High' }, labels: [label('Priority: Low')] }), 'priority', MAPPING), { value: 'High', from: 'field' });
-  assert.deepEqual(effectiveValue(card(1, { labels: [label('priority:critical')] }), 'priority', MAPPING), { value: 'Urgent', from: 'label' });
-  assert.deepEqual(effectiveValue(card(1, { labels: [label('Size: M')] }), 'effort', MAPPING), { value: 'Medium', from: 'label' });
-  assert.deepEqual(effectiveValue(card(1, { labels: [label('Effort: Low')] }), 'effort', MAPPING), { value: 'Low', from: 'label' });
-  assert.deepEqual(effectiveValue(card(1, { labels: [label('Priority: Someday')] }), 'priority', MAPPING), { value: 'Someday', from: 'label' });
-  assert.deepEqual(effectiveValue(card(1, { labels: [label('bug')] }), 'priority', MAPPING), { value: '', from: '' });
+test('a value is read from its standard label, else another label, else the field, as an option', () => {
+  const read = (extra: Partial<Card>, kind: 'priority' | 'effort' = 'priority') => effectiveValue(card(1, extra), kind, MAPPING);
+  assert.deepEqual(read({ fields: { Priority: 'High' }, labels: [label('Priority: Low')] }), { value: 'Low', from: 'label' });
+  // The standard label wins over an older one, wherever it comes in the list.
+  assert.deepEqual(read({ labels: [label('Priority: Critical'), label('priority: low')] }), { value: 'Low', from: 'label' });
+  assert.deepEqual(read({ labels: [label('priority:critical')] }), { value: 'Urgent', from: 'other' });
+  assert.deepEqual(read({ labels: [label('P0')] }), { value: 'Urgent', from: 'other' });   // the repo's own label
+  assert.deepEqual(read({ labels: [label('Size: M')] }, 'effort'), { value: 'M', from: 'other' });
+  assert.deepEqual(read({ labels: [label('Effort: M')] }, 'effort'), { value: 'M', from: 'label' });
+  assert.deepEqual(read({ labels: [label('Effort: Low')] }, 'effort'), { value: 'S', from: 'other' });
+  assert.deepEqual(read({ fields: { Effort: 'High' } }, 'effort'), { value: 'L', from: 'field' });
+  assert.deepEqual(read({ labels: [label('Priority: Someday')] }), { value: 'Someday', from: 'other' });
+  assert.deepEqual(read({ labels: [label('bug')] }), { value: '', from: '' });
 });
 
 test('each dimension has its columns, the unset one first', () => {
   assert.deepEqual(dimColumns('milestone', layout('milestone'), []), [NONE, 7, 8]);
   assert.deepEqual(dimColumns('priority', layout('priority'), []), [NONE, 'Urgent', 'High', 'Medium', 'Low']);
-  assert.deepEqual(dimColumns('effort', layout('effort', {}), []), [NONE, 'High', 'Medium', 'Low']);   // no field: the defaults
+  assert.deepEqual(dimColumns('effort', { ...layout('effort'), mapping: {} }, []), [NONE, 'XS', 'S', 'M', 'L', 'XL']);   // no table: the defaults
   assert.equal(columnLabel(NONE, 'priority', []), 'No priority');
   assert.equal(columnLabel('High', 'effort', []), 'High');
   assert.equal(columnLabel(7, 'milestone', [milestone(7, 'Critical')]), 'Critical');
@@ -105,25 +112,22 @@ test('a card stands in the column of its effective value, or unset', () => {
   assert.equal(columnFor(card(1, { milestone: 7 }), 'milestone', l), 7);
 });
 
-test('the priority view is scoped by milestone and leaves pull requests out where fields exist', () => {
+test('the priority view is scoped by milestone, pull requests included', () => {
   const cs = [card(1, { milestone: 7, fields: { Priority: 'High' } }), card(2, { milestone: 8 }), card(3),
     card(4, { milestone: 7, kind: 'pr', labels: [label('Priority: High')] })];
   const scoped = group(cs, noFilters, layout('priority'), new Set([7, NONE]));
-  assert.deepEqual([...scoped].map(([id, list]) => [id, list.map((c) => c.number)]), [['High', [1]], [NONE, [3]]]);
-  // No Priority field for this owner: the value lives in a label, which a pull request can carry.
-  const noField = group(cs, noFilters, layout('priority', {}), null);
-  assert.deepEqual(noField.get('High')!.map((c) => c.number), [4, 1]);
+  assert.deepEqual([...scoped].map(([id, list]) => [id, list.map((c) => c.number)]), [['High', [4, 1]], [NONE, [3]]]);
   assert.ok(inView(cs[3]!, layout('milestone'), new Set([8])));   // the milestone view shows everything
 });
 
 test('cards group within a column, judged ones first, and cut into headed sections', () => {
-  const cs = [card(1), card(2, { fields: { Priority: 'Low' } }), card(3, { fields: { Priority: 'Urgent', Effort: 'Low' } }),
-    card(4, { fields: { Priority: 'Urgent', Effort: 'High' } }), card(5, { fields: { Priority: 'Urgent', Effort: 'High' } })];
+  const cs = [card(1), card(2, { fields: { Priority: 'Low' } }), card(3, { labels: [label('Priority: Urgent'), label('Effort: L')] }),
+    card(4, { labels: [label('Priority: Urgent'), label('Effort: S')] }), card(5, { labels: [label('Priority: Urgent'), label('Effort: S')] })];
   const l = layout('milestone');
   const list = group(cs, noFilters, l, null, ['priority', 'effort']).get(NONE)!;
   assert.deepEqual(list.map((c) => c.number), [5, 4, 3, 2, 1]);
   assert.deepEqual(sections(list, ['priority', 'effort'], l).map((s) => [s.label, s.cards.length]),
-    [['Urgent · High', 2], ['Urgent · Low', 1], ['Low · No effort', 1], ['No priority · No effort', 1]]);
+    [['Urgent · S', 2], ['Urgent · L', 1], ['Low · No effort', 1], ['No priority · No effort', 1]]);
   assert.deepEqual(sections(list, [], l).map((s) => [s.label, s.cards.length]), [['', 5]]);
   assert.deepEqual(sections([], ['priority'], l), []);
 });
@@ -153,10 +157,10 @@ test('a card reports its worst unsettled action', () => {
 test('a card value is read and written by kind', () => {
   const known = [{ name: 'bug', color: 'ff0000' }];
   let c = card(1, { labels: [{ name: 'bug', color: 'ff0000' }], fields: { Priority: 'High' } });
-  assert.equal(cardValue(c, 'priority'), 'High');
-  assert.equal(cardValue(c, 'effort'), null);
+  assert.equal(cardValue(c, 'priority-field'), 'High');
+  assert.equal(cardValue(c, 'effort-field'), null);
   assert.deepEqual(cardValue(c, 'labels'), ['bug']);
-  c = withValue(c, 'priority', null, known);
+  c = withValue(c, 'priority-field', null, known);
   assert.deepEqual(c.fields, {});
   c = withValue(c, 'labels', ['bug', 'new'], known);
   assert.deepEqual(c.labels, [{ name: 'bug', color: 'ff0000' }, { name: 'new', color: 'ededed' }]);
@@ -170,6 +174,7 @@ test('changes are described in a few words', () => {
   assert.equal(describe('milestone', null, ms), 'Take off its milestone');
   assert.equal(describe('priority', 'High', ms), 'Set Priority to High');
   assert.equal(describe('effort', null, ms), 'Clear Effort');
+  assert.equal(describe('priority-field', null, ms), 'Clear the Priority field');
   assert.equal(describe('state', 'not_planned', ms), 'Close as not planned');
   assert.equal(describe('labels', { add: ['a'], remove: ['b', 'c'] }, ms), 'Add label a; Remove labels b, c');
   assert.equal(describe('labels', [], ms), 'Set labels to none');
@@ -261,34 +266,20 @@ test('a value the columns or the grouping already show is shown by the layout', 
   assert.equal(shownByLayout('milestone', 'priority', []), false);
 });
 
-test("a pull request's size is prcoder's band of its lines changed, and reads as effort through the label table", () => {
+test("a pull request's size is prcoder's band of its lines changed, which is an effort option", () => {
   assert.deepEqual([0, 49, 50, 99, 100, 199, 200, 499, 500, 999, 1000].map(sizeOf),
     ['XS', 'XS', 'S', 'S', 'M', 'M', 'L', 'L', 'XL', 'XL', 'XXL']);
-  const mapping: Mapping = { effort: { field: 'Effort', prefix: '(?:size|effort)', values: { xs: 'Low', s: 'Low', m: 'Medium', l: 'High', xl: 'High' } } };
   const pr = (additions: number, deletions: number) => card(1, { kind: 'pr', additions, deletions });
-  assert.deepEqual(estimatedEffort(pr(120, 30), mapping), { size: 'M', lines: 150, value: 'Medium' });
-  assert.equal(estimatedEffort(pr(2000, 0), mapping)?.value, 'High');
-  assert.equal(estimatedEffort(pr(10, 0))?.value, '');
-  assert.equal(estimatedEffort(card(2), mapping), null);
+  assert.deepEqual(estimatedEffort(pr(120, 30), MAPPING), { size: 'M', lines: 150, value: 'M' });
+  assert.equal(estimatedEffort(pr(2000, 0))?.value, 'XL');   // XXL reads as XL does
+  const coarse: Mapping = { effort: { field: 'Effort', prefix: 'effort', values: {}, options: ['High', 'Low'] } };
+  assert.equal(estimatedEffort(pr(10, 0), coarse)?.value, '');
+  assert.equal(estimatedEffort(card(2), MAPPING), null);
 });
 
-test('a number key is the same level for priority and effort, matched by name', () => {
-  const babel = { Priority: ['Urgent', 'High', 'Medium', 'Low'], Effort: ['High', 'Medium', 'Low'] };
-  const keys = (kind: 'priority' | 'effort', fields: Record<string, string[]>) =>
-    [0, 1, 2, 3, 4, 5].map((k) => optionForKey(kind, k, fields));
-  assert.deepEqual(keys('priority', babel), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined]);
-  // Effort has no Urgent, so 1 picks the next level down.
-  assert.deepEqual(keys('effort', babel), [undefined, 'High', 'High', 'Medium', 'Low', undefined]);
-  assert.deepEqual(keyedOptions('effort', babel).map((o) => o.keys), [[1, 2], [3], [4]]);
-  // With no fields, the defaults line up the same way.
-  assert.deepEqual(keys('effort', {}), keys('effort', babel));
-  // The match ignores case, and gives back the field's own spelling.
-  assert.equal(optionForKey('effort', 3, { Priority: ['urgent', 'high', 'medium', 'low'], Effort: ['High', 'Medium', 'Low'] }), 'Medium');
-  // Past the last match, a key picks the last option.
-  assert.equal(optionForKey('effort', 4, { ...babel, Effort: ['High', 'Medium'] }), 'Medium');
-  // An option with no priority namesake numbers that kind by position, as before.
-  assert.deepEqual(keys('effort', { ...babel, Effort: ['XL', 'L', 'M', 'S'] }), [undefined, 'XL', 'L', 'M', 'S', undefined]);
-  assert.deepEqual(keys('priority', { Priority: ['P0', 'P1', 'P2'] }), [undefined, 'P0', 'P1', 'P2', undefined, undefined]);
-  // So does one whose namesakes are out of order.
-  assert.deepEqual(keys('effort', { ...babel, Effort: ['Low', 'High'] }), [undefined, 'Low', 'High', undefined, undefined, undefined]);
+test('a number key picks the option at that place in the list', () => {
+  const keys = (kind: 'priority' | 'effort') => [0, 1, 2, 3, 4, 5, 6].map((k) => optionForKey(kind, k, MAPPING));
+  assert.deepEqual(keys('priority'), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined, undefined]);
+  assert.deepEqual(keys('effort'), [undefined, 'XS', 'S', 'M', 'L', 'XL', undefined]);
+  assert.deepEqual(keyedOptions('effort').map((o) => o.keys), [[1], [2], [3], [4], [5]]);
 });
