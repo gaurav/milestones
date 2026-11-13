@@ -188,12 +188,18 @@ far more than `_norm_issue` keeps.
   a project's title and fields are not.
 - Taking an issue off its milestone is `PATCH` with `{"milestone": null}`, which needs
   `gh.api(body=...)` (`--input -`); `-F milestone=null` sends the string.
-- There is no browser tool in an agent session unless the Chrome extension is connected. A
-  headless check works with the Playwright in `~/code/prcoder/node_modules`:
-  `createRequire('/Users/gaurav/code/prcoder/')('playwright')`, against a board started with
-  `--no-open --port N`. Playwright's `dragTo` scrolls the target into view mid-drag, so a card in
-  a column that is off-screen picks up whatever card ends under the pointer — drag between columns
-  that are both visible.
+- There is no browser tool in an agent session unless the Chrome extension is connected.
+  `tools/board-check.mjs` (`npm run drive`) is the headless check: it starts its own read-only
+  board on a scratch `XDG_STATE_HOME`, drives the URL, the menus and the card panel, and prints
+  what held. Playwright is not a dependency here; `PLAYWRIGHT_FROM=~/code/prcoder` borrows that
+  checkout's. Add a check there when you change something only a browser can show, and build
+  first (`npm run build`): it drives `milestones/board/static/`, not `ui/`. It covers no write.
+  Three things scripts get wrong that a person never notices: a key sent straight after a click
+  arrives before a plain `useEffect` has run (hence the layout effects in `Menu` and `Choice`);
+  Escape straight after opening a dialog can beat the field's focus, so wait a moment first; and
+  Playwright's `dragTo` scrolls the target into view mid-drag, so a card in a column that is
+  off-screen picks up whatever card ends under the pointer — drag between columns that are both
+  visible.
 - An action's kind decides how its value is read off a card and put on one: `card_value` and
   `set_card_value` in `server.py`, mirrored by `cardValue` and `withValue` in `ui/shared/logic.ts`.
   A new kind needs all four, a branch in `Board.normalise` and `Board._write`, a row in
