@@ -286,6 +286,12 @@ class Board:
                 # each start from the labels the card had before either.
                 issue, (kind, value) = request["issue"], self.normalise(request)
                 card = self.cards[issue]
+                field = f"{request['kind']}-field"
+                if (field in FIELD_KINDS and request["value"] is None
+                        and FIELD_KINDS[field] in self.fields and card_value(card, field)):
+                    # Clearing a priority clears the organisation field with the label:
+                    # the field is still read, so the card would go on showing its value.
+                    made.append(self._new_action(issue, field, None))
                 if kind != "comment" and card_value(card, kind) == value:
                     continue  # already so: nothing to write, as in the triage walk
                 made.append(self._new_action(issue, kind, value))

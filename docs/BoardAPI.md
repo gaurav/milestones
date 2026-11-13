@@ -65,7 +65,7 @@ you retry it or revert it.
 | `kind` | `value` | Written as |
 | --- | --- | --- |
 | `milestone` | a milestone's number, or `null` for none | the issue's milestone |
-| `priority`, `effort` | an option's name (any case: `High`, `m`), or `null` to clear | the standard label, `Priority: X` or `Effort: X`, in place of every other label about that kind (`Priority: Critical`, `Size: M`). The action that comes back is of kind `labels`; an issue and a pull request take it alike. A value that is not one of `labelValues`' options: `400`. |
+| `priority`, `effort` | an option's name (any case: `High`, `m`), or `null` to clear | the standard label, `Priority: X` or `Effort: X`, in place of every other label about that kind (`Priority: Critical`, `Size: M`). The action that comes back is of kind `labels`; an issue and a pull request take it alike. Clearing one (`null`) on an issue whose organisation field is set makes a second action, of kind `priority-field` or `effort-field`, that clears the field too, since the field is still read. A value that is not one of `labelValues`' options: `400`. |
 | `priority-field`, `effort-field` | `null`, to clear it (or an option's name, which is how an undo puts it back) | the organisation's Priority or Effort issue field, which is read but no longer where either is kept. A pull request, or an owner with no such field: `400`. |
 | `labels` | the whole list of names, or a change `{add: [...], remove: [...]}` | the issue's label set. The action's `value` is always the resulting list. A name the repo hasn't got is created, a standard priority or effort label in its colour and with its description. |
 | `title` | text | the title |

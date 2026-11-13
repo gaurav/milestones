@@ -541,7 +541,12 @@ def test_label_plan_renames_an_old_label_creates_a_missing_one_and_lists_a_wrong
     # The first old label that means it takes the name; a second is left for the board to retire.
     assert [(old, body["new_name"]) for old, body in renames] == [
         ("Priority: Critical", "Priority: Urgent"), ("Size: M", "Effort: M")]
-    assert renames[0][1]["color"] == "d2042d"
+    # A rename keeps the old label's colour and its description, where it has one.
+    assert renames[0][1] == {"new_name": "Priority: Urgent", "description": "Drop other work for this."}
+    described = [{"name": "Size: M", "color": "000000", "description": "Mine"}]
+    renames_m, _, recolours_m = label_plan(described)
+    assert renames_m == [("Size: M", {"new_name": "Effort: M"})]
+    assert recolours_m == [("Effort: M", "000000", "fbca04")]
     assert [body["name"] for body in creates] == [
         "Priority: Medium", "Priority: Low", "Effort: XL", "Effort: L", "Effort: S", "Effort: XS"]
     assert recolours == [("priority: high", "000000", "b60205")]

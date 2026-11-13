@@ -117,7 +117,9 @@ def label_plan(existing: list[dict]) -> tuple[list[tuple[str, dict]], list[dict]
     labels it has: `(renames, creates, recolours)`. A standard label that is missing takes
     over an old one that means the same (`Size: M` becomes `Effort: M`, which keeps it on
     every issue) and is created otherwise; one that is there in another colour is listed
-    with (name, its colour, the standard one)."""
+    with (name, its colour, the standard one). A rename keeps the old label's colour and its
+    description, if it has one — somebody chose them — so a renamed label in another colour
+    is listed for recolouring too, under its new name."""
     by_name = {l["name"].lower(): l for l in existing}
     renames, creates, recolours = [], [], []
     for kind, spec in reconcile.KINDS.items():
@@ -130,9 +132,12 @@ def label_plan(existing: list[dict]) -> tuple[list[tuple[str, dict]], list[dict]
                 if have["color"].lower() != spec["colors"][option]:
                     recolours.append((have["name"], have["color"], spec["colors"][option]))
                 continue
-            old = [l["name"] for l in existing if reconcile.label_value(kind, l["name"]) == option]
+            old = [l for l in existing if reconcile.label_value(kind, l["name"]) == option]
             if old:
-                renames.append((old[0], body))
+                keeps = {} if old[0].get("description") else {"description": body["description"]}
+                renames.append((old[0]["name"], {"new_name": name, **keeps}))
+                if old[0]["color"].lower() != body["color"]:
+                    recolours.append((name, old[0]["color"], body["color"]))
             else:
                 creates.append({"name": name, **{k: body[k] for k in ("color", "description")}})
     return renames, creates, recolours
@@ -819,12 +824,17 @@ def cmd_setup(config, args):
         print(f"created label:  {body['name']}")
     # A rename changes what every issue carrying the label shows, and a colour is somebody's
     # choice: both are asked about, where a new label is nobody's business yet.
+    declined = set()
     for old, body in renames:
         if ask(f"Rename the label '{old}' to '{body['new_name']}' in {args.repo}, on every "
                "issue that has it? [y/N] ").strip().lower() == "y":
             gh.api(f"{labels}/{quote(old)}", method="PATCH", body=body)
             print(f"renamed label:  {old} → {body['new_name']}")
+        else:
+            declined.add(body["new_name"])
     for name, colour, standard in recolours:
+        if name in declined:
+            continue  # there is no label of that name to recolour
         if ask(f"Recolour '{name}' from #{colour} to the standard #{standard}? "
                "[y/N] ").strip().lower() == "y":
             gh.api(f"{labels}/{quote(name)}", method="PATCH", body={"color": standard})

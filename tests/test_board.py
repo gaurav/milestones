@@ -276,6 +276,14 @@ def test_a_field_can_only_be_cleared_or_put_back(monkeypatch):
     assert (action["previous"], board.cards[5]["fields"]) == ("High", {})
     board.submit([{"issue": 5, "kind": "priority-field", "value": "High"}])   # an undo
     assert board.cards[5]["fields"] == {"Priority": "High"}
+    # Clearing the priority clears the field with the label, or the card would still show it.
+    board.cards[5]["labels"] = labels("Priority: High", "bug")
+    cleared = board.submit([{"issue": 5, "kind": "priority", "value": None}])
+    assert [(a["kind"], a["value"]) for a in cleared] == [("priority-field", None), ("labels", ["bug"])]
+    board.cards[5]["fields"] = {"Priority": "High"}
+    (only,) = board.submit([{"issue": 5, "kind": "priority", "value": None}])   # no label to remove
+    assert only["kind"] == "priority-field"
+    board.cards[5]["fields"] = {"Priority": "High"}
     for bad in ({"issue": 5, "kind": "priority-field", "value": "Asap"},
                 {"issue": 20, "kind": "effort-field", "value": None}):   # a PR has no fields
         with pytest.raises(server.Refused):
