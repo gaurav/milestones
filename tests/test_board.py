@@ -367,6 +367,23 @@ def test_a_rejected_suggestion_stays_rejected_across_runs(monkeypatch, tmp_path)
     assert (kept["source"], kept["reason"], kept["status"]) == ("opus", "blocks the release", "open")
 
 
+def test_a_refresh_never_gives_a_new_suggestion_the_id_of_a_standing_one(monkeypatch):
+    # The rules' suggestions are dropped and remade on every load. Numbering the new ones from
+    # how many are held gave one the id of an agent's suggestion still open, and replaced it.
+    cards = [card(5, labels=labels("Priority: High")), card(6, labels=labels("Priority: Low"))]
+    board = make_board(monkeypatch, cards, fields=ORG_FIELDS)
+    (agent,) = board.suggest([{"issue": 6, "kind": "milestone", "value": 1, "source": "opus"}])
+    board.load()
+    held = board.snapshot()["suggestions"]
+    assert sorted(s["source"] for s in held) == ["opus", "rule:priority-from-label",
+                                                 "rule:priority-from-label"]
+    assert len({s["id"] for s in held}) == 3 and board.suggestions[agent["id"]] is agent
+    # Nor after an accept, which remakes the rules' suggestions for the cards it touched.
+    rule = next(s for s in held if s["issue"] == 5 and s["source"].startswith("rule:"))
+    board.resolve([rule["id"]], "accept")
+    assert board.suggestions[agent["id"]] is agent and rule["status"] == "accepted"
+
+
 def test_a_suggestion_that_could_never_be_accepted_is_refused(monkeypatch):
     board = make_board(monkeypatch, [card(5)])
     for bad in ({"issue": 5, "kind": "milestone", "value": 3, "source": "a"},     # closed
