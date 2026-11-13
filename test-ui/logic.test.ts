@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, keyedOptions, optionForKey, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
   noFilters, pickerMatches, priorityOf, sections, shownByLayout, sizeOf, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -270,4 +270,25 @@ test("a pull request's size is prcoder's band of its lines changed, and reads as
   assert.equal(estimatedEffort(pr(2000, 0), mapping)?.value, 'High');
   assert.equal(estimatedEffort(pr(10, 0))?.value, '');
   assert.equal(estimatedEffort(card(2), mapping), null);
+});
+
+test('a number key is the same level for priority and effort, matched by name', () => {
+  const babel = { Priority: ['Urgent', 'High', 'Medium', 'Low'], Effort: ['High', 'Medium', 'Low'] };
+  const keys = (kind: 'priority' | 'effort', fields: Record<string, string[]>) =>
+    [0, 1, 2, 3, 4, 5].map((k) => optionForKey(kind, k, fields));
+  assert.deepEqual(keys('priority', babel), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined]);
+  // Effort has no Urgent, so 1 picks the next level down.
+  assert.deepEqual(keys('effort', babel), [undefined, 'High', 'High', 'Medium', 'Low', undefined]);
+  assert.deepEqual(keyedOptions('effort', babel).map((o) => o.keys), [[1, 2], [3], [4]]);
+  // With no fields, the defaults line up the same way.
+  assert.deepEqual(keys('effort', {}), keys('effort', babel));
+  // The match ignores case, and gives back the field's own spelling.
+  assert.equal(optionForKey('effort', 3, { Priority: ['urgent', 'high', 'medium', 'low'], Effort: ['High', 'Medium', 'Low'] }), 'Medium');
+  // Past the last match, a key picks the last option.
+  assert.equal(optionForKey('effort', 4, { ...babel, Effort: ['High', 'Medium'] }), 'Medium');
+  // An option with no priority namesake numbers that kind by position, as before.
+  assert.deepEqual(keys('effort', { ...babel, Effort: ['XL', 'L', 'M', 'S'] }), [undefined, 'XL', 'L', 'M', 'S', undefined]);
+  assert.deepEqual(keys('priority', { Priority: ['P0', 'P1', 'P2'] }), [undefined, 'P0', 'P1', 'P2', undefined, undefined]);
+  // So does one whose namesakes are out of order.
+  assert.deepEqual(keys('effort', { ...babel, Effort: ['Low', 'High'] }), [undefined, 'Low', 'High', undefined, undefined, undefined]);
 });
