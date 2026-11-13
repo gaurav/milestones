@@ -285,8 +285,9 @@ export function group(cards: Card[], f: Filters, layout: Layout, scope: Set<Colu
 
 /** A column's cards cut into its groups, each with a heading like "High · M". One group with
  *  no heading when nothing is grouped. `level` is where the group stands in the first dimension
- *  it is grouped by — 1 for Urgent or XL, counting down the options — and 0 where that is unset
- *  or is a milestone, which has no such scale: what a heading's colour is taken from. */
+ *  it is grouped by — 1 for Urgent or XL, counting down the options, and 0 where that is unset —
+ *  which is what a heading's colour is taken from. A milestone has no such scale: -1, but for
+ *  the cards with none, which are unset like any other. */
 export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; level: number; cards: Card[] }[] {
   if (groupBy.length === 0) return list.length ? [{ label: '', level: 0, cards: list }] : [];
   const out: { label: string; level: number; cards: Card[] }[] = [];
@@ -294,7 +295,8 @@ export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { la
   for (const card of list) {
     const label = groupBy.map((kind) => columnLabel(columnFor(card, kind, layout), kind, layout.milestones)).join(' · ');
     if (out.at(-1)?.label === label) { out.at(-1)!.cards.push(card); continue; }
-    const level = first === 'milestone' ? 0 : optionsOf(first, layout.mapping).indexOf(String(columnFor(card, first, layout))) + 1;
+    const at = columnFor(card, first, layout);
+    const level = first === 'milestone' ? (at === NONE ? 0 : -1) : optionsOf(first, layout.mapping).indexOf(String(at)) + 1;
     out.push({ label, level, cards: [card] });
   }
   return out;
