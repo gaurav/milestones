@@ -217,6 +217,33 @@ export function dimColumns(kind: DimKind, layout: Layout, cards: Card[]): Column
   return [NONE, ...(layout.fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind])];
 }
 
+/** A priority's or effort's options, each with the number keys that pick it. The two share one
+ *  scale, so that a key means the same level on both: priority's options number it from 1
+ *  (Urgent, High, Medium, Low), and each of effort's takes the number of the priority option
+ *  with its name (High 2, Medium 3, Low 4). A number with no such option picks the next one down
+ *  the list (or the last), so effort's 1 is High as well as its 2. The match is by name rather than by a table
+ *  of levels: `reconcile.KINDS` is the server's, and the field's options are what can be written.
+ *  Where one of a kind's options has no priority namesake — an owner's own scale, or an effort of
+ *  XL, which would want to share 1 with Urgent — that kind is numbered by position instead. */
+export function keyedOptions(kind: 'priority' | 'effort', fields: Record<string, string[]>): { value: string; keys: number[] }[] {
+  const options = fields[FIELD_OF[kind]] ?? DEFAULT_OPTIONS[kind];
+  const scale = (fields[FIELD_OF.priority] ?? DEFAULT_OPTIONS.priority).map((o) => o.toLowerCase());
+  const at = options.map((o) => scale.indexOf(o.toLowerCase()));
+  if (at.some((i) => i < 0) || at.some((i, n) => n > 0 && i <= at[n - 1]!)) {
+    return options.map((value, i) => ({ value, keys: [i + 1] }));
+  }
+  const keyed = options.map((value) => ({ value, keys: [] as number[] }));
+  for (let i = 0; i < scale.length; i++) {
+    const n = at.findIndex((a) => a >= i);
+    keyed[n < 0 ? keyed.length - 1 : n]!.keys.push(i + 1);
+  }
+  return keyed;
+}
+
+/** The priority or effort a number key picks, or undefined for a number that picks none. */
+export const optionForKey = (kind: 'priority' | 'effort', key: number, fields: Record<string, string[]>) =>
+  keyedOptions(kind, fields).find((o) => o.keys.includes(key))?.value;
+
 /** The column a card stands in for a dimension. A priority or effort that isn't one of the
  *  options — a label the table doesn't know — is unset as far as the columns go. */
 export function columnFor(card: Card, kind: DimKind, layout: Layout): ColumnId {

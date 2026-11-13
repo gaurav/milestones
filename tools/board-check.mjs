@@ -213,6 +213,16 @@ try {
     await page.keyboard.press('z'); await settle();
     await page.click('.detail-strip .open'); await settle();
     check('z undoes the change', JSON.stringify(await places()) === JSON.stringify(was), await places());
+
+    // Priority and effort share one scale of number keys: effort has no Urgent, so its 1 is
+    // High as well as its 2, and 3 is Medium on both.
+    await page.keyboard.press('e'); await settle();
+    const rows = await page.$$eval('.picker li', (e) => e.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
+    check('the effort dialog numbers its levels as priority does', rows[0] === '1 2 High' && rows[1] === '3 Medium' && rows.at(-1) === '0 Clear', rows);
+    await page.keyboard.press('3'); await settle();
+    check('3 sets Medium effort', (await places()).some((p) => /Medium/.test(p)), await places());
+    await page.keyboard.press('z'); await settle();
+    check('and z takes it off again', JSON.stringify(await places()) === JSON.stringify(was), await places());
   } else {
     note('card panel buttons', 'not in this build; skipped');
   }
