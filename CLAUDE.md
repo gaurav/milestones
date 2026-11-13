@@ -203,11 +203,12 @@ far more than `_norm_issue` keeps.
   off-screen picks up whatever card ends under the pointer — drag between columns that are both
   visible.
 - While the user has a board open from this checkout under `npm run dev`, the watcher rebuilds
-  `static/` from whatever is checked out, and `npm run build` empties it first. So don't build
-  (the watcher's output is what `npm run drive` should use) and don't check out another branch.
-  To restack or test a lower branch of the stack, use a scratch `git worktree` with
-  `node_modules` symlinked in. Build and drive there, then `git reset --keep` this checkout to
-  the restacked tip once its tree matches the old one.
+  `static/` from whatever is checked out, so there is no need to build: `npm run drive` uses the
+  watcher's output. Checking out another branch to restack or test is fine: the board keeps
+  nothing that a GitHub write hasn't already saved, so the worst case is a change the user makes
+  mid-checkout failing until the branch is back. Reach for a scratch `git worktree` (with
+  `node_modules` symlinked in) only for a big, radical change; the user finds them more trouble
+  than they're worth.
 - Start a board the user will work in while you change the code with `--reload` (in the
   background, from this checkout: `uv run milestones board OWNER/NAME --reload`). When any
   `milestones/**/*.py` changes and then stays put for a couple of seconds, it waits for queued
