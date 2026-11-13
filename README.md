@@ -135,19 +135,19 @@ milestone); the rest are under **Columns**, including any closed milestone that 
 work on it.
 
 A card shows what has already been decided about it, wherever that was written down. Its title
-comes first, alone; under it, the number, age, comments, the pull requests that close or mention
-it, sub-issues, a pull request's lines added and removed, and who opened it (`@login`); then
-whether it is an issue or a pull request (a draft, closed, its issue type), and beside that its
-priority, effort and milestone — the organisation's fields, or a `Priority:`/`Size:` label where
-the field is unset, in italics. A pull request with no effort recorded shows one estimated from its
-lines changed instead, `~M`, in the size bands prcoder uses; it is only shown, never written. Those
-three are buttons, the same as the pane's below, and a card leaves off whichever the columns or the
-grouping already show. Then, small, who is assigned (each with a link to their GitHub profile) and
-the issues a pull request closes, and its other labels on a line of their own; the filter row can
-narrow the board to one author. The pane on the right has the description and the rest. At its top
-are the card's milestone, priority and effort as buttons — click one to change it, as `m`, `p` and
-`e` do — and under them whatever has been suggested for that card. Collapse the pane (`i`) and the
-same buttons run down the strip that is left, with a count of the suggestions waiting.
+comes first, alone; under it, the number, age, comments, sub-issues, a pull request's lines added
+and removed, and who opened it (`@login`); then whether it is an issue or a pull request (a draft,
+closed, its issue type), and beside that its priority, effort and milestone — the organisation's
+fields, or a `Priority:`/`Size:` label where the field is unset, in italics. A pull request with no
+effort recorded shows one estimated from its lines changed instead, `~M`, in the size bands prcoder
+uses; it is only shown, never written. Those three are buttons, the same as the pane's below, and a
+card leaves off whichever the columns or the grouping already show. Then, small, who is assigned
+(each with a link to their GitHub profile), the issues a pull request closes, and the pull requests
+that close an issue or only mention it; and its other labels on a line of their own; the filter row
+can narrow the board to one author. The pane on the right has the description and the rest. At its
+top are the card's milestone, priority and effort as buttons — click one to change it, as `m`, `p`
+and `e` do — and under them whatever has been suggested for that card. Collapse the pane (`i`) and
+the same buttons run down the strip that is left, with a count of the suggestions waiting.
 
 There are three ways to move a card, and they are the same write:
 

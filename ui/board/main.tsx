@@ -4,9 +4,9 @@ import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
+import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
-  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel, linkedPrs,
+  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel,
   estimatedEffort, noFilters, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
@@ -45,10 +45,11 @@ function Card({ card }: { card: CardData }) {
   const isFocused = focused.value === card.number;
   const isSelected = selected.value.has(card.number);
   useEffect(() => { if (isFocused) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [isFocused]);
-  const prs = linkedPrs(card);
   const labels = card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping));
   const waiting = openSuggestions.value.filter((s) => s.issue === card.number).length;
   const closes = card.closes ?? [];
+  const closedBy = card.closingPrs ?? [];
+  const mentionedIn = card.mentionedPrs ?? [];
   return (
     <div
       ref={ref}
@@ -66,7 +67,8 @@ function Card({ card }: { card: CardData }) {
       {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
           number, as a GitHub issue list has them; what kind of thing it is, then where it stands
           (buttons, as in the panel); then, small, what it is tied to (who is assigned, the issues
-          it closes), and its labels on a row of their own. The author is among the facts, as
+          a pull request closes, the pull requests that close or only mention an issue), and its
+          labels on a row of their own. The author is among the facts, as
           `@login`. */}
       <div class="card-title">{card.title}</div>
       <div class="card-facts">
@@ -76,7 +78,6 @@ function Card({ card }: { card: CardData }) {
           <span class="diff" title="lines added and removed"><ins>+{card.additions}</ins> <del>−{card.deletions}</del></span>
         )}
         {card.comments > 0 && <span title="comments">💬 {card.comments}</span>}
-        {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
         {card.author && <span class="author" title={`opened by ${card.author}`}>@{card.author}</span>}
         {waiting > 0 && <span class="suggested" title="Has suggestions waiting for you">✎ {waiting}</span>}
@@ -91,7 +92,7 @@ function Card({ card }: { card: CardData }) {
         </span>
         <span class="card-places"><Places card={card} onCard /></span>
       </div>
-      {(card.assignees.length > 0 || closes.length > 0) && (
+      {(card.assignees.length > 0 || closes.length > 0 || closedBy.length > 0 || mentionedIn.length > 0) && (
         <div class="card-ties">
           {card.assignees.length > 0 && (
             <span class="assigned">
@@ -113,6 +114,10 @@ function Card({ card }: { card: CardData }) {
               closes {closes.map((c) => `#${c.number}`).join(', ')}
             </span>
           )}
+          {/* Which pull requests would close it when they merge, and which only mention it, is
+              the difference worth seeing, so they are two lists rather than one count. */}
+          {closedBy.length > 0 && <span class="closed-by">closed by <PrNumbers prs={closedBy} /></span>}
+          {mentionedIn.length > 0 && <span class="mentioned-in">mentioned in <PrNumbers prs={mentionedIn} /></span>}
         </div>
       )}
       {labels.length > 0 && (
@@ -499,6 +504,20 @@ function AskDialog() {
         <div class="picker-foot"><button onClick={close}>Cancel</button><button class="primary" onClick={copy}>Copy prompt (⌘↵)</button></div>
       </div>
     </div>
+  );
+}
+
+function PrNumbers({ prs }: { prs: PrRef[] }) {
+  return (
+    <>
+      {prs.map((p, i) => (
+        <>
+          {i > 0 && ', '}
+          <a href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            title={`#${p.number} ${p.title} (${p.draft ? 'draft' : p.state.toLowerCase()})`}>#{p.number}</a>
+        </>
+      ))}
+    </>
   );
 }
 

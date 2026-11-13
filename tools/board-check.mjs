@@ -180,6 +180,18 @@ try {
     note('pull request rows', 'none in view or not in this build; skipped');
   }
 
+  // --- An issue's card: the pull requests that close it, and those that only mention it, apart.
+  const issueTies = await page.locator('.card-ties .closed-by, .card-ties .mentioned-in').count();
+  if (issueTies) {
+    check("an issue's linked pull requests are below its facts, not counted among them",
+      !(await page.$$eval('.card-facts', (e) => e.some((x) => /⇄/.test(x.textContent)))));
+    check('each linked pull request is a link to it',
+      await page.$$eval('.card-ties .closed-by a, .card-ties .mentioned-in a', (e) => e.length > 0 && e.every((a) => /\/pull\/\d+$/.test(a.href))));
+    note('cards saying which pull requests close or mention them', issueTies);
+  } else {
+    note('closed by / mentioned in', 'none in view or not in this build; skipped');
+  }
+
   // --- The card panel's buttons, where this build has them.
   if (await page.locator('.places .place').count()) {
     const places = () => page.$$eval('.places .place, .detail-strip .place', (e) => e.map((x) => x.textContent));
