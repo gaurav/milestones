@@ -114,17 +114,16 @@ try {
 
   // --- Filters ride in the URL too.
   await page.fill('#search', 'the'); await page.keyboard.press('Enter');
-  await menu('Filters');
-  await page.selectOption('.filters select >> nth=0', 'issue');
-  check('the Filters button counts what is on', (await page.textContent('.menu > button >> nth=0')).includes('(1)'));
-  await page.keyboard.press('Escape');
+  await page.selectOption('.filterbar select >> nth=0', 'issue');
+  check('a filter that is on is marked', (await page.locator('.filterbar label.filtering').count()) === 1);
   q = await query();
   check('search and filters are in the query', q.q === 'the' && q.kind === 'issue', q);
   const shown = await page.locator('.card').count();
   await page.reload(); await page.waitForSelector('.toolbar');
   check('a reload keeps the search and filters',
     (await page.inputValue('#search')) === 'the' && (await page.locator('.card').count()) === shown);
-  await menu('Filters'); await page.click('.filters button'); await page.keyboard.press('Escape');
+  await page.click('.filterbar .clear');
+  check('Clear goes once nothing is on', (await page.locator('.filterbar .clear').count()) === 0);
   check('clearing them clears the query', !('q' in await query()) && !('kind' in await query()), await query());
 
   // --- Menus: one at a time, closed from outside, by Escape, and through the description.
@@ -181,10 +180,11 @@ try {
     note('card panel buttons', 'not in this build; skipped');
   }
 
-  // --- How tall the top bar is at each width: reported, since what is right depends on the repo's name.
+  // --- How tall the top bar and the filter row are at each width: reported, since what is right depends on the repo's name.
   for (const width of [1440, 1280, 1000, 760]) {
     await page.setViewportSize({ width, height: 900 });
     note(`top bar height at ${width}px`, Math.round((await page.locator('.toolbar').boundingBox()).height));
+    note(`filter row height at ${width}px`, Math.round((await page.locator('.filterbar').boundingBox()).height));
     await shot(`bar-${width}`, { x: 0, y: 0, width, height: 200 });
   }
   check('no errors on the page', errors.length === 0, errors);
