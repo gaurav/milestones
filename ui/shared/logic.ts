@@ -182,6 +182,12 @@ export const FIELD_OF = { priority: 'Priority', effort: 'Effort' } as const;
  *  in a label, which a pull request can carry; with it, a pull request has nowhere to. */
 export const hasField = (kind: DimKind, fields: Record<string, string[]>) => kind !== 'milestone' && FIELD_OF[kind] in fields;
 
+/** Whether the board's layout already says a card's value for `kind`: the columns are that
+ *  dimension, or the cards are grouped by it under headings. A card leaves such a value off, as
+ *  the column or heading says it — which holds as well for rows that run across every column. */
+export const shownByLayout = (kind: DimKind, dimension: DimKind, groupBy: readonly DimKind[]) =>
+  kind === dimension || groupBy.includes(kind);
+
 /** A dimension's columns in order, the unset one first. */
 export function dimColumns(kind: DimKind, layout: Layout, cards: Card[]): ColumnId[] {
   if (kind === 'milestone') return allColumns(layout.order, layout.milestones, cards);
