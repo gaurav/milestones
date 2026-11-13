@@ -64,7 +64,8 @@ function Card({ card }: { card: CardData }) {
     >
       {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
           number, as a GitHub issue list has them; what kind of thing it is, then where it stands
-          (buttons, as in the panel); who opened it, then the labels, last and small. */}
+          (buttons, as in the panel); who is assigned, then the labels, last and small. The author
+          is among the facts, as `@login`. */}
       <div class="card-title">{card.title}</div>
       <div class="card-facts">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
@@ -73,7 +74,7 @@ function Card({ card }: { card: CardData }) {
         {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
         {(card.closes?.length ?? 0) > 0 && <span title="issues this pull request closes">closes {card.closes!.map((c) => `#${c.number}`).join(' ')}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
-        {card.assignees.length > 0 && <span title="assignees">@{card.assignees.join(' @')}</span>}
+        {card.author && <span class="author" title={`opened by ${card.author}`}>@{card.author}</span>}
         {waiting > 0 && <span class="suggested" title="Has suggestions waiting for you">✎ {waiting}</span>}
         <Status action={cardStatus(actions.value.values(), card.number)} />
       </div>
@@ -86,9 +87,23 @@ function Card({ card }: { card: CardData }) {
         </span>
         <span class="card-places"><Places card={card} onCard /></span>
       </div>
-      {(card.author || labels.length > 0) && (
+      {(card.assignees.length > 0 || labels.length > 0) && (
         <div class="card-labels">
-          {card.author && <span class="author" title={`opened by ${card.author}`}>by {card.author}</span>}
+          {card.assignees.length > 0 && (
+            <span class="assigned">
+              assigned to{' '}
+              {/* The name is where a click will open a picker to reassign (#55); the arrow goes to
+                  their profile on GitHub. */}
+              {card.assignees.map((login, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <span class="who">{login}</span>
+                  <a class="profile" href={`https://github.com/${login}`} target="_blank" rel="noreferrer"
+                    title={`${login} on GitHub`} onClick={(e) => e.stopPropagation()}>↗</a>
+                </>
+              ))}
+            </span>
+          )}
           {labels.map((l) => <span title={`label: ${l.name}`}><i style={{ background: `#${l.color}` }} />{l.name}</span>)}
         </div>
       )}
