@@ -27,7 +27,8 @@ KINDS = {
                    "medium": "Medium", "low": "Low"}},
     "effort": {
         "field": "Effort", "prefix": "(?:size|effort)",
-        "options": ["XS", "S", "M", "L", "XL"],
+        # Largest first, as priority runs from Urgent down: the two read the same way.
+        "options": ["XL", "L", "M", "S", "XS"],
         "colors": {"XS": "00ff00", "S": "0e8a16", "M": "fbca04", "L": "b60205", "XL": "ff0000"},
         "meanings": {"XS": "Under an hour.", "S": "About half a day.", "M": "A day or two.",
                      "L": "About a week.",

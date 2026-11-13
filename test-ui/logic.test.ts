@@ -66,7 +66,7 @@ test('--from picks columns by title, and falls back to all of them', () => {
 const MAPPING: Mapping = {
   priority: { field: 'Priority', prefix: 'priority', options: ['Urgent', 'High', 'Medium', 'Low'],
     values: { critical: 'Urgent', urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low' }, aliases: { p0: 'Urgent' } },
-  effort: { field: 'Effort', prefix: '(?:size|effort)', options: ['XS', 'S', 'M', 'L', 'XL'],
+  effort: { field: 'Effort', prefix: '(?:size|effort)', options: ['XL', 'L', 'M', 'S', 'XS'],
     values: { xs: 'XS', s: 'S', m: 'M', l: 'L', xl: 'XL', low: 'S', medium: 'M', high: 'L' } },
 };
 const layout = (kind: DimKind): Layout =>
@@ -97,7 +97,7 @@ test('a value is read from its standard label, else another label, else the fiel
 test('each dimension has its columns, the unset one first', () => {
   assert.deepEqual(dimColumns('milestone', layout('milestone'), []), [NONE, 7, 8]);
   assert.deepEqual(dimColumns('priority', layout('priority'), []), [NONE, 'Urgent', 'High', 'Medium', 'Low']);
-  assert.deepEqual(dimColumns('effort', { ...layout('effort'), mapping: {} }, []), [NONE, 'XS', 'S', 'M', 'L', 'XL']);   // no table: the defaults
+  assert.deepEqual(dimColumns('effort', { ...layout('effort'), mapping: {} }, []), [NONE, 'XL', 'L', 'M', 'S', 'XS']);   // no table: the defaults
   assert.equal(columnLabel(NONE, 'priority', []), 'No priority');
   assert.equal(columnLabel('High', 'effort', []), 'High');
   assert.equal(columnLabel(7, 'milestone', [milestone(7, 'Critical')]), 'Critical');
@@ -125,9 +125,9 @@ test('cards group within a column, judged ones first, and cut into headed sectio
     card(4, { labels: [label('Priority: Urgent'), label('Effort: S')] }), card(5, { labels: [label('Priority: Urgent'), label('Effort: S')] })];
   const l = layout('milestone');
   const list = group(cs, noFilters, l, null, ['priority', 'effort']).get(NONE)!;
-  assert.deepEqual(list.map((c) => c.number), [5, 4, 3, 2, 1]);
+  assert.deepEqual(list.map((c) => c.number), [3, 5, 4, 2, 1]);
   assert.deepEqual(sections(list, ['priority', 'effort'], l).map((s) => [s.label, s.cards.length]),
-    [['Urgent · S', 2], ['Urgent · L', 1], ['Low · No effort', 1], ['No priority · No effort', 1]]);
+    [['Urgent · L', 1], ['Urgent · S', 2], ['Low · No effort', 1], ['No priority · No effort', 1]]);
   assert.deepEqual(sections(list, [], l).map((s) => [s.label, s.cards.length]), [['', 5]]);
   assert.deepEqual(sections([], ['priority'], l), []);
 });
@@ -280,6 +280,6 @@ test("a pull request's size is prcoder's band of its lines changed, which is an 
 test('a number key picks the option at that place in the list', () => {
   const keys = (kind: 'priority' | 'effort') => [0, 1, 2, 3, 4, 5, 6].map((k) => optionForKey(kind, k, MAPPING));
   assert.deepEqual(keys('priority'), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined, undefined]);
-  assert.deepEqual(keys('effort'), [undefined, 'XS', 'S', 'M', 'L', 'XL', undefined]);
+  assert.deepEqual(keys('effort'), [undefined, 'XL', 'L', 'M', 'S', 'XS', undefined]);
   assert.deepEqual(keyedOptions('effort').map((o) => o.keys), [[1], [2], [3], [4], [5]]);
 });

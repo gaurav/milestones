@@ -29,20 +29,20 @@ not from the length of the issue. For a pull request it is the work left: mostly
 
 | Label        | Colour    | Means                                           |
 |--------------|-----------|-------------------------------------------------|
-| `Effort: XS` | `#00ff00` | Under an hour.                                  |
-| `Effort: S`  | `#0e8a16` | About half a day.                               |
-| `Effort: M`  | `#fbca04` | A day or two.                                   |
-| `Effort: L`  | `#b60205` | About a week.                                   |
 | `Effort: XL` | `#ff0000` | More than a week, or needs splitting up first.  |
+| `Effort: L`  | `#b60205` | About a week.                                   |
+| `Effort: M`  | `#fbca04` | A day or two.                                   |
+| `Effort: S`  | `#0e8a16` | About half a day.                               |
+| `Effort: XS` | `#00ff00` | Under an hour.                                  |
 
 ## Using them
 
 An issue or a pull request carries at most one label of each kind. No label means nobody has
 judged it yet, which is different from `Priority: Low`.
 
-Within a milestone, work is taken by priority first and by effort within a priority, smallest
-first. So the two labels are what order a milestone: GitHub offers no other order that a tool can
-write.
+Within a milestone, work is ordered by priority first and by effort within a priority, each in
+the order of its table. So the two labels are what order a milestone: GitHub offers no other order
+that a tool can write.
 
 ## Older records
 

@@ -175,7 +175,7 @@ written as labels, `Priority: High` and `Effort: M`, on issues and pull requests
 request can't hold an organisation issue field, and the two need to sort together. A label the repo
 hasn't got is made in its standard colour. All of them work on a selection, and `z` undoes all but
 a comment. A number picks an option by its place in the dialog — `1` to `4` are Urgent, High,
-Medium and Low, and for effort `1` to `5` are XS to XL; `0` clears either.
+Medium and Low, and for effort `1` to `5` are XL to XS; `0` clears either.
 
 **Suggestions** (`s`, or the button) is the list of changes waiting for a yes or no. The board
 puts its own there: where an older label (`Priority: Critical`, `Size: M`), a label of the repo's
@@ -223,11 +223,11 @@ backlog can be triaged in passes:
 2. Switch to **Priority**. The first column, *No priority*, is the inbox; `1`–`4` send the focused
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
-3. Switch to **Effort** and do the same: `1`–`5` are XS to XL.
+3. Switch to **Effort** and do the same: `1`–`5` are XL to XS.
 4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
-   groups — "Urgent · S", "High · M" — judged cards first, the smallest effort first within a
-   priority, which is the order to work a milestone in. Click a group's heading to select
-   it, and one key sends the whole group to a milestone.
+   groups — "Urgent · L", "High · M" — judged cards first, the largest effort first within a
+   priority, so a milestone reads from what matters most and costs most down. Click a group's
+   heading to select it, and one key sends the whole group to a milestone.
 
 A card stands in the column of what was recorded about it, wherever that was: its standard label,
 or else an older record read in the same terms (`Priority: Critical` under Urgent, the Effort

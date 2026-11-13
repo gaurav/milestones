@@ -22,7 +22,7 @@ export type Mapping = Partial<Record<'priority' | 'effort', LabelValues>>;
 /** Enough to read a label's raw text when a server sends no table. */
 export const PLAIN_MAPPING: Mapping = {
   priority: { field: 'Priority', prefix: 'priority', values: {}, options: ['Urgent', 'High', 'Medium', 'Low'] },
-  effort: { field: 'Effort', prefix: '(?:size|effort)', values: {}, options: ['XS', 'S', 'M', 'L', 'XL'] },
+  effort: { field: 'Effort', prefix: '(?:size|effort)', values: {}, options: ['XL', 'L', 'M', 'S', 'XS'] },
 };
 /** A priority's or effort's options, in column order. */
 export const optionsOf = (kind: 'priority' | 'effort', mapping: Mapping = PLAIN_MAPPING): string[] =>

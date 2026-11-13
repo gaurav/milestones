@@ -543,7 +543,7 @@ def test_label_plan_renames_an_old_label_creates_a_missing_one_and_lists_a_wrong
         ("Priority: Critical", "Priority: Urgent"), ("Size: M", "Effort: M")]
     assert renames[0][1]["color"] == "d2042d"
     assert [body["name"] for body in creates] == [
-        "Priority: Medium", "Priority: Low", "Effort: XS", "Effort: S", "Effort: L", "Effort: XL"]
+        "Priority: Medium", "Priority: Low", "Effort: XL", "Effort: L", "Effort: S", "Effort: XS"]
     assert recolours == [("priority: high", "000000", "b60205")]
     done = [{"name": name, "color": spec["colors"][option].upper()}
             for spec in reconcile.KINDS.values() for option in spec["options"]

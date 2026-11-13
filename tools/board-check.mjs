@@ -214,10 +214,10 @@ try {
     await page.click('.detail-strip .open'); await settle();
     check('z undoes the change', JSON.stringify(await places()) === JSON.stringify(was), await places());
 
-    // Effort's number keys run down its list: 1 is XS, 3 is M.
+    // Effort's number keys run down its list: 1 is XL, 3 is M.
     await page.keyboard.press('e'); await settle();
     const rows = await page.$$eval('.picker li', (e) => e.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-    check('the effort dialog numbers its sizes in order', rows[0] === '1 XS' && rows[2] === '3 M' && rows.at(-1) === '0 Clear', rows);
+    check('the effort dialog numbers its sizes in order', rows[0] === '1 XL' && rows[2] === '3 M' && rows.at(-1) === '0 Clear', rows);
     await page.keyboard.press('3'); await settle();
     check('3 sets M effort', (await places()).some((p) => /effort M/.test(p)), await places());
     await page.keyboard.press('z'); await settle();

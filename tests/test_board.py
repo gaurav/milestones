@@ -513,7 +513,7 @@ def test_labels_md_matches_the_label_table():
             label, meaning = reconcile.standard_label(kind, option), spec["meanings"][option]
             assert f"| `{label}` | `#{spec['colors'][option]}` | {meaning} |" in doc
             assert f"- {spec['field']} {option}: {meaning}" in brief
-    assert "XS, S, M, L, XL" in brief
+    assert "XL, L, M, S, XS" in brief
 
 
 def test_the_board_hands_the_page_its_label_table(monkeypatch):
@@ -522,7 +522,7 @@ def test_the_board_hands_the_page_its_label_table(monkeypatch):
     table = board.snapshot()["labelValues"]
     assert table["priority"]["values"]["critical"] == "Urgent"
     assert table["priority"]["options"] == ["Urgent", "High", "Medium", "Low"]
-    assert table["effort"]["options"] == ["XS", "S", "M", "L", "XL"]
+    assert table["effort"]["options"] == ["XL", "L", "M", "S", "XS"]
     assert (table["priority"]["aliases"], table["effort"]["aliases"]) == ({"p0": "Urgent"}, {"easy": "S"})
 
 
