@@ -88,8 +88,9 @@ export interface BoardData {
  *  a writable one, what an earlier read-only session left to be reviewed. */
 export interface PlanInfo { path: string | null; count: number }
 
-/** What the columns are, the grouping within them, and the milestones ticked (0 is none). */
-export interface View { by: string; group: string[]; shown: number[] }
+/** What the columns are, the grouping within them, the milestones ticked (0 is none), and
+ *  whether the card panel on the right is open (absent, from an older run, means open). */
+export interface View { by: string; group: string[]; shown: number[]; detail?: boolean }
 
 /** A change someone proposes — a coding agent, or the board's own rules — for you to
  *  accept or reject. A labels suggestion's value is a change: {add, remove}. */
@@ -106,11 +107,14 @@ export interface Suggestion {
 
 export interface Move { issue: number; kind: Kind; value: Value | { add?: string[]; remove?: string[] } }
 
-/** The per-run token, and what --from, --by and --group asked for, from the URL fragment. */
-export function parseFragment(hash: string): { token: string; from: string[]; by: string; group: string[] } {
-  const params = new URLSearchParams(hash.replace(/^#/, ''));
+/** What the page's URL says: the per-run token, from the fragment, and the view — what
+ *  --from, --by and --group asked for, or what the page last wrote back — from the query
+ *  string. The token is in the fragment because that is never sent to a server or left in a
+ *  Referer; the view is not a secret, and reads better as ordinary parameters. */
+export function parseLocation(search: string, hash: string): { token: string; from: string[]; by: string; group: string[] } {
+  const params = new URLSearchParams(search);
   return {
-    token: params.get('t') ?? '',
+    token: new URLSearchParams(hash.replace(/^#/, '')).get('t') ?? '',
     from: params.getAll('from'),
     by: params.get('by') ?? '',
     group: (params.get('group') ?? '').split(',').filter(Boolean),

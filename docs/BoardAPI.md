@@ -10,9 +10,15 @@ URL, and is the place to start a new one.
 
 ## Reaching it
 
-- The URL's fragment carries a token that is new on every start: `#t=<token>&from=<title>…`.
-  `from` repeats once per `--from` given on the command line, and is only a hint about which
-  columns to show first; `by` and `group` (from `--by` and `--group`) are hints of the same kind.
+- The URL's fragment carries a token that is new on every start: `/?from=<title>…#t=<token>`.
+  It is in the fragment so that it is never sent in a request line or a `Referer`.
+- The URL's query string says how to open the board. `from` repeats once per `--from` given on
+  the command line, and is only a hint about which columns to show first; `by` and `group` (from
+  `--by` and `--group`) are hints of the same kind. The page rewrites the query string as the
+  view changes (`viewQuery` in `ui/shared/logic.ts`), so that a reload opens the same columns.
+  One empty `from=` means no milestone is ticked. The page also keeps its filters there while
+  they are on — `q` (the search), `kind`, `label`, `priority`, `pr=1`, `nolabels=1` — and unlike
+  the view they are saved nowhere else, so a new run starts with none.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.
@@ -93,7 +99,7 @@ loses neither and a rejected suggestion is not made again.
 | `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
 | `POST /api/v1/plan/review` | On a writable board, turn the plan a read-only session left into suggestions with source `plan`, and remove the plan file. Returns `{suggestions, dropped}`: `dropped` counts changes already made, or no longer possible. `409` on a read-only board. |
 | `POST /api/v1/plan/discard` | Delete the plan file without reviewing it. `409` on a read-only board, where the plan is the session's own changes: undo them instead. |
-| `POST /api/v1/view` | Body `{by, group, shown}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, and the milestone numbers ticked (`0` for none). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
+| `POST /api/v1/view` | Body `{by, group, shown, detail?}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, the milestone numbers ticked (`0` for none), and whether the card panel is open (`detail`, default `true`). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
 | `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. |

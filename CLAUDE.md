@@ -236,6 +236,20 @@ far more than `_norm_issue` keeps.
 - The page's layout (view, grouping, ticked milestones) is saved through `POST /api/v1/view` into
   the state file, not `localStorage`: each run is on a new port, which a browser treats as a new
   origin. `initialView` in `logic.ts` decides precedence: flags, then saved, then defaults.
+  The flags arrive in the URL's query string (`server.page_url`), and the page writes the query
+  back as the view changes (`viewQuery`, from `rememberView`), so "flags" on a reload means the
+  view as it was left. `by` and `group` are always written, never left to the saved view, since
+  the POST may still be in flight when the page reloads; a new view setting that a flag can set
+  needs the same. The filters and the search are in the query too, and nowhere else: they are
+  not part of the saved view, so they last for the tab. Only the token is in the fragment, and it stays there: it is what lets a
+  request write to GitHub, and a fragment is never sent in a request line or a Referer.
+- A toolbar dropdown is `Menu` in `ui/board/main.tsx`, not `<details>`, which closes on nothing
+  but its own summary. One `openMenu` signal means one open at a time, and `onKey` stands down
+  while it is set. The card panel's description is a sandboxed iframe whose clicks never reach
+  the document, so `main.menu-open iframe` gets `pointer-events: none` for as long as a menu is
+  open; a listener for window `blur` was tried for that and does not fire in headless Chromium.
+  Its listeners go on in a layout effect: a plain effect waits a frame, and a scripted Escape
+  sent straight after the click was missed.
 - A read-only board saves its changes to a plan file (`board/plan.py`; `Board.save_plan` after
   every submit and resolve). The plan is the **net** of the `would` actions, so an undone change
   is not in it. A writable board never applies a plan by itself: `review_plan` turns it into

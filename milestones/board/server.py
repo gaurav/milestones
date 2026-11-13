@@ -15,7 +15,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .. import gh
 from ..cli import TRIAGE_BUCKET
@@ -537,8 +537,11 @@ class Board:
                 or any(isinstance(n, bool) or not isinstance(n, int) for n in shown)):
             raise Refused(400, "a view is {by: milestone|priority|effort, group: [...], "
                                "shown: [milestone numbers, 0 for none]}")
+        detail = view.get("detail", True)
+        if not isinstance(detail, bool):
+            raise Refused(400, "a view's detail is true (the card panel is open) or false")
         with self.lock:
-            self.view = {"by": by, "group": group, "shown": shown}
+            self.view = {"by": by, "group": group, "shown": shown, "detail": detail}
             self._save_state()
             return self.view
 
@@ -864,12 +867,7 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(board, token))
     server.daemon_threads = True
     threading.Thread(target=board.work, daemon=True).start()
-    # The token rides in the fragment, which a browser never sends to a server or leaves
-    # in a Referer; the page reads it and sends it back as a header.
-    fragment = f"t={token}" + "".join(f"&from={quote_title(t)}" for t in shown or [])
-    # Hints for the page, like `from`: what the columns are, and the grouping within them.
-    fragment += (f"&by={by}" if by else "") + (f"&group={group}" if group else "")
-    url = f"http://127.0.0.1:{server.server_address[1]}/#{fragment}"
+    url = page_url(server.server_address[1], token, shown, by, group)
     # Where `milestones suggest` finds this board.
     session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
     mode = "  (read-only: nothing will be written)" if board.read_only else ""
@@ -897,9 +895,15 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         print("\n".join(closing_lines(board.snapshot())), file=sys.stderr)
 
 
-def quote_title(title: str) -> str:
-    from urllib.parse import quote
-    return quote(title, safe="")
+def page_url(port: int, token: str, shown: list[str] | None = None,
+             by: str | None = None, group: str | None = None) -> str:
+    """The address to open. The view asked for — `from` once per milestone, `by`, `group` —
+    is a query string, which the page reads and then keeps up to date as the view changes.
+    The token rides in the fragment, which a browser never sends to a server or leaves in a
+    Referer; the page reads it and sends it back as a header."""
+    view = [("by", by)] * bool(by) + [("group", group)] * bool(group) + [("from", t) for t in shown or []]
+    query = urlencode(view, quote_via=quote)
+    return f"http://127.0.0.1:{port}/{'?' + query if query else ''}#t={token}"
 
 
 def closing_lines(snapshot: dict) -> list[str]:

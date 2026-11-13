@@ -1,7 +1,9 @@
 // The column view: one column per milestone, cards you move by key, by drag or by picker.
 // Everything it knows about GitHub comes through ui/shared/.
 import { render } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, linkedPrs, noFilters,
@@ -9,7 +11,7 @@ import {
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, change, columnTitle, cycleDimension, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
+  actions, board, cards, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
   planInfo, readOnly, reviewPlan, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
@@ -170,23 +172,42 @@ function Column({ id, index }: { id: ColumnId; index: number }) {
   );
 }
 
+/** Folds the card panel to a strip at the edge, giving its room to the columns. */
+function CollapseButton() {
+  return <button class="collapse" title="Collapse this panel (i)" aria-label="Collapse the card panel" onClick={() => { detailOpen.value = false; }}>›</button>;
+}
+
+/** The card panel, collapsed: one button to open it again, with the focused card's number so
+ *  the strip still says what it would show. */
+function DetailStrip() {
+  return (
+    <aside class="detail-strip">
+      <button title="Show the card panel (i)" aria-label="Show the card panel" onClick={() => { detailOpen.value = true; }}>‹</button>
+      {focused.value !== null && <span>#{focused.value}</span>}
+    </aside>
+  );
+}
+
 function Detail() {
   const card = focused.value === null ? undefined : cards.value.get(focused.value);
-  if (!card) return <aside class="detail"><p class="empty">No card in focus.</p></aside>;
+  if (!card) return <aside class="detail"><div class="detail-head"><p class="empty">No card in focus.</p><CollapseButton /></div></aside>;
   const milestone = card.milestone === null ? undefined : milestones.value.get(card.milestone);
   const fields = Object.entries(card.fields ?? {});
   // GitHub has already sanitised bodyHTML; the sandbox (no scripts, no same-origin) is the
   // second lock. Links open in a new tab, since the frame itself may not navigate.
   const doc = `<!doctype html><base target="_blank"><style>
     :root { color-scheme: light dark; }
-    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
+    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
     img, video { max-width: 100%; height: auto; } pre { overflow: auto; padding: 8px; background: #8881; }
-    code { font-size: 12px; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
+    code { font-size: 14px; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
     blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #8885; } a { color: #2f81f7; }
   </style>${card.bodyHTML || '<p><em>No description.</em></p>'}`;
   return (
     <aside class="detail">
-      <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
+      <div class="detail-head">
+        <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
+        <CollapseButton />
+      </div>
       <dl>
         <dt>Milestone</dt><dd>{milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'none'}</dd>
         <dt>Opened</dt><dd>{card.created.slice(0, 10)} by {card.author ?? 'a deleted account'}; updated {card.updated.slice(0, 10)}; {card.comments} comment{card.comments === 1 ? '' : 's'}</dd>
@@ -441,42 +462,88 @@ function Picker() {
   );
 }
 
+/** The toolbar menu that is open, by name: one at a time, so two never overlap. */
+const openMenu = signal<string | null>(null);
+
+/** A button that drops a panel under itself. It closes on a press anywhere outside and on
+ *  Escape. A press in the card panel's description would not count — that is a sandboxed frame,
+ *  whose events never reach this document — so `main` is given `menu-open` while a menu is, and
+ *  the stylesheet lets presses through the frame for as long. `align` is the edge of the
+ *  button the panel hangs from to begin with; one that would run off the page that way is hung
+ *  from the other edge instead, since where a button sits depends on how the bar has wrapped. */
+function Menu({ name, label, title, align = 'left', wide, children }: {
+  name: string; label: ComponentChildren; title?: string; align?: 'left' | 'right'; wide?: boolean; children: ComponentChildren;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const [side, setSide] = useState(align);
+  const open = openMenu.value === name;
+  // Before the panel is painted: measure it where `align` puts it, and turn it round if it is
+  // over the edge of the page.
+  useLayoutEffect(() => {
+    if (!open) { setSide(align); return; }
+    const box = body.current?.getBoundingClientRect();
+    if (box && side === 'left' && box.right > document.documentElement.clientWidth) setSide('right');
+    else if (box && side === 'right' && box.left < 0) setSide('left');
+  }, [open]);
+  // A layout effect, so the listeners are there as soon as the panel is: a plain effect waits
+  // for the next frame, and an Escape sent straight after the click (by a script) was missed.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const close = () => { if (openMenu.value === name) openMenu.value = null; };
+    const outside = (e: Event) => { if (!ref.current?.contains(e.target as Node)) close(); };
+    // Captured, and stopped: Escape closes the menu and does not go on to clear the selection.
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    document.addEventListener('pointerdown', outside, true);
+    window.addEventListener('keydown', key, true);
+    return () => {
+      document.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('keydown', key, true);
+    };
+  }, [open]);
+  return (
+    <div class="menu" ref={ref}>
+      <button class={open ? 'on' : ''} aria-haspopup="true" aria-expanded={open} title={title} onClick={() => { openMenu.value = open ? null : name; }}>{label}</button>
+      {open && <div ref={body} class={`menu-body ${side}${wide ? ' wide' : ''}`}>{children}</div>}
+    </div>
+  );
+}
+
 /** Which milestones are on show. In the milestone view they are the columns; in the
  *  priority and effort views they are the scope — whose cards are being sorted. */
 function ColumnsMenu() {
   const all = milestoneColumns.value;
   const count = (id: ColumnId) => [...cards.value.values()].filter((c) => (c.milestone ?? NONE) === id).length;
   return (
-    <details class="menu">
-      <summary>{dimension.value === 'milestone' ? 'Columns' : 'In milestones'} ({shown.value.length}/{all.length})</summary>
-      <div class="menu-body">
-        <div class="menu-actions">
-          <button onClick={() => { shown.value = [...all]; }}>All</button>
-          <button onClick={() => { shown.value = []; }}>None</button>
-        </div>
-        {all.map((id) => (
-          <label>
-            <input type="checkbox" checked={shown.value.includes(id)} onChange={() => toggleColumn(id)} />
-            {columnTitle(id, 'milestone')}{milestones.value.get(id as number)?.state === 'closed' ? ' (closed)' : ''}
-            <small>{count(id)}</small>
-          </label>
-        ))}
+    <Menu name="columns" align="right" wide label={`${dimension.value === 'milestone' ? 'Columns' : 'In milestones'} (${shown.value.length}/${all.length})`}>
+      <div class="menu-actions">
+        <button onClick={() => { shown.value = [...all]; }}>All</button>
+        <button onClick={() => { shown.value = []; }}>None</button>
       </div>
-    </details>
+      {all.map((id) => (
+        <label>
+          <input type="checkbox" checked={shown.value.includes(id)} onChange={() => toggleColumn(id)} />
+          {columnTitle(id, 'milestone')}{milestones.value.get(id as number)?.state === 'closed' ? ' (closed)' : ''}
+          <small>{count(id)}</small>
+        </label>
+      ))}
+    </Menu>
   );
 }
 
 const GROUPINGS: { label: string; by: DimKind[] }[] = [
   { label: 'No grouping', by: [] },
-  { label: 'Group by priority', by: ['priority'] },
-  { label: 'Group by effort', by: ['effort'] },
-  { label: 'Group by priority, then effort', by: ['priority', 'effort'] },
-  { label: 'Group by milestone', by: ['milestone'] },
+  { label: 'Group: priority', by: ['priority'] },
+  { label: 'Group: effort', by: ['effort'] },
+  { label: 'Group: priority, effort', by: ['priority', 'effort'] },
+  { label: 'Group: milestone', by: ['milestone'] },
 ];
 
 /** What the columns are, and what the cards in a column are grouped by. */
 function ViewControls() {
-  const current = groupBy.value.join(',');
+  // What is in effect, not what is saved: a grouping by what the columns already are does
+  // nothing, and its option is not offered, so the select would otherwise show another's label.
+  const current = groupBy.value.filter((k) => k !== dimension.value).join(',');
   return (
     <>
       <span class="segmented" title="What the columns are (v)">
@@ -498,57 +565,71 @@ function Toolbar() {
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
-  const active = JSON.stringify(f) !== JSON.stringify(noFilters);
+  // How many filters are on besides the search box, which shows its own text.
+  const on = [f.kind, f.label, f.priority, f.hasPr, f.unlabelled].filter(Boolean).length;
+  const scoped = shown.value.map((id) => columnTitle(id, 'milestone'));
   const unsaved = pending.value;
   return (
     <header class="toolbar">
       <strong>{board.value?.repo}</strong>
-      {readOnly.value && <span class="chip would" title="MILESTONES_PERMISSIONS=read: moves are shown here and not written to GitHub">read-only</span>}
       <ViewControls />
       {dimension.value !== 'milestone' && scope.value && (
-        <span class="chip" title="Only cards on these milestones are being sorted. Change it under 'In milestones'.">
-          in {shown.value.length <= 3 ? shown.value.map((id) => columnTitle(id, 'milestone')).join(', ') : `${shown.value.length} milestones`}
+        <span class="chip scope" title={`Only cards on these milestones are being sorted: ${scoped.join(', ') || 'none'}. Change it under 'In milestones'.`}>
+          in {scoped.length <= 3 ? scoped.join(', ') : `${scoped.length} milestones`}
         </span>
       )}
       <input id="search" type="search" placeholder="Search (/)" value={f.text}
         onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-      <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
-        <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
-      </select>
-      <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
-        <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
-      </select>
-      <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
-        <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
-      </select>
-      <label><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> has PR</label>
-      <label><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> no labels</label>
-      {active && <button onClick={() => { filters.value = noFilters; }}>Clear</button>}
-      <span class="spacer" />
-      {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
-      {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
-        {unsaved.filter((a) => a.status === 'failed').length ? `${unsaved.filter((a) => a.status === 'failed').length} not saved` : `saving ${unsaved.length}…`}
-      </span>}
-      <button class={openSuggestions.value.length ? 'has-suggestions' : ''} onClick={() => { trayOpen.value = !trayOpen.value; }} title="What the board's rules and your agents propose (s)">
-        Suggestions ({openSuggestions.value.length})
-      </button>
-      <ColumnsMenu />
-      <button onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
-      <details class="menu">
-        <summary>Keys</summary>
-        <div class="menu-body keys">
-          <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
-          <div><kbd>v</kbd> columns by milestone, priority, effort</div>
-          <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
-          <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
-          <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
-          <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-          <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div>
-          <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
-          <div>Drag a card, or a selection, onto a column.</div>
+      {/* The filters other than the search live in a menu: laid out in the bar they were wider
+          than a laptop's screen, and the bar wrapped with nothing optional showing. The button
+          counts the ones that are on, so a filtered board never looks like a whole one. */}
+      <Menu name="filters" wide label={<span class={on ? 'filtering' : ''}>{on ? `Filters (${on})` : 'Filters'}</span>} title="Show only some cards">
+        <div class="filters">
+          <label>Show
+            <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
+              <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
+            </select>
+          </label>
+          <label>Label
+            <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
+              <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
+            </select>
+          </label>
+          <label>Priority
+            <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
+              <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
+            </select>
+          </label>
+          <label class="tick"><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a pull request</label>
+          <label class="tick"><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> Has no labels</label>
+          <button disabled={!on && !f.text} onClick={() => { filters.value = noFilters; }}>Clear filters{f.text ? ' and search' : ''}</button>
         </div>
-      </details>
+      </Menu>
+      <div class="toolbar-end">
+        {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
+        {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
+          {unsaved.filter((a) => a.status === 'failed').length ? `${unsaved.filter((a) => a.status === 'failed').length} not saved` : `saving ${unsaved.length}…`}
+        </span>}
+        <button class={openSuggestions.value.length ? 'has-suggestions' : ''} onClick={() => { trayOpen.value = !trayOpen.value; }} title="What the board's rules and your agents propose (s)">
+          Suggestions ({openSuggestions.value.length})
+        </button>
+        <ColumnsMenu />
+        <button class="refresh" onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
+        <Menu name="keys" align="right" label="?" title="Keys">
+          <div class="keys">
+            <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
+            <div><kbd>v</kbd> columns by milestone, priority, effort</div>
+            <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
+            <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
+            <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
+            <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
+            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
+            <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
+            <div>Drag a card, or a selection, onto a column.</div>
+          </div>
+        </Menu>
+      </div>
     </header>
   );
 }
@@ -581,7 +662,9 @@ function PlanBanner() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.metaKey || e.ctrlKey || e.altKey || modal.value) return;
+  // An open menu has the keyboard: j or 1 behind it would move a card nobody is looking at.
+  // Not the list of keys, though, which is there to be read while trying them.
+  if (e.metaKey || e.ctrlKey || e.altKey || modal.value || (openMenu.value && openMenu.value !== 'keys')) return;
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const key = e.key;
@@ -593,6 +676,7 @@ function onKey(e: KeyboardEvent) {
   else if (key === 'Escape') selected.value = new Set();
   else if (key in MODAL_KEYS) { if (targets().length) modal.value = MODAL_KEYS[key]!; }
   else if (key === 's') trayOpen.value = !trayOpen.value;
+  else if (key === 'i') detailOpen.value = !detailOpen.value;
   else if (key === 'z') undo();
   else if (key === 'o') { const c = focused.value === null ? undefined : cards.value.get(focused.value); if (c) window.open(c.url, '_blank', 'noreferrer'); }
   else if (key === '/') document.getElementById('search')?.focus();
@@ -624,12 +708,12 @@ function App() {
     <>
       <Toolbar />
       <PlanBanner />
-      <main>
+      <main class={openMenu.value ? 'menu-open' : ''}>
         <div class="columns">
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}
           {visibleColumns.value.length === 0 && <p class="empty">No columns shown. Pick some under Columns.</p>}
         </div>
-        {trayOpen.value ? <Tray /> : <Detail />}
+        {trayOpen.value ? <Tray /> : detailOpen.value ? <Detail /> : <DetailStrip />}
       </main>
       {modal.value === 'milestone' && <Picker />}
       {(modal.value === 'priority' || modal.value === 'effort' || modal.value === 'state') && <Choice kind={modal.value} />}

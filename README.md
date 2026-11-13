@@ -203,7 +203,7 @@ backlog can be triaged in passes:
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
 3. Switch to **Effort** and do the same.
-4. Back in **Milestone**, choose *Group by priority, then effort*. Each column is now cut into
+4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
    groups — "Urgent · Low", "High · Medium" — judged cards first. Click a group's heading to select
    it, and one key sends the whole group to a milestone.
 
@@ -215,6 +215,10 @@ and effort views where the owner has those fields, since a pull request cannot h
 The board opens the way you left it — the view, the grouping and the milestones ticked — unless
 you say otherwise: `milestones board --by priority --group effort`, or `--from`, wins. `p`, `e` and `m` still set
 priority, effort and milestone whatever the columns are.
+
+The address bar keeps up with all three as you change them, and with the search and the filters,
+so reloading the page shows the same cards in the same columns rather than what the command line
+asked for. The filters last only as long as the tab: the next `milestones board` starts with none.
 
 ### Asking a coding agent
 

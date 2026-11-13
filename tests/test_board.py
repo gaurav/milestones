@@ -85,6 +85,12 @@ def test_remote_repo_reads_githubs_remote_spellings():
     assert remote_repo("git@gitlab.com:a/b.git") is None
 
 
+def test_the_page_url_asks_for_the_view_in_its_query_and_keeps_the_token_in_its_fragment():
+    assert server.page_url(8000, "tok") == "http://127.0.0.1:8000/#t=tok"
+    assert (server.page_url(8000, "tok", ["Babel v1.19 & after", "none"], "priority", "effort")
+            == "http://127.0.0.1:8000/?by=priority&group=effort&from=Babel%20v1.19%20%26%20after&from=none#t=tok")
+
+
 def test_only_loopback_hosts_on_the_servers_own_port_are_served():
     assert server.allowed_host("127.0.0.1:8000", 8000)
     assert server.allowed_host("localhost:8000", 8000)
@@ -465,10 +471,12 @@ def test_the_view_is_remembered_between_runs(monkeypatch, tmp_path):
     board = make_board(monkeypatch, [], state_file=state)
     assert board.snapshot()["view"] == {}
     view = {"by": "priority", "group": ["effort"], "shown": [0, 1]}
-    assert board.set_view({**view, "extra": "dropped"}) == view
+    assert board.set_view({**view, "extra": "dropped"}) == {**view, "detail": True}
+    view = {**view, "detail": False}
+    assert board.set_view(view) == view
     for bad in ({"by": "labels", "group": [], "shown": []}, {"by": "priority", "group": ["x"], "shown": []},
                 {"by": "priority", "group": [], "shown": ["Soon"]}, {"by": "priority", "group": [], "shown": [True]},
-                {}):
+                {"by": "priority", "group": [], "shown": [], "detail": "no"}, {}):
         with pytest.raises(server.Refused):
             board.set_view(bad)
     assert make_board(monkeypatch, [], state_file=state).snapshot()["view"] == view

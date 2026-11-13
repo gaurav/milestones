@@ -77,9 +77,11 @@ export function allColumns(columns: number[], milestones: Milestone[], cards: Ca
 }
 
 /** The columns `--from` asked for, by title (`none` for no milestone); all of them if it
- *  asked for nothing, or for nothing that exists. */
+ *  asked for nothing, or for nothing that exists. A single empty `from` is the page's own way
+ *  of writing "none ticked" (see `viewQuery`), which is not the same as not saying. */
 export function initialColumns(all: ColumnId[], milestones: Milestone[], from: string[]): ColumnId[] {
   if (from.length === 0) return all;
+  if (from.length === 1 && from[0] === '') return [];
   const wanted = new Set(from.map((t) => t.toLowerCase()));
   const title = (id: ColumnId) => (id === NONE ? 'none' : milestones.find((m) => m.number === id)?.title ?? '');
   const shown = all.filter((id) => wanted.has(title(id).toLowerCase()));
@@ -91,10 +93,10 @@ export function initialColumns(all: ColumnId[], milestones: Milestone[], from: s
  *  selection with none left counts as no selection. */
 export function initialView(
   asked: { from: string[]; by: string; group: string[] },
-  saved: { by?: string; group?: string[]; shown?: number[] } | undefined,
+  saved: { by?: string; group?: string[]; shown?: number[]; detail?: boolean } | undefined,
   all: ColumnId[],
   milestones: Milestone[],
-): { by: DimKind; group: DimKind[]; shown: ColumnId[] } {
+): { by: DimKind; group: DimKind[]; shown: ColumnId[]; detail: boolean } {
   const kinds = DIMENSIONS.map((d) => d.kind as string);
   const kept = (saved?.shown ?? []).filter((id) => all.includes(id));
   const by = [asked.by, saved?.by].find((k) => k && kinds.includes(k)) ?? 'milestone';
@@ -103,6 +105,54 @@ export function initialView(
     by: by as DimKind,
     group: group.filter((g) => kinds.includes(g)) as DimKind[],
     shown: asked.from.length || kept.length === 0 ? initialColumns(all, milestones, asked.from) : kept,
+    detail: saved?.detail !== false,
+  };
+}
+
+/** The query string that opens the board as it stands now: what `parseLocation` reads and
+ *  `initialView` acts on, so a reload shows the same columns. `by` and `group` are always
+ *  spelt out (`group=none` for no grouping: an unknown name, which `initialView` drops),
+ *  because a value left out falls back to the saved view, and the save may not have landed
+ *  when the page reloads. `from` is left out when every milestone is ticked — the titles of
+ *  all of them would make a very long URL — and is one empty value when none is; milestones
+ *  are named by title, as `--from` names them, so two of one title come back together. The
+ *  filters follow, each only while it is on: they are not saved with the view, so the URL is
+ *  all that carries them across a reload, and a new run starts with none. */
+export function viewQuery(
+  view: { by: DimKind; group: DimKind[]; shown: ColumnId[] },
+  all: ColumnId[],
+  milestones: Milestone[],
+  f: Filters = noFilters,
+): string {
+  const params = new URLSearchParams({ by: view.by, group: view.group.join(',') || 'none' });
+  const shown = all.filter((id) => view.shown.includes(id));
+  if (shown.length === 0 && all.length > 0) params.append('from', '');
+  else if (shown.length < all.length) {
+    for (const id of shown) {
+      const title = id === NONE ? 'none' : milestones.find((m) => m.number === id)?.title;
+      if (title) params.append('from', title);
+    }
+  }
+  if (f.text) params.set('q', f.text);
+  if (f.kind) params.set('kind', f.kind);
+  if (f.label) params.set('label', f.label);
+  if (f.priority) params.set('priority', f.priority);
+  if (f.hasPr) params.set('pr', '1');
+  if (f.unlabelled) params.set('nolabels', '1');
+  return params.toString();
+}
+
+/** The filters a URL's query string asks for: what `viewQuery` wrote. */
+export function filtersFrom(search: string): Filters {
+  const params = new URLSearchParams(search);
+  const kind = params.get('kind');
+  return {
+    text: params.get('q') ?? '',
+    label: params.get('label') ?? '',
+    priority: params.get('priority') ?? '',
+    kind: kind === 'issue' || kind === 'pr' ? kind : '',
+    hasPr: params.get('pr') === '1',
+    unlabelled: params.get('nolabels') === '1',
   };
 }
 
