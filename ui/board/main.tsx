@@ -281,12 +281,13 @@ function Detail() {
   // Priority and Effort are among the controls at the top; the rest are only shown.
   const fields = Object.entries(card.fields ?? {}).filter(([k]) => k !== FIELD_OF.priority && k !== FIELD_OF.effort);
   // GitHub has already sanitised bodyHTML; the sandbox (no scripts, no same-origin) is the
-  // second lock. Links open in a new tab, since the frame itself may not navigate.
+  // second lock. Links open in a new tab, since the frame itself may not navigate. The frame is
+  // a document of its own, so it can't inherit the board's root size: 14px is `html` in main.css.
   const doc = `<!doctype html><base target="_blank"><style>
     :root { color-scheme: light dark; }
-    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
     img, video { max-width: 100%; height: auto; } pre { overflow: auto; padding: 8px; background: #8881; }
-    code { font-size: 14px; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
+    code { font-size: 0.875em; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
     blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #8885; } a { color: #2f81f7; }
   </style>${card.bodyHTML || '<p><em>No description.</em></p>'}`;
   return (
