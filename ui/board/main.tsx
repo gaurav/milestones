@@ -603,14 +603,45 @@ function ViewControls() {
   );
 }
 
-function Toolbar() {
+/** The search and the filters, on a row of their own under the top bar. They were once in a
+ *  Filters menu, to keep the top bar to one line on a laptop, but they are used too often to be
+ *  a click away. Each one that is on is drawn in the accent colour, so a filtered board never
+ *  looks like a whole one. */
+function FilterBar() {
   const f = filters.value;
   const set = (patch: Partial<typeof f>) => { filters.value = { ...f, ...patch }; };
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
-  // How many filters are on besides the search box, which shows its own text.
-  const on = [f.kind, f.label, f.priority, f.hasPr, f.unlabelled].filter(Boolean).length;
+  const mark = (v: unknown) => (v ? 'filtering' : '');
+  return (
+    <div class="filterbar">
+      <input id="search" type="search" placeholder="Search (/)" value={f.text} class={mark(f.text)}
+        onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
+        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+      <label class={mark(f.kind)}>Show
+        <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
+          <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
+        </select>
+      </label>
+      <label class={mark(f.label)}>Label
+        <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
+          <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
+        </select>
+      </label>
+      <label class={mark(f.priority)}>Priority
+        <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
+          <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
+        </select>
+      </label>
+      <label class={mark(f.hasPr)}><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a PR</label>
+      <label class={mark(f.unlabelled)}><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> No labels</label>
+      {[f.text, f.kind, f.label, f.priority, f.hasPr, f.unlabelled].some(Boolean) && <button class="clear" onClick={() => { filters.value = noFilters; }}>Clear</button>}
+    </div>
+  );
+}
+
+function Toolbar() {
   const scoped = shown.value.map((id) => columnTitle(id, 'milestone'));
   const unsaved = pending.value;
   return (
@@ -622,34 +653,6 @@ function Toolbar() {
           in {scoped.length <= 3 ? scoped.join(', ') : `${scoped.length} milestones`}
         </span>
       )}
-      <input id="search" type="search" placeholder="Search (/)" value={f.text}
-        onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-      {/* The filters other than the search live in a menu: laid out in the bar they were wider
-          than a laptop's screen, and the bar wrapped with nothing optional showing. The button
-          counts the ones that are on, so a filtered board never looks like a whole one. */}
-      <Menu name="filters" wide label={<span class={on ? 'filtering' : ''}>{on ? `Filters (${on})` : 'Filters'}</span>} title="Show only some cards">
-        <div class="filters">
-          <label>Show
-            <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
-              <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
-            </select>
-          </label>
-          <label>Label
-            <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
-              <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
-            </select>
-          </label>
-          <label>Priority
-            <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
-              <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
-            </select>
-          </label>
-          <label class="tick"><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a pull request</label>
-          <label class="tick"><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> Has no labels</label>
-          <button disabled={!on && !f.text} onClick={() => { filters.value = noFilters; }}>Clear filters{f.text ? ' and search' : ''}</button>
-        </div>
-      </Menu>
       <div class="toolbar-end">
         {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
         {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
@@ -751,6 +754,7 @@ function App() {
   return (
     <>
       <Toolbar />
+      <FilterBar />
       <PlanBanner />
       <main class={openMenu.value ? 'menu-open' : ''}>
         <div class="columns">
