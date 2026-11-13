@@ -305,6 +305,16 @@ export function nextFocus(column: Card[], leaving: Set<number>, focused: number)
   return null;
 }
 
+/** Where focus goes after a change, given the focused card's column before it and after it:
+ *  `nextFocus` over every card that left, read off the column rather than off the change asked
+ *  for. Moving a pull request also moves the issues it closes, which are often unplaced too and
+ *  right below it; counting only the cards asked for sent the focus after them, out of the
+ *  column the walk was going down. */
+export function focusAfter(before: Card[], after: Card[], focused: number): number | null {
+  const still = new Set(after.map((c) => c.number));
+  return nextFocus(before, new Set(before.map((c) => c.number).filter((n) => !still.has(n))), focused);
+}
+
 /** The action that decides what a card shows for a kind: the latest one that wasn't reverted. */
 export function latestAction(actions: Iterable<Action>, issue: number, kind: Kind): Action | undefined {
   let latest: Action | undefined;

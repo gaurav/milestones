@@ -250,6 +250,24 @@ try {
     check('and the card stays focused', (await page.textContent('.detail h2 a')).trim() === head);
   }
 
+  // --- Number keys walk down a column: each moved card hands the focus to the one below it.
+  {
+    const first = () => page.$$eval('.column:first-child .card .card-facts a, .column:first-child .card .card-title a',
+      (e) => e.map((x) => x.textContent.trim()));
+    const start = await first();
+    if (start.length >= 3) {
+      await page.click('.column:first-child .card >> nth=0'); await settle();
+      await page.keyboard.press('2'); await settle();
+      await page.keyboard.press('2'); await settle();
+      check('number keys walk down a column', (await focusedCard())?.trim() === start[2], [start.slice(0, 3), await focusedCard()]);
+      await page.keyboard.press('z'); await settle();
+      await page.keyboard.press('z'); await settle();
+      check('and z puts them back', JSON.stringify((await first()).slice(0, 3)) === JSON.stringify(start.slice(0, 3)), await first());
+    } else {
+      note('walk down a column', 'first column too short; skipped');
+    }
+  }
+
   // --- The card panel's buttons, where this build has them.
   if (await page.locator('.places .place').count()) {
     const places = () => page.$$eval('.places .place, .detail-strip .place', (e) => e.map((x) => x.textContent));
