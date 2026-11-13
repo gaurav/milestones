@@ -64,7 +64,7 @@ function Card({ card }: { card: CardData }) {
     >
       {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
           number, as a GitHub issue list has them; what kind of thing it is, then where it stands
-          (buttons, as in the panel); the labels last and small. */}
+          (buttons, as in the panel); who opened it, then the labels, last and small. */}
       <div class="card-title">{card.title}</div>
       <div class="card-facts">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
@@ -86,8 +86,9 @@ function Card({ card }: { card: CardData }) {
         </span>
         <span class="card-places"><Places card={card} onCard /></span>
       </div>
-      {labels.length > 0 && (
+      {(card.author || labels.length > 0) && (
         <div class="card-labels">
+          {card.author && <span class="author" title={`opened by ${card.author}`}>by {card.author}</span>}
           {labels.map((l) => <span title={`label: ${l.name}`}><i style={{ background: `#${l.color}` }} />{l.name}</span>)}
         </div>
       )}
@@ -616,6 +617,7 @@ function FilterBar() {
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
+  const authors = [...new Set(all.map((c) => c.author).filter((a): a is string => !!a))].sort((a, b) => a.localeCompare(b));
   const mark = (v: unknown) => (v ? 'filtering' : '');
   return (
     <div class="filterbar">
@@ -639,7 +641,13 @@ function FilterBar() {
       </label>
       <label class={mark(f.hasPr)}><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a PR</label>
       <label class={mark(f.unlabelled)}><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> No labels</label>
-      {[f.text, f.kind, f.label, f.priority, f.hasPr, f.unlabelled].some(Boolean) && <button class="clear" onClick={() => { filters.value = noFilters; }}>Clear</button>}
+      {/* Last and quiet: who opened a card is rarely what the board is narrowed by. */}
+      <label class={`secondary ${mark(f.author)}`}>by
+        <select value={f.author} onChange={(e) => set({ author: (e.target as HTMLSelectElement).value })}>
+          <option value="">anyone</option>{authors.map((a) => <option value={a}>{a}</option>)}
+        </select>
+      </label>
+      {[f.text, f.kind, f.label, f.priority, f.hasPr, f.unlabelled, f.author].some(Boolean) && <button class="clear" onClick={() => { filters.value = noFilters; }}>Clear</button>}
     </div>
   );
 }

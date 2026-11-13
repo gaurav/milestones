@@ -46,6 +46,8 @@ test('filters combine, and a bare number matches the issue number', () => {
   assert.ok(!matches(c, { ...noFilters, unlabelled: true }));
   assert.ok(!matches(c, { ...noFilters, hasPr: true }));
   assert.ok(!matches(c, { ...noFilters, kind: 'pr' }));
+  assert.ok(matches(c, { ...noFilters, author: 'a' }));
+  assert.ok(!matches(c, { ...noFilters, author: 'someone-else' }));
 });
 
 test('columns are no milestone, the open ones in server order, then closed ones with work', () => {
@@ -246,7 +248,7 @@ test('no milestone ticked is said in the URL, and is not the same as saying noth
 
 test('the filters ride in the URL while they are on, and come back from it', () => {
   const view = { by: 'milestone' as const, group: [], shown: [NONE] };
-  const f = { text: 'insulin & co', label: 'help wanted', priority: 'High', kind: 'pr' as const, hasPr: true, unlabelled: true };
+  const f = { text: 'insulin & co', label: 'help wanted', priority: 'High', kind: 'pr' as const, hasPr: true, unlabelled: true, author: 'gaurav' };
   assert.deepEqual(filtersFrom(`?${viewQuery(view, [NONE], [], f)}`), f);
   assert.equal(viewQuery(view, [NONE], [], noFilters), 'by=milestone&group=none');
   assert.deepEqual(filtersFrom('?kind=nonsense&pr=yes'), noFilters);

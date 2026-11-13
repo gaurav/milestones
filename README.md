@@ -139,8 +139,8 @@ comes first, alone; under it, the number, age, comments, the pull requests that 
 it, and sub-issues; then whether it is an issue or a pull request (a draft, closed, its issue
 type), and beside that its priority, effort and milestone — the organisation's fields, or a
 `Priority:`/`Size:` label where the field is unset, in italics. Those three are buttons, the same
-as the pane's below, and a card leaves off whichever the columns or the grouping already show. Its
-other labels come last, small. The pane on the right has the description and the rest. At its top are the card's milestone,
+as the pane's below, and a card leaves off whichever the columns or the grouping already show. Who
+opened it and its other labels come last, small; the filter row can narrow the board to one author. The pane on the right has the description and the rest. At its top are the card's milestone,
 priority and effort as buttons — click one to change it, as `m`, `p` and `e` do — and under them
 whatever has been suggested for that card. Collapse the pane (`i`) and the same buttons run down
 the strip that is left, with a count of the suggestions waiting.
