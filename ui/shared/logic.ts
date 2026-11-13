@@ -31,8 +31,9 @@ export interface Filters {
   kind: '' | 'issue' | 'pr';
   hasPr: boolean;
   unlabelled: boolean;
+  author: string;
 }
-export const noFilters: Filters = { text: '', label: '', priority: '', kind: '', hasPr: false, unlabelled: false };
+export const noFilters: Filters = { text: '', label: '', priority: '', kind: '', hasPr: false, unlabelled: false, author: '' };
 
 /** A card's priority or effort wherever it was recorded, and where: the organisation's
  *  field first, then a label, read in the field's terms ("Priority: Critical" is Urgent,
@@ -57,6 +58,25 @@ export function isValueLabel(name: string, mapping: Mapping = PLAIN_MAPPING): bo
     new RegExp(`^${(mapping[kind] ?? PLAIN_MAPPING[kind]!).prefix}\\s*:`, 'i').test(name.trim()));
 }
 
+// A pull request's size from its lines changed (additions and deletions together): each name
+// holds up to, not including, its count. These are prcoder's bands (gaurav/prcoder,
+// public/items.js), wider at the small end than GitHub's size labels, so that the two tools
+// agree on what an M is.
+export const SIZES: [string, number][] = [['XS', 50], ['S', 100], ['M', 200], ['L', 500], ['XL', 1000]];
+export const sizeOf = (lines: number) => SIZES.find(([, under]) => lines < under)?.[0] ?? 'XXL';
+
+/** A pull request's effort, estimated from its size and read through the effort label table
+ *  (`Size: M` is Medium, so an M-sized change is about Medium effort); XXL reads as XL does.
+ *  Only shown, never written or used to place a card: an estimate is not a decision. `value` is
+ *  empty when the table doesn't say. Null for an issue, or a server that sends no sizes. */
+export function estimatedEffort(card: Card, mapping: Mapping = PLAIN_MAPPING): { size: string; lines: number; value: string } | null {
+  if (card.kind !== 'pr' || card.additions === undefined || card.deletions === undefined) return null;
+  const lines = card.additions + card.deletions;
+  const size = sizeOf(lines);
+  const values = mapping.effort?.values ?? {};
+  return { size, lines, value: values[size.toLowerCase()] ?? (size === 'XXL' ? values.xl ?? '' : '') };
+}
+
 export const priorityOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'priority', mapping).value;
 export const effortOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'effort', mapping).value;
 
@@ -68,6 +88,7 @@ export function matches(card: Card, f: Filters, mapping?: Mapping): boolean {
   if (f.priority && priorityOf(card, mapping).toLowerCase() !== f.priority.toLowerCase()) return false;
   if (f.hasPr && linkedPrs(card).length === 0) return false;
   if (f.unlabelled && card.labels.length > 0) return false;
+  if (f.author && card.author !== f.author) return false;
   const text = f.text.trim().toLowerCase();
   if (!text) return true;
   if (/^#?\d+$/.test(text)) return String(card.number).startsWith(text.replace('#', ''));
@@ -147,6 +168,7 @@ export function viewQuery(
   if (f.priority) params.set('priority', f.priority);
   if (f.hasPr) params.set('pr', '1');
   if (f.unlabelled) params.set('nolabels', '1');
+  if (f.author) params.set('author', f.author);
   return params.toString();
 }
 
@@ -161,6 +183,7 @@ export function filtersFrom(search: string): Filters {
     kind: kind === 'issue' || kind === 'pr' ? kind : '',
     hasPr: params.get('pr') === '1',
     unlabelled: params.get('nolabels') === '1',
+    author: params.get('author') ?? '',
   };
 }
 

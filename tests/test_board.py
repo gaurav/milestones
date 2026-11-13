@@ -53,11 +53,12 @@ def test_norm_issue_reads_fields_and_keeps_mentions_apart_from_closers():
 
 
 def test_norm_pr_carries_only_the_issues_it_closes_in_its_own_repo():
-    node = issue_node(20, isDraft=True, closingIssuesReferences={"nodes": [
+    node = issue_node(20, isDraft=True, additions=120, deletions=30, closingIssuesReferences={"nodes": [
         {"number": 7, "title": "a", "state": "OPEN", "repository": {"nameWithOwner": "o/r"}},
         {"number": 8, "title": "b", "state": "OPEN", "repository": {"nameWithOwner": "x/y"}}]})
     card = data.norm_pr(node, "o/r")
     assert card["kind"] == "pr" and card["draft"] is True
+    assert (card["additions"], card["deletions"]) == (120, 30)
     assert [c["number"] for c in card["closes"]] == [7]
 
 

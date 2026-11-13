@@ -4,13 +4,13 @@
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9; --panel: #fff; --ink: #1f2328; --muted: #656d76; --line: #d0d7de;
-  --accent: #0969da; --focus: #0969da; --select: #ddf4ff; --warn: #9a6700; --bad: #cf222e;
+  --accent: #0969da; --focus: #0969da; --select: #ddf4ff; --warn: #9a6700; --bad: #cf222e; --good: #1a7f37;
   --chip: #eaeef2;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8d96a0; --line: #30363d;
-    --accent: #4493f8; --focus: #4493f8; --select: #12304f; --warn: #d29922; --bad: #f85149;
+    --accent: #4493f8; --focus: #4493f8; --select: #12304f; --warn: #d29922; --bad: #f85149; --good: #3fb950;
     --chip: #21262d;
   }
 }
@@ -44,6 +44,8 @@ small { color: var(--muted); }
 .filterbar label { display: inline-flex; align-items: center; gap: 0.375rem; white-space: nowrap; color: var(--muted); }
 .filterbar select { max-width: 14em; }
 .filterbar .clear { margin-left: auto; }
+.filterbar .secondary { font-size: 0.8125rem; }
+.filterbar .secondary select { font-size: 0.8125rem; max-width: 10em; }
 .filtering { color: var(--accent); }
 .filterbar .filtering select, .filterbar input.filtering { border-color: var(--accent); }
 /* The right-hand group. Its auto margin takes the row's spare room, and when the bar wraps it
@@ -85,9 +87,19 @@ main { flex: 1; display: flex; min-height: 0; }
 .tag.kind.pr { color: #8250df; border-color: #8250df; }
 .card .place { font-size: 0.75rem; line-height: 1.375rem; padding: 0 0.5rem; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; }
 .card .place.from-label { font-style: italic; }
+/* A pull request's effort estimated from its size, where none is recorded: `~M`. */
+.card .place.estimate, .tag.estimate { font-style: italic; }
+.card-facts .diff ins { color: var(--good); text-decoration: none; }
+.card-facts .diff del { color: var(--bad); text-decoration: none; }
 .card-labels { display: flex; flex-wrap: wrap; gap: 0.125rem 0.625rem; color: var(--muted); font-size: 0.75rem; }
 .card-labels span { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
 .card-labels i { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex: none; }
+/* What a card is tied to: who is assigned, the issues it closes; one row, a dot between. */
+.card-ties { display: flex; flex-wrap: wrap; gap: 0.125rem 0.375rem; color: var(--ink); opacity: 0.75; font-size: 0.75rem; }
+.card-ties > span + span::before { content: "·"; color: var(--muted); margin-right: 0.375rem; }
+.card-ties .profile { color: var(--muted); margin-left: 0.125rem; text-decoration: none; }
+.card-ties .profile:hover { color: var(--accent); }
+.card-ties a:not(.profile) { color: inherit; }
 
 .chip, .label { display: inline-block; border-radius: 0.75rem; padding: 0 0.5rem; font-size: 0.8125rem; line-height: 1.5rem; white-space: nowrap; }
 .chip { background: var(--chip); }

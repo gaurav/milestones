@@ -17,8 +17,8 @@ URL, and is the place to start a new one.
   `--by` and `--group`) are hints of the same kind. The page rewrites the query string as the
   view changes (`viewQuery` in `ui/shared/logic.ts`), so that a reload opens the same columns.
   One empty `from=` means no milestone is ticked. The page also keeps its filters there while
-  they are on — `q` (the search), `kind`, `label`, `priority`, `pr=1`, `nolabels=1` — and unlike
-  the view they are saved nowhere else, so a new run starts with none.
+  they are on — `q` (the search), `kind`, `label`, `priority`, `pr=1`, `nolabels=1`, `author` —
+  and unlike the view they are saved nowhere else, so a new run starts with none.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.
@@ -40,7 +40,7 @@ URL, and is the place to start a new one.
 | `type`, `parent`, `subIssues`, `projects` | issues only: issue type name, `{number, title}`, `{total, completed}`, how many projects it is in |
 | `fields` | issues only: the organisation's issue fields by name, e.g. `{"Priority": "High"}` |
 | `closingPrs`, `mentionedPrs` | issues only: `[{number, title, state, draft, url}]`; a pull request appears in one list, never both |
-| `draft`, `closes` | pull requests only: `closes` is `[{number, title, state}]`, issues in the same repo |
+| `draft`, `closes`, `additions`, `deletions` | pull requests only: `closes` is `[{number, title, state}]`, issues in the same repo; `additions` and `deletions` are lines added and removed, from which the page estimates effort |
 | `closed` | absent until this session closes the card, then the reason; a refresh drops closed cards |
 
 **Milestone** — `{number, title, state, due, description, url}`; `state` is `"open"` or

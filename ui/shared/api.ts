@@ -31,6 +31,9 @@ export interface Card {
   // Pull requests only.
   draft?: boolean;
   closes?: { number: number; title: string; state: string }[];
+  /** Pull requests only: lines added and removed. */
+  additions?: number;
+  deletions?: number;
   /** Set once this session closes the card: the reason. A refresh drops closed cards. */
   closed?: string | null;
 }

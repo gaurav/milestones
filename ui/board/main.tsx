@@ -4,10 +4,10 @@ import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
+import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
-  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel, linkedPrs,
-  noFilters, pickerMatches, priorityOf, sections, shownByLayout,
+  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel,
+  estimatedEffort, noFilters, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
@@ -45,9 +45,11 @@ function Card({ card }: { card: CardData }) {
   const isFocused = focused.value === card.number;
   const isSelected = selected.value.has(card.number);
   useEffect(() => { if (isFocused) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [isFocused]);
-  const prs = linkedPrs(card);
   const labels = card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping));
   const waiting = openSuggestions.value.filter((s) => s.issue === card.number).length;
+  const closes = card.closes ?? [];
+  const closedBy = card.closingPrs ?? [];
+  const mentionedIn = card.mentionedPrs ?? [];
   return (
     <div
       ref={ref}
@@ -64,16 +66,20 @@ function Card({ card }: { card: CardData }) {
     >
       {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
           number, as a GitHub issue list has them; what kind of thing it is, then where it stands
-          (buttons, as in the panel); the labels last and small. */}
+          (buttons, as in the panel); then, small, what it is tied to (who is assigned, the issues
+          a pull request closes, the pull requests that close or only mention an issue), and its
+          labels on a row of their own. The author is among the facts, as
+          `@login`. */}
       <div class="card-title">{card.title}</div>
       <div class="card-facts">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
         <span title={`updated ${card.updated.slice(0, 10)}, opened ${card.created.slice(0, 10)}`}>{age(card.updated)}</span>
+        {card.additions !== undefined && card.deletions !== undefined && (
+          <span class="diff" title="lines added and removed"><ins>+{card.additions}</ins> <del>−{card.deletions}</del></span>
+        )}
         {card.comments > 0 && <span title="comments">💬 {card.comments}</span>}
-        {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
-        {(card.closes?.length ?? 0) > 0 && <span title="issues this pull request closes">closes {card.closes!.map((c) => `#${c.number}`).join(' ')}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
-        {card.assignees.length > 0 && <span title="assignees">@{card.assignees.join(' @')}</span>}
+        {card.author && <span class="author" title={`opened by ${card.author}`}>@{card.author}</span>}
         {waiting > 0 && <span class="suggested" title="Has suggestions waiting for you">✎ {waiting}</span>}
         <Status action={cardStatus(actions.value.values(), card.number)} />
       </div>
@@ -86,6 +92,34 @@ function Card({ card }: { card: CardData }) {
         </span>
         <span class="card-places"><Places card={card} onCard /></span>
       </div>
+      {(card.assignees.length > 0 || closes.length > 0 || closedBy.length > 0 || mentionedIn.length > 0) && (
+        <div class="card-ties">
+          {card.assignees.length > 0 && (
+            <span class="assigned">
+              assigned to{' '}
+              {/* The name is where a click will open a picker to reassign (#55); the arrow goes to
+                  their profile on GitHub. */}
+              {card.assignees.map((login, i) => (
+                <>
+                  {i > 0 && ', '}
+                  <span class="who">{login}</span>
+                  <a class="profile" href={`https://github.com/${login}`} target="_blank" rel="noreferrer"
+                    title={`${login} on GitHub`} onClick={(e) => e.stopPropagation()}>↗</a>
+                </>
+              ))}
+            </span>
+          )}
+          {closes.length > 0 && (
+            <span class="closes" title={`Closes, when it merges:\n${closes.map((c) => `#${c.number} ${c.title}`).join('\n')}`}>
+              closes {closes.map((c) => `#${c.number}`).join(', ')}
+            </span>
+          )}
+          {/* Which pull requests would close it when they merge, and which only mention it, is
+              the difference worth seeing, so they are two lists rather than one count. */}
+          {closedBy.length > 0 && <span class="closed-by">closed by <PrNumbers prs={closedBy} /></span>}
+          {mentionedIn.length > 0 && <span class="mentioned-in">mentioned in <PrNumbers prs={mentionedIn} /></span>}
+        </div>
+      )}
       {labels.length > 0 && (
         <div class="card-labels">
           {labels.map((l) => <span title={`label: ${l.name}`}><i style={{ background: `#${l.color}` }} />{l.name}</span>)}
@@ -190,16 +224,28 @@ function Places({ card, onCard = false }: { card: CardData; onCard?: boolean }) 
     modal.value = kind;
   };
   const shown = (kind: DimKind) => !onCard || !shownByLayout(kind, dimension.value, groupBy.value);
+  // A pull request's size, as an effort estimate, where nothing has been recorded: on a card
+  // only, since the panel has room to say what is actually set.
+  const estimate = onCard ? estimatedEffort(card, layout.value.mapping) : null;
+  const estimateTip = estimate && `Estimated from ${estimate.lines} lines changed (+${card.additions} −${card.deletions}): `
+    + `size ${estimate.size}${estimate.value ? `, about ${estimate.value} effort` : ''}.`;
   const value = (kind: 'priority' | 'effort') => {
-    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) return null;
+    // Shown even when the layout shows effort: its heading then says "no effort", which the
+    // estimate adds to rather than repeats.
+    const guess = kind === 'effort' ? estimate : null;
+    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) {
+      return guess && <span class="tag estimate" title={`${estimateTip} A pull request can't hold the Effort field.`}>~{guess.size}</span>;
+    }
     const found = effectiveValue(card, kind, layout.value.mapping);
     const fromLabel = found.from === 'label';
-    if (!shown(kind) && !fromLabel) return null;
-    const text = !shown(kind) ? 'from label'
-      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}` : `no ${kind}`;
+    const guessed = !found.value && guess;
+    if (!shown(kind) && !fromLabel && !guessed) return null;
+    const text = !shown(kind) && fromLabel ? 'from label'
+      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}`
+      : guessed ? `~${guess.size}` : `no ${kind}`;
     return (
-      <button class={`place${found.value ? '' : ' unset'}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
-        title={`${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
+      <button class={`place${found.value ? '' : ' unset'}${guessed ? ' estimate' : ''}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
+        title={guessed ? `${estimateTip} Set it (e).` : `${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
         {text}
       </button>
     );
@@ -461,6 +507,20 @@ function AskDialog() {
   );
 }
 
+function PrNumbers({ prs }: { prs: PrRef[] }) {
+  return (
+    <>
+      {prs.map((p, i) => (
+        <>
+          {i > 0 && ', '}
+          <a href={p.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            title={`#${p.number} ${p.title} (${p.draft ? 'draft' : p.state.toLowerCase()})`}>#{p.number}</a>
+        </>
+      ))}
+    </>
+  );
+}
+
 function PrLink({ pr }: { pr: { number: number; title: string; state: string; draft: boolean; url: string } }) {
   return <div><a href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a> {pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small></div>;
 }
@@ -616,6 +676,7 @@ function FilterBar() {
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
+  const authors = [...new Set(all.map((c) => c.author).filter((a): a is string => !!a))].sort((a, b) => a.localeCompare(b));
   const mark = (v: unknown) => (v ? 'filtering' : '');
   return (
     <div class="filterbar">
@@ -639,7 +700,13 @@ function FilterBar() {
       </label>
       <label class={mark(f.hasPr)}><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a PR</label>
       <label class={mark(f.unlabelled)}><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> No labels</label>
-      {[f.text, f.kind, f.label, f.priority, f.hasPr, f.unlabelled].some(Boolean) && <button class="clear" onClick={() => { filters.value = noFilters; }}>Clear</button>}
+      {/* Last and quiet: who opened a card is rarely what the board is narrowed by. */}
+      <label class={`secondary ${mark(f.author)}`}>by
+        <select value={f.author} onChange={(e) => set({ author: (e.target as HTMLSelectElement).value })}>
+          <option value="">anyone</option>{authors.map((a) => <option value={a}>{a}</option>)}
+        </select>
+      </label>
+      {[f.text, f.kind, f.label, f.priority, f.hasPr, f.unlabelled, f.author].some(Boolean) && <button class="clear" onClick={() => { filters.value = noFilters; }}>Clear</button>}
     </div>
   );
 }
