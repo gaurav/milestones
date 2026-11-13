@@ -181,14 +181,17 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .segmented button:last-child { border-radius: 0 6px 6px 0; }
 .segmented button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .column.inbox { border-style: dashed; }
-.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.5rem 0.125rem 0.25rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
+.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.1875rem 0.125rem; margin-top: 0.3125rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
+/* The space above a heading is margin, not padding, so that the bar down its left is no taller
+   than the text needs and the text sits in the middle of it. */
 .group-head:hover { text-decoration: underline; }
 /* Each part of a heading takes the colour of its place in its own scale, most pressing or
    largest (Urgent, XL) warmest, so "High · S" can be picked out by eye; the bar down the left is
    the first part's. What nobody has judged is blue, so that it is as easy to find: the text
    darker than the bar, to stay readable. */
-.group-head:not(.level--1) { border-left: 0.25rem solid currentColor; padding-left: 0.375rem; }
-.group-head.level-0 { border-left-color: #54aeff; }
+/* An inset shadow rather than a border, which would meet the line below at a slant. */
+.group-head:not(.level--1) { box-shadow: inset 0.25rem 0 0 currentColor; padding-left: 0.625rem; }
+.group-head.level-0 { box-shadow: inset 0.25rem 0 0 #54aeff; }
 .group-head .sep, .group-head small { color: var(--muted); }
 /* A little brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
    bold and is there to be spotted. Light and dark, in that order. */
