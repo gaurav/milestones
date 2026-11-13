@@ -1,7 +1,9 @@
 // The column view: one column per milestone, cards you move by key, by drag or by picker.
 // Everything it knows about GitHub comes through ui/shared/.
 import { render } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import type { ComponentChildren } from 'preact';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, linkedPrs, noFilters,
@@ -460,28 +462,61 @@ function Picker() {
   );
 }
 
+/** The toolbar menu that is open, by name: one at a time, so two never overlap. */
+const openMenu = signal<string | null>(null);
+
+/** A button that drops a panel under itself. It closes on a press anywhere outside and on
+ *  Escape. A press in the card panel's description would not count — that is a sandboxed frame,
+ *  whose events never reach this document — so `main` is given `menu-open` while a menu is, and
+ *  the stylesheet lets presses through the frame for as long. `align` is the edge of the button the panel hangs from; a menu at the right of the toolbar
+ *  hangs from its right edge, so that it opens into the page and not off it. */
+function Menu({ name, label, title, align = 'left', wide, children }: {
+  name: string; label: ComponentChildren; title?: string; align?: 'left' | 'right'; wide?: boolean; children: ComponentChildren;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const open = openMenu.value === name;
+  // A layout effect, so the listeners are there as soon as the panel is: a plain effect waits
+  // for the next frame, and an Escape sent straight after the click (by a script) was missed.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const close = () => { if (openMenu.value === name) openMenu.value = null; };
+    const outside = (e: Event) => { if (!ref.current?.contains(e.target as Node)) close(); };
+    // Captured, and stopped: Escape closes the menu and does not go on to clear the selection.
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    document.addEventListener('pointerdown', outside, true);
+    window.addEventListener('keydown', key, true);
+    return () => {
+      document.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('keydown', key, true);
+    };
+  }, [open]);
+  return (
+    <div class="menu" ref={ref}>
+      <button class={open ? 'on' : ''} aria-haspopup="true" aria-expanded={open} title={title} onClick={() => { openMenu.value = open ? null : name; }}>{label}</button>
+      {open && <div class={`menu-body ${align}${wide ? ' wide' : ''}`}>{children}</div>}
+    </div>
+  );
+}
+
 /** Which milestones are on show. In the milestone view they are the columns; in the
  *  priority and effort views they are the scope — whose cards are being sorted. */
 function ColumnsMenu() {
   const all = milestoneColumns.value;
   const count = (id: ColumnId) => [...cards.value.values()].filter((c) => (c.milestone ?? NONE) === id).length;
   return (
-    <details class="menu">
-      <summary>{dimension.value === 'milestone' ? 'Columns' : 'In milestones'} ({shown.value.length}/{all.length})</summary>
-      <div class="menu-body">
-        <div class="menu-actions">
-          <button onClick={() => { shown.value = [...all]; }}>All</button>
-          <button onClick={() => { shown.value = []; }}>None</button>
-        </div>
-        {all.map((id) => (
-          <label>
-            <input type="checkbox" checked={shown.value.includes(id)} onChange={() => toggleColumn(id)} />
-            {columnTitle(id, 'milestone')}{milestones.value.get(id as number)?.state === 'closed' ? ' (closed)' : ''}
-            <small>{count(id)}</small>
-          </label>
-        ))}
+    <Menu name="columns" align="right" wide label={`${dimension.value === 'milestone' ? 'Columns' : 'In milestones'} (${shown.value.length}/${all.length})`}>
+      <div class="menu-actions">
+        <button onClick={() => { shown.value = [...all]; }}>All</button>
+        <button onClick={() => { shown.value = []; }}>None</button>
       </div>
-    </details>
+      {all.map((id) => (
+        <label>
+          <input type="checkbox" checked={shown.value.includes(id)} onChange={() => toggleColumn(id)} />
+          {columnTitle(id, 'milestone')}{milestones.value.get(id as number)?.state === 'closed' ? ' (closed)' : ''}
+          <small>{count(id)}</small>
+        </label>
+      ))}
+    </Menu>
   );
 }
 
@@ -495,7 +530,9 @@ const GROUPINGS: { label: string; by: DimKind[] }[] = [
 
 /** What the columns are, and what the cards in a column are grouped by. */
 function ViewControls() {
-  const current = groupBy.value.join(',');
+  // What is in effect, not what is saved: a grouping by what the columns already are does
+  // nothing, and its option is not offered, so the select would otherwise show another's label.
+  const current = groupBy.value.filter((k) => k !== dimension.value).join(',');
   return (
     <>
       <span class="segmented" title="What the columns are (v)">
@@ -544,30 +581,30 @@ function Toolbar() {
       <label><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> has PR</label>
       <label><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> no labels</label>
       {active && <button onClick={() => { filters.value = noFilters; }}>Clear</button>}
-      <span class="spacer" />
-      {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
-      {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
-        {unsaved.filter((a) => a.status === 'failed').length ? `${unsaved.filter((a) => a.status === 'failed').length} not saved` : `saving ${unsaved.length}…`}
-      </span>}
-      <button class={openSuggestions.value.length ? 'has-suggestions' : ''} onClick={() => { trayOpen.value = !trayOpen.value; }} title="What the board's rules and your agents propose (s)">
-        Suggestions ({openSuggestions.value.length})
-      </button>
-      <ColumnsMenu />
-      <button onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
-      <details class="menu">
-        <summary>Keys</summary>
-        <div class="menu-body keys">
-          <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
-          <div><kbd>v</kbd> columns by milestone, priority, effort</div>
-          <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
-          <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
-          <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
-          <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-          <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
-          <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
-          <div>Drag a card, or a selection, onto a column.</div>
-        </div>
-      </details>
+      <div class="toolbar-end">
+        {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
+        {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
+          {unsaved.filter((a) => a.status === 'failed').length ? `${unsaved.filter((a) => a.status === 'failed').length} not saved` : `saving ${unsaved.length}…`}
+        </span>}
+        <button class={openSuggestions.value.length ? 'has-suggestions' : ''} onClick={() => { trayOpen.value = !trayOpen.value; }} title="What the board's rules and your agents propose (s)">
+          Suggestions ({openSuggestions.value.length})
+        </button>
+        <ColumnsMenu />
+        <button onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
+        <Menu name="keys" align="right" label="Keys">
+          <div class="keys">
+            <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
+            <div><kbd>v</kbd> columns by milestone, priority, effort</div>
+            <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
+            <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
+            <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
+            <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
+            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
+            <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
+            <div>Drag a card, or a selection, onto a column.</div>
+          </div>
+        </Menu>
+      </div>
     </header>
   );
 }
@@ -600,7 +637,8 @@ function PlanBanner() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.metaKey || e.ctrlKey || e.altKey || modal.value) return;
+  // An open menu has the keyboard: j or 1 behind it would move a card nobody is looking at.
+  if (e.metaKey || e.ctrlKey || e.altKey || modal.value || openMenu.value) return;
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const key = e.key;
@@ -644,7 +682,7 @@ function App() {
     <>
       <Toolbar />
       <PlanBanner />
-      <main>
+      <main class={openMenu.value ? 'menu-open' : ''}>
         <div class="columns">
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}
           {visibleColumns.value.length === 0 && <p class="empty">No columns shown. Pick some under Columns.</p>}

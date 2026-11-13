@@ -242,6 +242,13 @@ far more than `_norm_issue` keeps.
   the POST may still be in flight when the page reloads; a new view setting that a flag can set
   needs the same. Only the token is in the fragment, and it stays there: it is what lets a
   request write to GitHub, and a fragment is never sent in a request line or a Referer.
+- A toolbar dropdown is `Menu` in `ui/board/main.tsx`, not `<details>`, which closes on nothing
+  but its own summary. One `openMenu` signal means one open at a time, and `onKey` stands down
+  while it is set. The card panel's description is a sandboxed iframe whose clicks never reach
+  the document, so `main.menu-open iframe` gets `pointer-events: none` for as long as a menu is
+  open; a listener for window `blur` was tried for that and does not fire in headless Chromium.
+  Its listeners go on in a layout effect: a plain effect waits a frame, and a scripted Escape
+  sent straight after the click was missed.
 - A read-only board saves its changes to a plan file (`board/plan.py`; `Board.save_plan` after
   every submit and resolve). The plan is the **net** of the `would` actions, so an undone change
   is not in it. A writable board never applies a plan by itself: `review_plan` turns it into
