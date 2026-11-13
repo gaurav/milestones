@@ -4,7 +4,7 @@ import { computed, effect, signal } from '@preact/signals';
 import { Api, parseLocation } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
-  DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialView,
+  DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, filtersFrom, group, initialView,
   latestAction, nextFocus, noFilters, unsettled, viewQuery, withValue,
 } from './logic.ts';
 import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
@@ -19,7 +19,7 @@ export const board = signal<BoardData | null>(null);
 export const cards = signal<Map<number, Card>>(new Map());
 export const milestones = signal<Map<number, Milestone>>(new Map());
 export const actions = signal<Map<number, Action>>(new Map());
-export const filters = signal<Filters>(noFilters);
+export const filters = signal<Filters>(filtersFrom(location.search));
 /** The milestone columns ticked under Columns. In the priority and effort views these are
  *  the scope instead: which milestones' cards are being sorted. */
 export const shown = signal<ColumnId[]>([]);
@@ -145,8 +145,11 @@ function rememberView() {
   // And say it in the URL, which is what a reload reads first. replaceState, so that ticking a
   // column is not a stop on the way Back; the fragment, where the token is, is kept as it is.
   effect(() => {
-    const now = `?${viewQuery({ by: dimension.value, group: groupBy.value, shown: shown.value }, milestoneColumns.value, [...milestones.value.values()])}`;
-    if (location.search !== now) history.replaceState(null, '', `${location.pathname}${now}${location.hash}`);
+    const now = `?${viewQuery({ by: dimension.value, group: groupBy.value, shown: shown.value }, milestoneColumns.value, [...milestones.value.values()], filters.value)}`;
+    if (location.search === now) return;
+    // Safari refuses more than a hundred of these in thirty seconds, which fast typing in the
+    // search box could reach; a URL one keystroke behind is better than an exception.
+    try { history.replaceState(null, '', `${location.pathname}${now}${location.hash}`); } catch { /* next change will catch up */ }
   });
 }
 
