@@ -49,6 +49,14 @@ export function effectiveValue(card: Card, kind: 'priority' | 'effort', mapping:
   return { value: '', from: '' };
 }
 
+/** Whether a label is one a card's priority or effort is read from — "Priority: High",
+ *  "Size: M", "Effort: Low" — whatever comes after the colon. A card shows those as chips, so
+ *  drawing the label as well says it twice. */
+export function isValueLabel(name: string, mapping: Mapping = PLAIN_MAPPING): boolean {
+  return (['priority', 'effort'] as const).some((kind) =>
+    new RegExp(`^${(mapping[kind] ?? PLAIN_MAPPING[kind]!).prefix}\\s*:`, 'i').test(name.trim()));
+}
+
 export const priorityOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'priority', mapping).value;
 export const effortOf = (card: Card, mapping?: Mapping) => effectiveValue(card, 'effort', mapping).value;
 
@@ -142,7 +150,7 @@ export interface Layout {
   milestones: Milestone[];
 }
 
-const FIELD_OF = { priority: 'Priority', effort: 'Effort' } as const;
+export const FIELD_OF = { priority: 'Priority', effort: 'Effort' } as const;
 
 /** Whether the owner has the issue field a dimension writes to. Without it the value lives
  *  in a label, which a pull request can carry; with it, a pull request has nowhere to. */

@@ -6,8 +6,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
-  DIMENSIONS, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, linkedPrs, noFilters,
-  pickerMatches, priorityOf, sections,
+  DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel, linkedPrs,
+  noFilters, pickerMatches, priorityOf, sections,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
@@ -84,7 +84,7 @@ function Card({ card }: { card: CardData }) {
           </span>
         )}
         {card.type && <span class="chip type">{card.type}</span>}
-        {card.labels.filter((l) => !/^(priority|size):/i.test(l.name)).map((l) => (
+        {card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping)).map((l) => (
           <span class="label" style={{ background: `#${l.color}`, color: inkOn(l.color) }}>{l.name}</span>
         ))}
       </div>
@@ -182,13 +182,47 @@ function CollapseButton() {
   return <button class="collapse" title="Collapse this panel (i)" aria-label="Collapse the card panel" onClick={() => { detailOpen.value = false; }}>›</button>;
 }
 
-/** The card panel, collapsed: one button to open it again, with the focused card's number so
- *  the strip still says what it would show. */
+/** The focused card's milestone, priority and effort, each a button that opens the dialog its
+ *  key does (m, p, e) — so a click here changes the whole selection when the focused card is
+ *  part of one, exactly as the key would. Priority and effort are left off a pull request where
+ *  they are an issue field, which a pull request cannot hold. */
+function Places({ card }: { card: CardData }) {
+  const milestone = card.milestone === null ? undefined : milestones.value.get(card.milestone);
+  const value = (kind: 'priority' | 'effort') => {
+    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) return null;
+    const found = effectiveValue(card, kind, layout.value.mapping);
+    return (
+      <button class={`place${found.value ? '' : ' unset'}${kind === 'priority' && found.value ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
+        title={`${FIELD_OF[kind]}${found.from === 'label' ? ', read from a label' : ''}: change it (${kind[0]})`} onClick={() => { modal.value = kind; }}>
+        {found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${found.from === 'label' ? ' ·label' : ''}` : `no ${kind}`}
+      </button>
+    );
+  };
+  return (
+    <>
+      <button class={`place${milestone ? '' : ' unset'}`} title="Milestone: change it (m)" onClick={() => { modal.value = 'milestone'; }}>
+        {milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'no milestone'}
+      </button>
+      {value('priority')}
+      {value('effort')}
+    </>
+  );
+}
+
+/** The card panel, collapsed: a button to open it again, and what the strip can still usefully
+ *  say and do about the focused card — its number, where it stands (each a way to change it),
+ *  and how many suggestions are waiting, which opens the panel on them. */
 function DetailStrip() {
+  const card = focused.value === null ? undefined : cards.value.get(focused.value);
+  const waiting = card ? openSuggestions.value.filter((s) => s.issue === card.number).length : 0;
   return (
     <aside class="detail-strip">
-      <button title="Show the card panel (i)" aria-label="Show the card panel" onClick={() => { detailOpen.value = true; }}>‹</button>
-      {focused.value !== null && <span>#{focused.value}</span>}
+      <button class="open" title="Show the card panel (i)" aria-label="Show the card panel" onClick={() => { detailOpen.value = true; }}>‹</button>
+      {card && <span>#{card.number}</span>}
+      {card && <Places card={card} />}
+      {waiting > 0 && (
+        <button class="place suggested" title="Suggestions waiting for you on this card: show them" onClick={() => { detailOpen.value = true; }}>✎ {waiting}</button>
+      )}
     </aside>
   );
 }
@@ -196,8 +230,8 @@ function DetailStrip() {
 function Detail() {
   const card = focused.value === null ? undefined : cards.value.get(focused.value);
   if (!card) return <aside class="detail"><div class="detail-head"><p class="empty">No card in focus.</p><CollapseButton /></div></aside>;
-  const milestone = card.milestone === null ? undefined : milestones.value.get(card.milestone);
-  const fields = Object.entries(card.fields ?? {});
+  // Priority and Effort are among the controls at the top; the rest are only shown.
+  const fields = Object.entries(card.fields ?? {}).filter(([k]) => k !== FIELD_OF.priority && k !== FIELD_OF.effort);
   // GitHub has already sanitised bodyHTML; the sandbox (no scripts, no same-origin) is the
   // second lock. Links open in a new tab, since the frame itself may not navigate.
   const doc = `<!doctype html><base target="_blank"><style>
@@ -213,12 +247,17 @@ function Detail() {
         <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
         <CollapseButton />
       </div>
+      <div class="places"><Places card={card} /></div>
+      {/* Above the facts about the card: what is waiting on a decision comes first. */}
+      <Suggestions list={openSuggestions.value.filter((s) => s.issue === card.number)} />
       <dl>
-        <dt>Milestone</dt><dd>{milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'none'}</dd>
         <dt>Opened</dt><dd>{card.created.slice(0, 10)} by {card.author ?? 'a deleted account'}; updated {card.updated.slice(0, 10)}; {card.comments} comment{card.comments === 1 ? '' : 's'}</dd>
         {card.type && <><dt>Type</dt><dd>{card.type}</dd></>}
         {fields.length > 0 && <><dt>Fields</dt><dd>{fields.map(([k, v]) => `${k}: ${v}`).join(' · ')}</dd></>}
-        {card.labels.length > 0 && <><dt>Labels</dt><dd>{card.labels.map((l) => <span class="label" style={{ background: `#${l.color}`, color: inkOn(l.color) }}>{l.name}</span>)}</dd></>}
+        <dt>Labels</dt><dd>
+          {card.labels.map((l) => <span class="label" style={{ background: `#${l.color}`, color: inkOn(l.color) }}>{l.name}</span>)}
+          <button class="place unset" title="Add or remove labels (L)" onClick={() => { modal.value = 'labels'; }}>{card.labels.length ? 'edit' : 'add a label'}</button>
+        </dd>
         {card.assignees.length > 0 && <><dt>Assignees</dt><dd>{card.assignees.join(', ')}</dd></>}
         {card.parent && <><dt>Parent</dt><dd>#{card.parent.number} {card.parent.title}</dd></>}
         {(card.subIssues?.total ?? 0) > 0 && <><dt>Sub-issues</dt><dd>{card.subIssues!.completed} of {card.subIssues!.total} done</dd></>}
@@ -230,7 +269,6 @@ function Detail() {
       <div class="detail-actions">
         <button onClick={() => { modal.value = 'ask'; }} title="Copy a prompt for a coding agent; its answer comes back as suggestions (a)">Ask an agent…</button>
       </div>
-      <Suggestions list={openSuggestions.value.filter((s) => s.issue === card.number)} />
       <iframe class="body" sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc={doc} title="Description" />
     </aside>
   );

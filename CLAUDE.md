@@ -249,6 +249,11 @@ far more than `_norm_issue` keeps.
   open; a listener for window `blur` was tried for that and does not fire in headless Chromium.
   Its listeners go on in a layout effect: a plain effect waits a frame, and a scripted Escape
   sent straight after the click was missed.
+- The card panel changes a card only by opening the dialog a key opens (`Places` in
+  `ui/board/main.tsx` sets `modal`), never with a control of its own: the dialogs already act on
+  `targets()`, ask before reopening a closed milestone, and are undoable, and a second way in
+  would have to repeat all three. `isValueLabel` in `logic.ts` is what hides a label a chip
+  already speaks for; it reads the prefixes from the snapshot's `labelValues`.
 - A dialog's field takes the keyboard through `ref={focusOnMount}`, not `autoFocus`: a browser
   ignores the attribute while another element has focus, so a dialog opened by clicking a button
   (rather than by its key) got no typing and no Escape. Use it for any field a click can open.
