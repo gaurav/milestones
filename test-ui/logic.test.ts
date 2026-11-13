@@ -6,7 +6,7 @@ import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
   effectiveValue, effortOf, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
-  noFilters, pickerMatches, priorityOf, sections, unsettled, viewQuery, withValue,
+  noFilters, pickerMatches, priorityOf, sections, shownByLayout, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
 const card = (number: number, extra: Partial<Card> = {}): Card => ({
@@ -250,4 +250,11 @@ test('the filters ride in the URL while they are on, and come back from it', () 
   assert.deepEqual(filtersFrom(`?${viewQuery(view, [NONE], [], f)}`), f);
   assert.equal(viewQuery(view, [NONE], [], noFilters), 'by=milestone&group=none');
   assert.deepEqual(filtersFrom('?kind=nonsense&pr=yes'), noFilters);
+});
+
+test('a value the columns or the grouping already show is shown by the layout', () => {
+  assert.equal(shownByLayout('priority', 'priority', []), true);
+  assert.equal(shownByLayout('priority', 'milestone', ['effort', 'priority']), true);
+  assert.equal(shownByLayout('effort', 'milestone', ['priority']), false);
+  assert.equal(shownByLayout('milestone', 'priority', []), false);
 });

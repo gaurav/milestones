@@ -78,7 +78,7 @@ const query = async () => Object.fromEntries(new URLSearchParams(await search())
 const heads = () => page.$$eval('.column-title', (els) => els.map((e) => e.textContent.replace(/^\d/, '')));
 const menus = () => page.locator('.menu-body').count();
 const menu = (label) => page.click(`.menu > button:has-text("${label}")`);
-const focusedCard = () => page.$eval('.card.focused .card-title a', (e) => e.textContent).catch(() => null);
+const focusedCard = () => page.$eval('.card.focused .card-facts a, .card.focused .card-title a', (e) => e.textContent).catch(() => null);
 
 try {
   await page.goto(url);
@@ -153,6 +153,20 @@ try {
     await menu('Columns');
     await page.mouse.click(frame.x + frame.width / 2, frame.y + Math.min(40, frame.height / 2)); await settle();
     check('so does a click in the description', (await menus()) === 0);
+  }
+
+  // --- A card: its title holds nothing but the title, and its buttons are the panel's, for that card.
+  if (await page.locator('.card-places').count()) {
+    check("a card's title holds only its title", (await page.locator('.card-title .chip, .card-title a').count()) === 0);
+    const other = page.locator('.card:not(.focused)').filter({ has: page.locator('.card-places .place') }).first();
+    const number = (await other.locator('.card-facts a').textContent()).trim();
+    await other.locator('.card-places .place').first().click(); await settle();
+    check("a card's button focuses that card and opens its dialog",
+      (await page.textContent('.card.focused .card-facts a')).trim() === number && (await page.locator('.picker').count()) === 1,
+      [number, await page.textContent('.picker-head')]);
+    await page.keyboard.press('Escape'); await settle();
+  } else {
+    note('card buttons', 'not in this build; skipped');
   }
 
   // --- The card panel's buttons, where this build has them.

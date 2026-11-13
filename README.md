@@ -134,10 +134,13 @@ checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is
 milestone); the rest are under **Columns**, including any closed milestone that still has open
 work on it.
 
-A card shows what has already been decided about it, wherever that was written down: its labels,
-the organisation's Priority and Effort fields (or a `Priority:`/`Size:` label where the field is
-unset), its issue type, the pull requests that close or mention it, sub-issues, age and comments.
-The pane on the right has the description and the rest. At its top are the card's milestone,
+A card shows what has already been decided about it, wherever that was written down. Its title
+comes first, alone; under it, the number, age, comments, the pull requests that close or mention
+it, and sub-issues; then whether it is an issue or a pull request (a draft, closed, its issue
+type), and beside that its priority, effort and milestone — the organisation's fields, or a
+`Priority:`/`Size:` label where the field is unset, in italics. Those three are buttons, the same
+as the pane's below, and a card leaves off whichever the columns or the grouping already show. Its
+other labels come last, small. The pane on the right has the description and the rest. At its top are the card's milestone,
 priority and effort as buttons — click one to change it, as `m`, `p` and `e` do — and under them
 whatever has been suggested for that card. Collapse the pane (`i`) and the same buttons run down
 the strip that is left, with a count of the suggestions waiting.

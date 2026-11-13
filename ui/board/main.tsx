@@ -7,7 +7,7 @@ import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel, linkedPrs,
-  noFilters, pickerMatches, priorityOf, sections,
+  noFilters, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
@@ -45,12 +45,9 @@ function Card({ card }: { card: CardData }) {
   const isFocused = focused.value === card.number;
   const isSelected = selected.value.has(card.number);
   useEffect(() => { if (isFocused) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [isFocused]);
-  // The chip for what the columns already say is left off: the column is the chip.
-  const priority = effectiveValue(card, 'priority', layout.value.mapping);
-  const effort = effectiveValue(card, 'effort', layout.value.mapping);
-  const milestone = dimension.value === 'milestone' || card.milestone === null ? undefined : milestones.value.get(card.milestone);
-  const fromLabel = 'Read from a label; the field is not set. Putting the card in a column sets the field.';
   const prs = linkedPrs(card);
+  const labels = card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping));
+  const waiting = openSuggestions.value.filter((s) => s.issue === card.number).length;
   return (
     <div
       ref={ref}
@@ -65,41 +62,35 @@ function Card({ card }: { card: CardData }) {
         e.dataTransfer!.effectAllowed = 'move';
       }}
     >
-      <div class="card-title">
-        <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>{' '}
-        {card.kind === 'pr' && <span class="chip pr">{card.draft ? 'draft PR' : 'PR'}</span>}
-        {card.closed && <span class="chip closed">closed</span>}
-        {card.title}
-      </div>
-      <div class="card-meta">
-        {milestone && <span class="chip milestone">{milestone.title}</span>}
-        {priority.value && (dimension.value !== 'priority' || priority.from === 'label') && (
-          <span class={`chip priority p-${priority.value.toLowerCase()}`} title={priority.from === 'label' ? fromLabel : 'Priority'}>
-            {dimension.value === 'priority' ? 'from label' : `${priority.value}${priority.from === 'label' ? ' ·label' : ''}`}
-          </span>
-        )}
-        {effort.value && (dimension.value !== 'effort' || effort.from === 'label') && (
-          <span class="chip effort" title={effort.from === 'label' ? fromLabel : 'Effort'}>
-            {dimension.value === 'effort' ? 'from label' : `effort ${effort.value}${effort.from === 'label' ? ' ·label' : ''}`}
-          </span>
-        )}
-        {card.type && <span class="chip type">{card.type}</span>}
-        {card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping)).map((l) => (
-          <span class="label" style={{ background: `#${l.color}`, color: inkOn(l.color) }}>{l.name}</span>
-        ))}
-      </div>
-      <div class="card-foot">
+      {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
+          number, as a GitHub issue list has them; what kind of thing it is, then where it stands
+          (buttons, as in the panel); the labels last and small. */}
+      <div class="card-title">{card.title}</div>
+      <div class="card-facts">
+        <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
         <span title={`updated ${card.updated.slice(0, 10)}, opened ${card.created.slice(0, 10)}`}>{age(card.updated)}</span>
         {card.comments > 0 && <span title="comments">💬 {card.comments}</span>}
         {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
         {(card.closes?.length ?? 0) > 0 && <span title="issues this pull request closes">closes {card.closes!.map((c) => `#${c.number}`).join(' ')}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
         {card.assignees.length > 0 && <span title="assignees">@{card.assignees.join(' @')}</span>}
-        {openSuggestions.value.some((s) => s.issue === card.number) && (
-          <span class="suggested" title="Has suggestions waiting for you">✎ {openSuggestions.value.filter((s) => s.issue === card.number).length}</span>
-        )}
+        {waiting > 0 && <span class="suggested" title="Has suggestions waiting for you">✎ {waiting}</span>}
         <Status action={cardStatus(actions.value.values(), card.number)} />
       </div>
+      <div class="card-tags">
+        <span class="tags">
+          <span class={`tag kind ${card.kind}`}>{card.kind === 'pr' ? 'PR' : 'Issue'}</span>
+          {card.draft && <span class="tag">draft</span>}
+          {card.closed && <span class="tag">closed</span>}
+          {card.type && <span class="tag">{card.type}</span>}
+        </span>
+        <span class="card-places"><Places card={card} onCard /></span>
+      </div>
+      {labels.length > 0 && (
+        <div class="card-labels">
+          {labels.map((l) => <span title={`label: ${l.name}`}><i style={{ background: `#${l.color}` }} />{l.name}</span>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -185,28 +176,40 @@ function CollapseButton() {
 /** The focused card's milestone, priority and effort, each a button that opens the dialog its
  *  key does (m, p, e) — so a click here changes the whole selection when the focused card is
  *  part of one, exactly as the key would. Priority and effort are left off a pull request where
- *  they are an issue field, which a pull request cannot hold. */
-function Places({ card }: { card: CardData }) {
+ *  they are an issue field, which a pull request cannot hold.
+ *
+ *  A card shows the same buttons (`onCard`), so there is still one way in: a click there focuses
+ *  that card first, and doesn't reach the card's own click. On a card they come priority first,
+ *  the milestone last since its title can be long, and a value the layout already shows is left
+ *  off — unless it was read from a label, which is still worth knowing. A value read from a label
+ *  is in italics on a card, where the panel spells it out. */
+function Places({ card, onCard = false }: { card: CardData; onCard?: boolean }) {
   const milestone = card.milestone === null ? undefined : milestones.value.get(card.milestone);
+  const open = (kind: DimKind) => (e: MouseEvent) => {
+    if (onCard) { e.stopPropagation(); focused.value = card.number; }
+    modal.value = kind;
+  };
+  const shown = (kind: DimKind) => !onCard || !shownByLayout(kind, dimension.value, groupBy.value);
   const value = (kind: 'priority' | 'effort') => {
     if (card.kind === 'pr' && hasField(kind, layout.value.fields)) return null;
     const found = effectiveValue(card, kind, layout.value.mapping);
+    const fromLabel = found.from === 'label';
+    if (!shown(kind) && !fromLabel) return null;
+    const text = !shown(kind) ? 'from label'
+      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}` : `no ${kind}`;
     return (
-      <button class={`place${found.value ? '' : ' unset'}${kind === 'priority' && found.value ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
-        title={`${FIELD_OF[kind]}${found.from === 'label' ? ', read from a label' : ''}: change it (${kind[0]})`} onClick={() => { modal.value = kind; }}>
-        {found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${found.from === 'label' ? ' ·label' : ''}` : `no ${kind}`}
+      <button class={`place${found.value ? '' : ' unset'}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
+        title={`${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
+        {text}
       </button>
     );
   };
-  return (
-    <>
-      <button class={`place${milestone ? '' : ' unset'}`} title={`Milestone${milestone ? `: ${milestone.title}` : ''} — change it (m)`} onClick={() => { modal.value = 'milestone'; }}>
-        {milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'no milestone'}
-      </button>
-      {value('priority')}
-      {value('effort')}
-    </>
+  const where = shown('milestone') && (
+    <button class={`place${milestone ? '' : ' unset'}`} title={`Milestone${milestone ? `: ${milestone.title}` : ''} — change it (m)`} onClick={open('milestone')}>
+      {milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'no milestone'}
+    </button>
   );
+  return onCard ? <>{value('priority')}{value('effort')}{where}</> : <>{where}{value('priority')}{value('effort')}</>;
 }
 
 /** The card panel, collapsed: a button to open it again, and what the strip can still usefully
