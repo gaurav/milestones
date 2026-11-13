@@ -139,7 +139,8 @@ export function initialView(
   const kinds = DIMENSIONS.map((d) => d.kind as string);
   const kept = (saved?.shown ?? []).filter((id) => all.includes(id));
   const by = [asked.by, saved?.by].find((k) => k && kinds.includes(k)) ?? 'milestone';
-  const group = asked.group.length ? asked.group : saved?.group ?? [];
+  // Grouped by default: it costs nothing to read past, and `No grouping` is one click away.
+  const group = asked.group.length ? asked.group : saved?.group ?? ['priority', 'effort'];
   return {
     by: by as DimKind,
     group: group.filter((g) => kinds.includes(g)) as DimKind[],
