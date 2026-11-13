@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, filtersFrom, group, inView, initialColumns, initialView, inkOn, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
   noFilters, pickerMatches, priorityOf, sections, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -226,6 +226,13 @@ test('the query written back opens the board the way it stands', () => {
   assert.deepEqual(back({ by: 'milestone', group: [], shown: [8] }), { by: 'milestone', group: [], shown: [8], detail: true });
   // Every milestone ticked is said by leaving `from` out, not by naming them all.
   assert.equal(viewQuery({ by: 'milestone', group: [], shown: [8, 7, NONE] }, all, ms), 'by=milestone&group=none');
+});
+
+test('a label that a chip already speaks for is known by its prefix', () => {
+  for (const name of ['Priority: High', 'priority:low', 'Size: M', 'Effort: Low', ' Priority : Someday']) assert.ok(isValueLabel(name), name);
+  for (const name of ['bug', 'prioritise', 'needs effort', 'area: priority']) assert.ok(!isValueLabel(name), name);
+  // The server's table decides, where it sends one.
+  assert.ok(isValueLabel('P: 1', { priority: { field: 'Priority', prefix: 'p', values: {} } }));
 });
 
 test('no milestone ticked is said in the URL, and is not the same as saying nothing', () => {
