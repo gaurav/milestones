@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from milestones.board import reconcile
 from milestones.cli import (
     AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, TRIAGE_BUCKET,
     bucket_color, build_search_queries,
-    _norm_issue, carries, closes_line, complete_titles, parse_answer, priority_options,
+    _norm_issue, carries, closes_line, complete_titles, parse_answer, label_plan,
     pr_group, prs_query,
     date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
     is_ignored, item_marker, load_config, triage_order,
@@ -532,21 +533,32 @@ def test_parse_answer_splits_a_choice_from_its_one_modifier():
         assert parse_answer(other) is None, other
 
 
-def test_priority_options_needs_the_whole_single_select_priority_field():
-    def field(name, options, kind="IssueFieldSingleSelect"):
-        return {"__typename": kind, "id": f"F_{name}", "name": name,
-                "options": [{"id": f"O_{o}", "name": o} for o in options]}
-    # NCATSTranslator's shape: Urgent/High/Medium/Low, alongside an Effort field.
-    fields = [field("Effort", ["High", "Medium", "Low"]),
-              field("Priority", ["Urgent", "High", "Medium", "Low"])]
-    assert priority_options(fields) == {"!": ("F_Priority", "O_Urgent"),
-                                        "+": ("F_Priority", "O_High"),
-                                        "-": ("F_Priority", "O_Low")}
-    assert priority_options([field("priority", ["urgent", "high", "low"])]) is not None
-    # Half a field is no field: a key that can't be honoured is not offered.
-    assert priority_options([field("Priority", ["High", "Low"])]) is None
-    assert priority_options([{"__typename": "IssueFieldText", "id": "F", "name": "Priority"}]) is None
-    assert priority_options([]) is None
+def test_label_plan_renames_an_old_label_creates_a_missing_one_and_lists_a_wrong_colour():
+    existing = [{"name": "Priority: Critical", "color": "D2042D"}, {"name": "priority: high", "color": "000000"},
+                {"name": "Size: M", "color": "fbca04"}, {"name": "Size: Medium", "color": "fbca04"},
+                {"name": "bug", "color": "ff0000"}]
+    renames, creates, recolours = label_plan(existing)
+    # The first old label that means it takes the name; a second is left for the board to retire.
+    assert [(old, body["new_name"]) for old, body in renames] == [
+        ("Priority: Critical", "Priority: Urgent"), ("Size: M", "Effort: M")]
+    assert renames[0][1]["color"] == "d2042d"
+    assert [body["name"] for body in creates] == [
+        "Priority: Medium", "Priority: Low", "Effort: XS", "Effort: S", "Effort: L", "Effort: XL"]
+    assert recolours == [("priority: high", "000000", "b60205")]
+    done = [{"name": name, "color": spec["colors"][option].upper()}
+            for spec in reconcile.KINDS.values() for option in spec["options"]
+            for name in [f"{spec['field']}: {option}"]]
+    assert label_plan(done) == ([], [], [])
+
+
+def test_load_config_reads_a_repos_own_labels_and_rejects_what_they_cannot_stand_for(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config = tmp_path / "milestones.toml"
+    config.write_text('repos = ["A/one"]\n[labels."A/One"]\n"P0" = "priority: urgent"\n')
+    assert load_config()["labels"] == {"a/one": {"p0": "priority: urgent"}}
+    config.write_text('repos = ["A/one"]\n[labels."A/one"]\n"P0" = "Priority: Critical"\n')
+    with pytest.raises(SystemExit, match="stands for one of Priority: Urgent"):
+        load_config()
 
 
 def test_norm_issue_reads_a_pr_and_its_draft_flag_from_either_api_shape():
@@ -606,7 +618,7 @@ def test_triage_scope_counts_each_source_even_an_empty_one():
 
 
 def _done(**entries):
-    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+    done = {key: [] for key in ("assigned", "carried", "passed", "priority",
                                 "failed", "skipped", "created", "reopened", "unordered")}
     return done | entries
 

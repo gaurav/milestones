@@ -43,7 +43,11 @@ class Refused(Exception):
         self.status = status
 
 
-KINDS = ("milestone", "priority", "effort", "labels", "title", "state", "comment")
+KINDS = ("milestone", "priority", "effort", "labels", "title", "state", "comment",
+         "priority-field", "effort-field")
+# The organisation issue field a `*-field` kind clears. Priority and effort themselves are
+# labels: asking for one becomes a `labels` action in `Board.normalise`.
+FIELD_KINDS = {f"{kind}-field": spec["field"] for kind, spec in reconcile.KINDS.items()}
 CLOSE_REASONS = ("completed", "not_planned")
 # A label GitHub has no colour for yet (one this session is about to create) is shown grey.
 NO_COLOUR = "ededed"
@@ -52,8 +56,12 @@ NO_COLOUR = "ededed"
 def card_value(card: dict, kind: str):
     """What a card holds for an action kind — the shape an action's `value` and `previous`
     take. A comment is not state: there is nothing to read back or put back."""
+    if kind in FIELD_KINDS:
+        return (card.get("fields") or {}).get(FIELD_KINDS[kind])
     if kind in reconcile.KINDS:
-        return (card.get("fields") or {}).get(reconcile.KINDS[kind]["field"])
+        # No action is of these kinds (`Board.normalise` makes them `labels`), but a
+        # suggestion or a saved plan is, and is compared with what the card says.
+        return next(iter(reconcile.reconcile(kind, card)["standard"]), None)
     if kind == "labels":
         return [l["name"] for l in card["labels"]]
     if kind == "state":
@@ -64,12 +72,12 @@ def card_value(card: dict, kind: str):
 
 
 def set_card_value(card: dict, kind: str, value, colours: dict[str, str]) -> None:
-    if kind in reconcile.KINDS:
+    if kind in FIELD_KINDS:
         fields = card.setdefault("fields", {})
         if value is None:
-            fields.pop(reconcile.KINDS[kind]["field"], None)
-        else:
-            fields[reconcile.KINDS[kind]["field"]] = value
+            fields.pop(FIELD_KINDS[kind], None)
+        else:  # only ever to put back what a clearing took away
+            fields[FIELD_KINDS[kind]] = value
     elif kind == "labels":
         card["labels"] = [{"name": n, "color": colours.get(n, NO_COLOUR)} for n in value]
     elif kind == "state":
@@ -103,8 +111,12 @@ class Board:
     network, and two moves of one issue can't arrive out of order."""
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
-                 write=None, state_file: Path | None = None, plan_file: Path | None = None):
+                 write=None, state_file: Path | None = None, plan_file: Path | None = None,
+                 aliases: dict[str, str] | None = None):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
+        # The repo's own labels that say a priority or effort, lower-cased name -> the
+        # standard label it stands for (the config's `[labels]`). Read, never written.
+        self.aliases = aliases or {}
         self.state_file = state_file
         self.plan_file = plan_file
         self.labels: list[dict] = []
@@ -173,7 +185,12 @@ class Board:
                                 if s["status"] != "rejected"],
                 # The one table of what a label means, so a front end that sorts cards by
                 # priority reads "Priority: Critical" as the rules here do.
-                "labelValues": reconcile.KINDS,
+                "labelValues": {
+                    kind: {**spec, "aliases": {
+                        name: reconcile.STANDARD[label.lower()][1]
+                        for name, label in self.aliases.items()
+                        if reconcile.STANDARD[label.lower()][0] == kind}}
+                    for kind, spec in reconcile.KINDS.items()},
                 "view": self.view,
                 "plan": self.plan_info(),
             }
@@ -195,9 +212,10 @@ class Board:
 
     def normalise(self, request: dict) -> tuple[str, object]:
         """Check one requested change and return the (kind, value) to act on, which is not
-        always the pair asked for: a priority goes to a label where the owner has no
-        Priority field, and a label change given as {add, remove} becomes the set that
-        results. Raises Refused for anything that can't be done."""
+        always the pair asked for: a priority or an effort is a label, so it becomes the
+        label set with the standard one in place of whatever said it before, and a label
+        change given as {add, remove} becomes the set that results. Raises Refused for
+        anything that can't be done."""
         kind, value = request.get("kind"), request.get("value")
         if kind not in KINDS:
             raise Refused(400, f"unknown action kind: {kind!r}")
@@ -214,25 +232,25 @@ class Board:
                                        "reopen it first")
         elif kind in reconcile.KINDS:
             spec = reconcile.KINDS[kind]
-            field = self.fields.get(spec["field"])
-            if field is None:
-                # No such field for this owner (a user account, or an organisation that
-                # hasn't made one): the label is the fallback, and the only record.
-                if value is not None and not isinstance(value, str):
-                    raise Refused(400, f"{kind} must be a name or null")
-                keep = [n for n in card_value(card, "labels")
-                        if n not in reconcile.labels_about(kind, card)]
-                label = f"{spec['field']}: {value.strip().capitalize()}" if value else None
-                return "labels", keep + ([label] if label else [])
-            if card["kind"] != "issue":
-                raise Refused(400, f"#{card['number']} is a pull request, which has no "
-                                   f"{spec['field']} field")
+            label = None
             if value is not None:
-                names = {name.lower(): name for name in field["options"]}
-                if not isinstance(value, str) or value.lower() not in names:
-                    raise Refused(400, f"{spec['field']} is one of {', '.join(field['options'])}"
+                names = {name.lower(): name for name in spec["options"]}
+                if not isinstance(value, str) or value.strip().lower() not in names:
+                    raise Refused(400, f"{kind} is one of {', '.join(spec['options'])}"
                                        f", or null; not {value!r}")
-                value = names[value.lower()]
+                label = reconcile.standard_label(kind, names[value.strip().lower()])
+            keep = [n for n in card_value(card, "labels")
+                    if n not in reconcile.labels_about(kind, card)]
+            return "labels", keep + ([label] if label else [])
+        elif kind in FIELD_KINDS:
+            # To clear it (null): the field is read, and what it says moves to a label. An
+            # option's name is taken too, which is how undoing a clearing puts it back.
+            name = FIELD_KINDS[kind]
+            if card["kind"] != "issue" or name not in self.fields:
+                raise Refused(400, f"#{card['number']} has no {name} field")
+            if value is not None and value not in self.fields[name]["options"]:
+                raise Refused(400, f"{kind} is null to clear the field, or one of "
+                                   f"{', '.join(self.fields[name]['options'])} to put it back")
         elif kind == "labels":
             current = card_value(card, "labels")
             if isinstance(value, dict):
@@ -326,9 +344,10 @@ class Board:
             got = (answer.get("milestone") or {}).get("number")
             if got != value:
                 raise SystemExit(f"GitHub kept #{number} on milestone {got!r}")
-        elif kind in reconcile.KINDS:
-            name = reconcile.KINDS[kind]["field"]
+        elif kind in FIELD_KINDS:
+            name = FIELD_KINDS[kind]
             field = self.fields[name]
+            # `previous` is an option's name: undoing a clearing puts it back.
             change = (f'singleSelectOptionId: "{field["options"][value]}"' if value is not None
                       else "delete: true")
             gh.mutate(f"set #{number}'s {name} field to {value}",
@@ -336,6 +355,13 @@ class Board:
                       f'"{self.cards[number]["id"]}", issueFields: [{{fieldId: "{field["id"]}", '
                       f"{change}}}]}}) {{ clientMutationId }} }}", owner)
         elif kind == "labels":
+            # A standard label the repo hasn't got is made first, in its colour: the PUT
+            # below would make it too, but grey and with no description.
+            for body in reconcile.missing_standard(value, list(self._colours())):
+                try:
+                    gh.api(f"repos/{self.repo}/labels", method="POST", body=body)
+                except SystemExit:
+                    pass  # made since this board loaded: the PUT settles it either way
             # PUT replaces the set, and makes any label the repo hasn't got.
             answer = gh.api(f"{issue}/labels", method="PUT", body={"labels": value})
             got = sorted(l["name"].lower() for l in answer)
@@ -525,7 +551,7 @@ class Board:
         self.suggestions = {i: s for i, s in self.suggestions.items()
                             if s["status"] != "withdrawn"}
         proposed = [p for card in cards.values() if not card.get("closed")
-                    for p in reconcile.rule_suggestions(card, self.fields)]
+                    for p in reconcile.rule_suggestions(card, self.aliases)]
         return changed + self._add_suggestions(proposed)
 
     def set_view(self, view: dict) -> dict:
@@ -835,7 +861,7 @@ def make_handler(board: Board, token: str):
 
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
         shown: list[str] | None = None, by: str | None = None,
-        group: str | None = None) -> None:
+        group: str | None = None, aliases: dict[str, str] | None = None) -> None:
     # Imported here, as client imports this module.
     from .client import running_session, write_session
     other = running_session(repo)
@@ -845,7 +871,7 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         raise SystemExit(f"A board is already running for {repo}: {other['url']}\n"
                          f"Stop it first (Ctrl-C there, or kill {other['pid']}).")
     board = Board(repo, buckets, sort_key, state_file=state_path(repo),
-                  plan_file=plan_path(repo))
+                  plan_file=plan_path(repo), aliases=aliases)
 
     def progress(what: str, seen: int, total: int) -> None:
         label = "issues" if what == "issues" else "pull requests"
