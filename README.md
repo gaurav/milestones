@@ -216,6 +216,9 @@ The board opens the way you left it — the view, the grouping and the milestone
 you say otherwise: `milestones board --by priority --group effort`, or `--from`, wins. `p`, `e` and `m` still set
 priority, effort and milestone whatever the columns are.
 
+The address bar keeps up with all three as you change them, so reloading the page shows the same
+columns rather than the ones the command line asked for.
+
 ### Asking a coding agent
 
 The board does not run an agent; it gives one a way in. Start your coding agent wherever it works

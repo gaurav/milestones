@@ -85,6 +85,12 @@ def test_remote_repo_reads_githubs_remote_spellings():
     assert remote_repo("git@gitlab.com:a/b.git") is None
 
 
+def test_the_page_url_asks_for_the_view_in_its_query_and_keeps_the_token_in_its_fragment():
+    assert server.page_url(8000, "tok") == "http://127.0.0.1:8000/#t=tok"
+    assert (server.page_url(8000, "tok", ["Babel v1.19 & after", "none"], "priority", "effort")
+            == "http://127.0.0.1:8000/?by=priority&group=effort&from=Babel%20v1.19%20%26%20after&from=none#t=tok")
+
+
 def test_only_loopback_hosts_on_the_servers_own_port_are_served():
     assert server.allowed_host("127.0.0.1:8000", 8000)
     assert server.allowed_host("localhost:8000", 8000)

@@ -10,9 +10,12 @@ URL, and is the place to start a new one.
 
 ## Reaching it
 
-- The URL's fragment carries a token that is new on every start: `#t=<token>&from=<title>…`.
-  `from` repeats once per `--from` given on the command line, and is only a hint about which
-  columns to show first; `by` and `group` (from `--by` and `--group`) are hints of the same kind.
+- The URL's fragment carries a token that is new on every start: `/?from=<title>…#t=<token>`.
+  It is in the fragment so that it is never sent in a request line or a `Referer`.
+- The URL's query string says how to open the board. `from` repeats once per `--from` given on
+  the command line, and is only a hint about which columns to show first; `by` and `group` (from
+  `--by` and `--group`) are hints of the same kind. The page rewrites the query string as the
+  view changes (`viewQuery` in `ui/shared/logic.ts`), so that a reload opens the same columns.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.

@@ -107,6 +107,29 @@ export function initialView(
   };
 }
 
+/** The query string that opens the board as it stands now: what `parseLocation` reads and
+ *  `initialView` acts on, so a reload shows the same columns. `by` and `group` are always
+ *  spelt out (`group=none` for no grouping: an unknown name, which `initialView` drops),
+ *  because a value left out falls back to the saved view, and the save may not have landed
+ *  when the page reloads. `from` is left out when every milestone is ticked — the titles of
+ *  all of them would make a very long URL — and milestones are named by title, as `--from`
+ *  names them, so two of one title come back together. */
+export function viewQuery(
+  view: { by: DimKind; group: DimKind[]; shown: ColumnId[] },
+  all: ColumnId[],
+  milestones: Milestone[],
+): string {
+  const params = new URLSearchParams({ by: view.by, group: view.group.join(',') || 'none' });
+  const shown = all.filter((id) => view.shown.includes(id));
+  if (shown.length < all.length) {
+    for (const id of shown) {
+      const title = id === NONE ? 'none' : milestones.find((m) => m.number === id)?.title;
+      if (title) params.append('from', title);
+    }
+  }
+  return params.toString();
+}
+
 /** What a view needs to know to lay cards out: which dimension the columns are, the
  *  board's milestone order and fields, and the label table. */
 export interface Layout {

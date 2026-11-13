@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseFragment } from '../ui/shared/api.ts';
+import { parseLocation } from '../ui/shared/api.ts';
 import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
   effectiveValue, effortOf, group, inView, initialColumns, initialView, inkOn, latestAction, matches, nextFocus,
-  noFilters, pickerMatches, priorityOf, sections, unsettled, withValue,
+  noFilters, pickerMatches, priorityOf, sections, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
 const card = (number: number, extra: Partial<Card> = {}): Card => ({
@@ -19,10 +19,12 @@ const milestone = (number: number, title: string, state: 'open' | 'closed' = 'op
 const action = (id: number, issue: number, status: Action['status'], value: number | null = 1): Action =>
   ({ id, issue, kind: 'milestone' as const, value, previous: null, carriedBy: null, error: null, status });
 
-test('the fragment carries the token and the columns asked for', () => {
-  assert.deepEqual(parseFragment('#t=abc&from=Critical&from=Babel%20v1.19'), { token: 'abc', from: ['Critical', 'Babel v1.19'], by: '', group: [] });
-  assert.deepEqual(parseFragment('#t=a&by=priority&group=priority,effort'), { token: 'a', from: [], by: 'priority', group: ['priority', 'effort'] });
-  assert.deepEqual(parseFragment(''), { token: '', from: [], by: '', group: [] });
+test('the URL carries the token in its fragment and the view asked for in its query', () => {
+  assert.deepEqual(parseLocation('?from=Critical&from=Babel%20v1.19', '#t=abc'), { token: 'abc', from: ['Critical', 'Babel v1.19'], by: '', group: [] });
+  assert.deepEqual(parseLocation('?by=priority&group=priority,effort', '#t=a'), { token: 'a', from: [], by: 'priority', group: ['priority', 'effort'] });
+  assert.deepEqual(parseLocation('', ''), { token: '', from: [], by: '', group: [] });
+  // A token in the query string is not one: it would have been sent to the server.
+  assert.equal(parseLocation('?t=abc', '').token, '');
 });
 
 test('priority and effort are read from the field first, then a label', () => {
@@ -211,4 +213,17 @@ test('the board opens as asked, else as it was left, else everything by mileston
   assert.deepEqual(initialView({ from: ['v1'], by: 'effort', group: ['priority'] }, saved, all, ms),
     { by: 'effort', group: ['priority'], shown: [8], detail: false });
   assert.deepEqual(initialView(none, { by: 'nonsense', group: ['x'], shown: [99] }, all, ms), { by: 'milestone', group: [], shown: all, detail: true });
+});
+
+test('the query written back opens the board the way it stands', () => {
+  const ms = [milestone(7, 'Critical'), milestone(8, 'Babel v1.19 & after')];
+  const all = [NONE, 7, 8];
+  const back = (view: { by: DimKind; group: DimKind[]; shown: (number | string)[] }) =>
+    initialView(parseLocation(`?${viewQuery(view, all, ms)}`, '#t=tok'), { by: 'effort', group: ['milestone'], shown: [7] }, all, ms);
+  // Whatever was saved, the URL wins: the save may not have landed when the page reloads.
+  assert.deepEqual(back({ by: 'priority', group: ['priority', 'effort'], shown: [NONE, 8] }),
+    { by: 'priority', group: ['priority', 'effort'], shown: [NONE, 8], detail: true });
+  assert.deepEqual(back({ by: 'milestone', group: [], shown: [8] }), { by: 'milestone', group: [], shown: [8], detail: true });
+  // Every milestone ticked is said by leaving `from` out, not by naming them all.
+  assert.equal(viewQuery({ by: 'milestone', group: [], shown: [8, 7, NONE] }, all, ms), 'by=milestone&group=none');
 });

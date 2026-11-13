@@ -1,16 +1,16 @@
 // The board's state and everything a view may do to it. Views read the signals and call the
 // functions; nothing else talks to the API.
 import { computed, effect, signal } from '@preact/signals';
-import { Api, parseFragment } from './api.ts';
+import { Api, parseLocation } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
   DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, group, initialView,
-  latestAction, nextFocus, noFilters, unsettled, withValue,
+  latestAction, nextFocus, noFilters, unsettled, viewQuery, withValue,
 } from './logic.ts';
 import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
 
-const fragment = parseFragment(location.hash);
-export const api = new Api(fragment.token);
+const asked = parseLocation(location.search, location.hash);
+export const api = new Api(asked.token);
 
 export const loading = signal(true);
 export const fatal = signal('');
@@ -116,7 +116,7 @@ function take(data: BoardData, first: boolean) {
   suggestions.value = new Map(data.suggestions.map((s) => [s.id, s]));
   planInfo.value = data.plan ?? { path: null, count: 0 };
   if (first) {
-    const view = initialView(fragment, data.view, milestoneColumns.value, data.milestones);
+    const view = initialView(asked, data.view, milestoneColumns.value, data.milestones);
     shown.value = view.shown;
     dimension.value = view.by;
     groupBy.value = view.group;
@@ -141,6 +141,12 @@ function rememberView() {
     if (now === last) return;
     last = now;
     if (!first) api.saveView(view).catch(() => {});
+  });
+  // And say it in the URL, which is what a reload reads first. replaceState, so that ticking a
+  // column is not a stop on the way Back; the fragment, where the token is, is kept as it is.
+  effect(() => {
+    const now = `?${viewQuery({ by: dimension.value, group: groupBy.value, shown: shown.value }, milestoneColumns.value, [...milestones.value.values()])}`;
+    if (location.search !== now) history.replaceState(null, '', `${location.pathname}${now}${location.hash}`);
   });
 }
 

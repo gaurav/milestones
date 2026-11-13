@@ -107,11 +107,14 @@ export interface Suggestion {
 
 export interface Move { issue: number; kind: Kind; value: Value | { add?: string[]; remove?: string[] } }
 
-/** The per-run token, and what --from, --by and --group asked for, from the URL fragment. */
-export function parseFragment(hash: string): { token: string; from: string[]; by: string; group: string[] } {
-  const params = new URLSearchParams(hash.replace(/^#/, ''));
+/** What the page's URL says: the per-run token, from the fragment, and the view — what
+ *  --from, --by and --group asked for, or what the page last wrote back — from the query
+ *  string. The token is in the fragment because that is never sent to a server or left in a
+ *  Referer; the view is not a secret, and reads better as ordinary parameters. */
+export function parseLocation(search: string, hash: string): { token: string; from: string[]; by: string; group: string[] } {
+  const params = new URLSearchParams(search);
   return {
-    token: params.get('t') ?? '',
+    token: new URLSearchParams(hash.replace(/^#/, '')).get('t') ?? '',
     from: params.getAll('from'),
     by: params.get('by') ?? '',
     group: (params.get('group') ?? '').split(',').filter(Boolean),
