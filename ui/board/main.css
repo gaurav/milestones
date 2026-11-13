@@ -185,9 +185,9 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .group-head:hover { color: var(--accent); }
 /* A heading takes the colour of its place in what the column is grouped by first, most pressing
    (Urgent, or XL) warmest, so the eye finds the top of a column's work. What nobody has judged
-   keeps its grey text and gets a light blue bar, so that it is as easy to find. */
+   is blue, so that it is as easy to find: the text darker than its bar, to stay readable. */
 .group-head:not(.level--1) { border-left: 0.25rem solid currentColor; padding-left: 0.375rem; }
-.group-head.level-0 { border-left-color: #54aeff; }
+.group-head.level-0 { color: var(--accent); border-left-color: #54aeff; }
 .group-head.level-1 { color: var(--bad); }
 .group-head.level-2 { color: #bc4c00; }
 .group-head.level-3 { color: var(--warn); }
