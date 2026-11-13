@@ -90,9 +90,11 @@ main { flex: 1; display: flex; min-height: 0; }
 .card-labels { display: flex; flex-wrap: wrap; gap: 0.125rem 0.625rem; color: var(--muted); font-size: 0.75rem; }
 .card-labels span { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
 .card-labels i { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex: none; }
-.card-labels .assigned { color: var(--ink); opacity: 0.75; }
-.card-labels .profile { color: var(--muted); margin-left: 0.125rem; text-decoration: none; }
-.card-labels .profile:hover { color: var(--accent); }
+/* What a card is tied to: who is assigned, the issues it closes; one row, a dot between. */
+.card-ties { display: flex; flex-wrap: wrap; gap: 0.125rem 0.375rem; color: var(--ink); opacity: 0.75; font-size: 0.75rem; }
+.card-ties > span + span::before { content: "·"; color: var(--muted); margin-right: 0.375rem; }
+.card-ties .profile { color: var(--muted); margin-left: 0.125rem; text-decoration: none; }
+.card-ties .profile:hover { color: var(--accent); }
 
 .chip, .label { display: inline-block; border-radius: 0.75rem; padding: 0 0.5rem; font-size: 0.8125rem; line-height: 1.5rem; white-space: nowrap; }
 .chip { background: var(--chip); }

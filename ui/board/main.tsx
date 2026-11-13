@@ -48,6 +48,7 @@ function Card({ card }: { card: CardData }) {
   const prs = linkedPrs(card);
   const labels = card.labels.filter((l) => !isValueLabel(l.name, layout.value.mapping));
   const waiting = openSuggestions.value.filter((s) => s.issue === card.number).length;
+  const closes = card.closes ?? [];
   return (
     <div
       ref={ref}
@@ -64,15 +65,15 @@ function Card({ card }: { card: CardData }) {
     >
       {/* Read top to bottom: the title alone, so nothing interrupts it; the facts beside the
           number, as a GitHub issue list has them; what kind of thing it is, then where it stands
-          (buttons, as in the panel); who is assigned, then the labels, last and small. The author
-          is among the facts, as `@login`. */}
+          (buttons, as in the panel); then, small, what it is tied to (who is assigned, the issues
+          it closes), and its labels on a row of their own. The author is among the facts, as
+          `@login`. */}
       <div class="card-title">{card.title}</div>
       <div class="card-facts">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
         <span title={`updated ${card.updated.slice(0, 10)}, opened ${card.created.slice(0, 10)}`}>{age(card.updated)}</span>
         {card.comments > 0 && <span title="comments">💬 {card.comments}</span>}
         {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
-        {(card.closes?.length ?? 0) > 0 && <span title="issues this pull request closes">closes {card.closes!.map((c) => `#${c.number}`).join(' ')}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
         {card.author && <span class="author" title={`opened by ${card.author}`}>@{card.author}</span>}
         {waiting > 0 && <span class="suggested" title="Has suggestions waiting for you">✎ {waiting}</span>}
@@ -87,8 +88,8 @@ function Card({ card }: { card: CardData }) {
         </span>
         <span class="card-places"><Places card={card} onCard /></span>
       </div>
-      {(card.assignees.length > 0 || labels.length > 0) && (
-        <div class="card-labels">
+      {(card.assignees.length > 0 || closes.length > 0) && (
+        <div class="card-ties">
           {card.assignees.length > 0 && (
             <span class="assigned">
               assigned to{' '}
@@ -104,6 +105,15 @@ function Card({ card }: { card: CardData }) {
               ))}
             </span>
           )}
+          {closes.length > 0 && (
+            <span class="closes" title={`Closes, when it merges:\n${closes.map((c) => `#${c.number} ${c.title}`).join('\n')}`}>
+              closes {closes.map((c) => `#${c.number}`).join(', ')}
+            </span>
+          )}
+        </div>
+      )}
+      {labels.length > 0 && (
+        <div class="card-labels">
           {labels.map((l) => <span title={`label: ${l.name}`}><i style={{ background: `#${l.color}` }} />{l.name}</span>)}
         </div>
       )}

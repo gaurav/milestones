@@ -140,12 +140,12 @@ it, sub-issues, and who opened it (`@login`); then whether it is an issue or a p
 draft, closed, its issue type), and beside that its priority, effort and milestone — the
 organisation's fields, or a `Priority:`/`Size:` label where the field is unset, in italics. Those
 three are buttons, the same as the pane's below, and a card leaves off whichever the columns or the
-grouping already show. Who is assigned (each with a link to their GitHub profile) and its other
-labels come last, small; the filter row can narrow the board to one author. The pane on the right
-has the description and the rest. At its top are the card's milestone, priority and effort as
-buttons — click one to change it, as `m`, `p` and `e` do — and under them whatever has been
-suggested for that card. Collapse the pane (`i`) and the same buttons run down the strip that is
-left, with a count of the suggestions waiting.
+grouping already show. Then, small, who is assigned (each with a link to their GitHub profile) and
+the issues a pull request closes, and its other labels on a line of their own; the filter row can
+narrow the board to one author. The pane on the right has the description and the rest. At its top
+are the card's milestone, priority and effort as buttons — click one to change it, as `m`, `p` and
+`e` do — and under them whatever has been suggested for that card. Collapse the pane (`i`) and the
+same buttons run down the strip that is left, with a count of the suggestions waiting.
 
 There are three ways to move a card, and they are the same write:
 
