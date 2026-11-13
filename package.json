@@ -11,7 +11,8 @@
     "build": "node build.mjs",
     "dev": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-reporter=spec \"test-ui/**/*.test.ts\""
+    "test": "node --test --test-reporter=spec \"test-ui/**/*.test.ts\"",
+    "drive": "node tools/board-check.mjs"
   },
   "devDependencies": {
     "@preact/signals": "^2.11.3",
