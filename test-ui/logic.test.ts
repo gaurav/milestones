@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, keyedOptions, optionForKey, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, keyedOptions, optionForKey, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus, focusAfter,
   noFilters, pickerMatches, priorityOf, sections, shownByLayout, sizeOf, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -282,4 +282,13 @@ test('a number key picks the option at that place in the list', () => {
   assert.deepEqual(keys('priority'), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined, undefined]);
   assert.deepEqual(keys('effort'), [undefined, 'XL', 'L', 'M', 'S', 'XS', undefined]);
   assert.deepEqual(keyedOptions('effort').map((o) => o.keys), [[1], [2], [3], [4], [5]]);
+});
+
+test("focus walks on to the card below that is still in the column, past any carried away with it", () => {
+  const column = [card(1, { kind: 'pr' }), card(2), card(3)];
+  assert.equal(focusAfter(column, [column[1]!, column[2]!], 1), 2);
+  // The pull request closed #2, which went with it: the walk carries on at #3.
+  assert.equal(focusAfter(column, [column[2]!], 1), 3);
+  assert.equal(focusAfter(column, [column[0]!, column[1]!], 3), 2);
+  assert.equal(focusAfter(column, [], 1), null);
 });
