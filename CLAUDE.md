@@ -240,7 +240,8 @@ far more than `_norm_issue` keeps.
   back as the view changes (`viewQuery`, from `rememberView`), so "flags" on a reload means the
   view as it was left. `by` and `group` are always written, never left to the saved view, since
   the POST may still be in flight when the page reloads; a new view setting that a flag can set
-  needs the same. Only the token is in the fragment, and it stays there: it is what lets a
+  needs the same. The filters and the search are in the query too, and nowhere else: they are
+  not part of the saved view, so they last for the tab. Only the token is in the fragment, and it stays there: it is what lets a
   request write to GitHub, and a fragment is never sent in a request line or a Referer.
 - A toolbar dropdown is `Menu` in `ui/board/main.tsx`, not `<details>`, which closes on nothing
   but its own summary. One `openMenu` signal means one open at a time, and `onKey` stands down

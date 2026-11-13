@@ -16,6 +16,9 @@ URL, and is the place to start a new one.
   the command line, and is only a hint about which columns to show first; `by` and `group` (from
   `--by` and `--group`) are hints of the same kind. The page rewrites the query string as the
   view changes (`viewQuery` in `ui/shared/logic.ts`), so that a reload opens the same columns.
+  One empty `from=` means no milestone is ticked. The page also keeps its filters there while
+  they are on — `q` (the search), `kind`, `label`, `priority`, `pr=1`, `nolabels=1` — and unlike
+  the view they are saved nowhere else, so a new run starts with none.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.

@@ -707,7 +707,8 @@ function PlanBanner() {
 
 function onKey(e: KeyboardEvent) {
   // An open menu has the keyboard: j or 1 behind it would move a card nobody is looking at.
-  if (e.metaKey || e.ctrlKey || e.altKey || modal.value || openMenu.value) return;
+  // Not the list of keys, though, which is there to be read while trying them.
+  if (e.metaKey || e.ctrlKey || e.altKey || modal.value || (openMenu.value && openMenu.value !== 'keys')) return;
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const key = e.key;

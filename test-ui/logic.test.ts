@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
   noFilters, pickerMatches, priorityOf, sections, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -233,4 +233,21 @@ test('a label that a chip already speaks for is known by its prefix', () => {
   for (const name of ['bug', 'prioritise', 'needs effort', 'area: priority']) assert.ok(!isValueLabel(name), name);
   // The server's table decides, where it sends one.
   assert.ok(isValueLabel('P: 1', { priority: { field: 'Priority', prefix: 'p', values: {} } }));
+});
+
+test('no milestone ticked is said in the URL, and is not the same as saying nothing', () => {
+  const ms = [milestone(7, 'Critical')];
+  const all = [NONE, 7];
+  const query = viewQuery({ by: 'priority', group: [], shown: [] }, all, ms);
+  assert.equal(query, 'by=priority&group=none&from=');
+  assert.deepEqual(initialView(parseLocation(`?${query}`, ''), { shown: [7] }, all, ms).shown, []);
+  assert.deepEqual(initialView(parseLocation('?by=priority', ''), { shown: [7] }, all, ms).shown, [7]);
+});
+
+test('the filters ride in the URL while they are on, and come back from it', () => {
+  const view = { by: 'milestone' as const, group: [], shown: [NONE] };
+  const f = { text: 'insulin & co', label: 'help wanted', priority: 'High', kind: 'pr' as const, hasPr: true, unlabelled: true };
+  assert.deepEqual(filtersFrom(`?${viewQuery(view, [NONE], [], f)}`), f);
+  assert.equal(viewQuery(view, [NONE], [], noFilters), 'by=milestone&group=none');
+  assert.deepEqual(filtersFrom('?kind=nonsense&pr=yes'), noFilters);
 });
