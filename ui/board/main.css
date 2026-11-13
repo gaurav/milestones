@@ -190,14 +190,14 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .group-head:not(.level--1) { border-left: 0.25rem solid currentColor; padding-left: 0.375rem; }
 .group-head.level-0 { border-left-color: #54aeff; }
 .group-head .sep, .group-head small { color: var(--muted); }
-/* Brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
+/* A little brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
    bold and is there to be spotted. Light and dark, in that order. */
-.group-head .level-0 { color: light-dark(#218bff, #58a6ff); }
-.group-head.level-1, .group-head .level-1 { color: light-dark(#e5303c, #ff6b63); }
-.group-head.level-2, .group-head .level-2 { color: light-dark(#e0650b, #f0883e); }
-.group-head.level-3, .group-head .level-3 { color: light-dark(#bf8700, #e3b341); }
-.group-head.level-4, .group-head .level-4 { color: light-dark(#2da44e, #56d364); }
-.group-head.level-5, .group-head .level-5 { color: light-dark(#1f9ea8, #56d4dd); }
+.group-head .level-0 { color: light-dark(#157aed, #4e9dfc); }
+.group-head.level-1, .group-head .level-1 { color: light-dark(#da2935, #fc5e56); }
+.group-head.level-2, .group-head .level-2 { color: light-dark(#ce5906, #d66a1f); }
+.group-head.level-3, .group-head .level-3 { color: light-dark(#ad7700, #dba632); }
+.group-head.level-4, .group-head .level-4 { color: light-dark(#249243, #4bc65a); }
+.group-head.level-5, .group-head .level-5 { color: light-dark(#1d8d96, #48cdd6); }
 .chip.milestone { border: 1px solid var(--line); background: none; }
 .banner { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
 .banner.rehearsal { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }
