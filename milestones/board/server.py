@@ -103,6 +103,10 @@ class Board:
         self.labels: list[dict] = []
         self.fields: dict = {}
         self.suggestions: dict[int, dict] = {}
+        # The last id given to a suggestion. Counted up and never back: the rules' suggestions
+        # are deleted and remade on every load, so an id taken from how many are held would be
+        # one a standing suggestion already has.
+        self._last_suggestion = 0
         self.rejected: set[str] = set()
         self._restored: list[dict] = []
         self._read_state()
@@ -396,7 +400,7 @@ class Board:
         added = []
         standing = {suggestion_key(s) for s in self.suggestions.values() if s["status"] == "open"}
         for p in proposed:
-            suggestion = {"id": len(self.suggestions) + 1, "issue": p["issue"],
+            suggestion = {"id": self._last_suggestion + 1, "issue": p["issue"],
                           "kind": p["kind"], "value": p["value"],
                           "reason": str(p.get("reason") or ""),
                           "source": str(p.get("source") or "someone"),
@@ -405,6 +409,7 @@ class Board:
             if key in standing or key in self.rejected:
                 continue
             standing.add(key)
+            self._last_suggestion = suggestion["id"]
             self.suggestions[suggestion["id"]] = suggestion
             added.append(suggestion)
         return added
