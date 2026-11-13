@@ -1,6 +1,8 @@
 /* Every size that should grow with the text is in rem, against the one root size on `html`:
    change that and the whole board scales — text, columns, panels and pickers together. Borders,
-   radii and shadows stay in px. Cards are read at a glance during triage, so 16px is the floor. */
+   radii and shadows stay in px. The root is 14px, between 13px (too small to read at a glance on
+   a laptop) and 16px (too large on a big monitor), and browser zoom tunes it for each screen.
+   The description's iframe in main.tsx can't inherit it, so it repeats the number. */
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9; --panel: #fff; --ink: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -15,7 +17,7 @@
   }
 }
 * { box-sizing: border-box; }
-html { font-size: 16px; }
+html { font-size: 14px; }
 html, body, #app { height: 100%; }
 body { margin: 0; font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
 #app { display: flex; flex-direction: column; }
