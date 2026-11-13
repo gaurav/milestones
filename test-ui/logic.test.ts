@@ -5,8 +5,8 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
-  noFilters, pickerMatches, priorityOf, sections, shownByLayout, unsettled, viewQuery, withValue,
+  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
+  noFilters, pickerMatches, priorityOf, sections, shownByLayout, sizeOf, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
 const card = (number: number, extra: Partial<Card> = {}): Card => ({
@@ -259,4 +259,15 @@ test('a value the columns or the grouping already show is shown by the layout', 
   assert.equal(shownByLayout('priority', 'milestone', ['effort', 'priority']), true);
   assert.equal(shownByLayout('effort', 'milestone', ['priority']), false);
   assert.equal(shownByLayout('milestone', 'priority', []), false);
+});
+
+test("a pull request's size is prcoder's band of its lines changed, and reads as effort through the label table", () => {
+  assert.deepEqual([0, 49, 50, 99, 100, 199, 200, 499, 500, 999, 1000].map(sizeOf),
+    ['XS', 'XS', 'S', 'S', 'M', 'M', 'L', 'L', 'XL', 'XL', 'XXL']);
+  const mapping: Mapping = { effort: { field: 'Effort', prefix: '(?:size|effort)', values: { xs: 'Low', s: 'Low', m: 'Medium', l: 'High', xl: 'High' } } };
+  const pr = (additions: number, deletions: number) => card(1, { kind: 'pr', additions, deletions });
+  assert.deepEqual(estimatedEffort(pr(120, 30), mapping), { size: 'M', lines: 150, value: 'Medium' });
+  assert.equal(estimatedEffort(pr(2000, 0), mapping)?.value, 'High');
+  assert.equal(estimatedEffort(pr(10, 0))?.value, '');
+  assert.equal(estimatedEffort(card(2), mapping), null);
 });

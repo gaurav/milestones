@@ -7,7 +7,7 @@ import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel, linkedPrs,
-  noFilters, pickerMatches, priorityOf, sections, shownByLayout,
+  estimatedEffort, noFilters, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
@@ -72,6 +72,9 @@ function Card({ card }: { card: CardData }) {
       <div class="card-facts">
         <a href={card.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>#{card.number}</a>
         <span title={`updated ${card.updated.slice(0, 10)}, opened ${card.created.slice(0, 10)}`}>{age(card.updated)}</span>
+        {card.additions !== undefined && card.deletions !== undefined && (
+          <span class="diff" title="lines added and removed"><ins>+{card.additions}</ins> <del>−{card.deletions}</del></span>
+        )}
         {card.comments > 0 && <span title="comments">💬 {card.comments}</span>}
         {prs.length > 0 && <span title={prs.map((p) => `#${p.number} ${p.title}`).join('\n')}>⇄ {prs.length} PR{prs.length > 1 ? 's' : ''}</span>}
         {(card.subIssues?.total ?? 0) > 0 && <span title="sub-issues done">☑ {card.subIssues!.completed}/{card.subIssues!.total}</span>}
@@ -216,16 +219,28 @@ function Places({ card, onCard = false }: { card: CardData; onCard?: boolean }) 
     modal.value = kind;
   };
   const shown = (kind: DimKind) => !onCard || !shownByLayout(kind, dimension.value, groupBy.value);
+  // A pull request's size, as an effort estimate, where nothing has been recorded: on a card
+  // only, since the panel has room to say what is actually set.
+  const estimate = onCard ? estimatedEffort(card, layout.value.mapping) : null;
+  const estimateTip = estimate && `Estimated from ${estimate.lines} lines changed (+${card.additions} −${card.deletions}): `
+    + `size ${estimate.size}${estimate.value ? `, about ${estimate.value} effort` : ''}.`;
   const value = (kind: 'priority' | 'effort') => {
-    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) return null;
+    // Shown even when the layout shows effort: its heading then says "no effort", which the
+    // estimate adds to rather than repeats.
+    const guess = kind === 'effort' ? estimate : null;
+    if (card.kind === 'pr' && hasField(kind, layout.value.fields)) {
+      return guess && <span class="tag estimate" title={`${estimateTip} A pull request can't hold the Effort field.`}>~{guess.size}</span>;
+    }
     const found = effectiveValue(card, kind, layout.value.mapping);
     const fromLabel = found.from === 'label';
-    if (!shown(kind) && !fromLabel) return null;
-    const text = !shown(kind) ? 'from label'
-      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}` : `no ${kind}`;
+    const guessed = !found.value && guess;
+    if (!shown(kind) && !fromLabel && !guessed) return null;
+    const text = !shown(kind) && fromLabel ? 'from label'
+      : found.value ? `${kind === 'effort' ? 'effort ' : ''}${found.value}${fromLabel && !onCard ? ' ·label' : ''}`
+      : guessed ? `~${guess.size}` : `no ${kind}`;
     return (
-      <button class={`place${found.value ? '' : ' unset'}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
-        title={`${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
+      <button class={`place${found.value ? '' : ' unset'}${guessed ? ' estimate' : ''}${fromLabel && onCard ? ' from-label' : ''}${kind === 'priority' && found.value && shown(kind) ? ` chip priority p-${found.value.toLowerCase()}` : ''}`}
+        title={guessed ? `${estimateTip} Set it (e).` : `${FIELD_OF[kind]}${fromLabel ? ', read from a label; the field is not set' : ''}: change it (${kind[0]})`} onClick={open(kind)}>
         {text}
       </button>
     );

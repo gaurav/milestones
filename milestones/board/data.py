@@ -46,7 +46,7 @@ query { repository(owner: "%(owner)s", name: "%(name)s") {
                orderBy: {field: UPDATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {
-      id number title url bodyHTML createdAt updatedAt isDraft
+      id number title url bodyHTML createdAt updatedAt isDraft additions deletions
       author { login } comments { totalCount }
       assignees(first: 10) { nodes { login } }
       labels(first: 50) { nodes { name color } }
@@ -114,11 +114,14 @@ def norm_issue(node: dict, repo: str) -> dict:
 def norm_pr(node: dict, repo: str) -> dict:
     """A card for a pull request. `closes` is the open-or-closed issues its description
     closes, in this repo only — the ones a move can carry, since milestone numbers are per
-    repo."""
+    repo. `additions` and `deletions` are its lines added and removed, from which the page
+    estimates its effort."""
     return {
         **_common(node),
         "kind": "pr",
         "draft": node["isDraft"],
+        "additions": node["additions"],
+        "deletions": node["deletions"],
         "closes": [{"number": i["number"], "title": i["title"], "state": i["state"]}
                    for i in node["closingIssuesReferences"]["nodes"]
                    if i["repository"]["nameWithOwner"].lower() == repo.lower()],

@@ -40,7 +40,7 @@ URL, and is the place to start a new one.
 | `type`, `parent`, `subIssues`, `projects` | issues only: issue type name, `{number, title}`, `{total, completed}`, how many projects it is in |
 | `fields` | issues only: the organisation's issue fields by name, e.g. `{"Priority": "High"}` |
 | `closingPrs`, `mentionedPrs` | issues only: `[{number, title, state, draft, url}]`; a pull request appears in one list, never both |
-| `draft`, `closes` | pull requests only: `closes` is `[{number, title, state}]`, issues in the same repo |
+| `draft`, `closes`, `additions`, `deletions` | pull requests only: `closes` is `[{number, title, state}]`, issues in the same repo; `additions` and `deletions` are lines added and removed, from which the page estimates effort |
 | `closed` | absent until this session closes the card, then the reason; a refresh drops closed cards |
 
 **Milestone** — `{number, title, state, due, description, url}`; `state` is `"open"` or
