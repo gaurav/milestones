@@ -87,6 +87,15 @@ try {
 
   // --- The URL follows the view, and a reload reads it back.
   check('the token stays in the fragment', (await page.evaluate(() => location.hash)).startsWith('#t='));
+
+  // --- A new board is grouped by priority and effort, and each part of a heading has its colour.
+  const groupHeads = await page.$$eval('.group-head', (e) => e.slice(0, 40).map((h) => ({
+    bar: /\blevel-\d\b/.test(h.className) && getComputedStyle(h).boxShadow !== 'none',
+    parts: [...h.querySelectorAll('span[class^="level-"]')].map((p) => getComputedStyle(p).color),
+    muted: getComputedStyle(h.querySelector('small')).color,
+  })));
+  check('columns open grouped, each heading with a bar and a part per dimension', groupHeads.length > 0 && groupHeads.every((h) => h.bar && h.parts.length === 2), groupHeads[0]);
+  check("a heading's parts are coloured, not the grey of its count", groupHeads.every((h) => h.parts.every((c) => c !== h.muted)), groupHeads[0]);
   await page.click('.segmented button:has-text("Priority")');
   await page.selectOption('.toolbar > select', 'effort');
   let q = await query();
