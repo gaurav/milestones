@@ -165,6 +165,8 @@ The same keys reach the rest of a card: `p` sets its priority and `e` its effort
 labels, `t` retitles it, `c` comments, and `x` closes or reopens it. Priority and effort are
 written to the organisation's issue fields; a repo whose owner has none (a personal account) gets a
 `Priority: High` label instead. All of them work on a selection, and `z` undoes all but a comment.
+A number picks the same level in the priority and effort dialogs — `1` Urgent, `2` High, `3`
+Medium, `4` Low — and effort, having no Urgent, takes `1` as High too; `0` clears either.
 
 **Suggestions** (`s`, or the button) is the list of changes waiting for a yes or no. The board
 puts its own there: where a `Priority:` or `Size:` label records what the Priority or Effort field
@@ -212,7 +214,8 @@ backlog can be triaged in passes:
 2. Switch to **Priority**. The first column, *No priority*, is the inbox; `1`–`4` send the focused
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
-3. Switch to **Effort** and do the same.
+3. Switch to **Effort** and do the same. The keys are the same levels: `3` is Medium, and both
+   `1` and `2` are High.
 4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
    groups — "Urgent · Low", "High · Medium" — judged cards first. Click a group's heading to select
    it, and one key sends the whole group to a milestone.

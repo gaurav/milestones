@@ -7,7 +7,7 @@ import { signal } from '@preact/signals';
 import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, hasField, inkOn, isValueLabel,
-  estimatedEffort, noFilters, pickerMatches, priorityOf, sections, shownByLayout,
+  estimatedEffort, keyedOptions, noFilters, optionForKey, pickerMatches, priorityOf, sections, shownByLayout,
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
@@ -375,10 +375,21 @@ function Tray() {
   );
 }
 
-const CHOICES: Partial<Record<Kind, { title: string; options(): { label: string; value: string | null }[] }>> = {
-  priority: { title: 'Priority', options: () => [...(board.value?.fields['Priority'] ?? ['Urgent', 'High', 'Medium', 'Low']).map((o) => ({ label: o, value: o })), { label: 'Clear', value: null }] },
-  effort: { title: 'Effort', options: () => [...(board.value?.fields['Effort'] ?? ['High', 'Medium', 'Low']).map((o) => ({ label: o, value: o })), { label: 'Clear', value: null }] },
-  state: { title: 'Close', options: () => [{ label: 'Close as completed', value: 'completed' }, { label: 'Close as not planned', value: 'not_planned' }, { label: 'Reopen', value: null }] },
+type ChoiceOption = { label: string; value: string | null; keys: number[] };
+/** Priority and effort take their numbers from `keyedOptions`, so a key is the same level on
+ *  both, and Clear is 0, as it is in their column views; closing is numbered down the list. */
+const levels = (kind: 'priority' | 'effort'): ChoiceOption[] => [
+  ...keyedOptions(kind, board.value?.fields ?? {}).map((o) => ({ label: o.value, value: o.value, keys: o.keys })),
+  { label: 'Clear', value: null, keys: [0] },
+];
+const CHOICES: Partial<Record<Kind, { title: string; options(): ChoiceOption[] }>> = {
+  priority: { title: 'Priority', options: () => levels('priority') },
+  effort: { title: 'Effort', options: () => levels('effort') },
+  state: {
+    title: 'Close',
+    options: () => [{ label: 'Close as completed', value: 'completed' }, { label: 'Close as not planned', value: 'not_planned' }, { label: 'Reopen', value: null }]
+      .map((o, i) => ({ ...o, keys: [i + 1] })),
+  },
 };
 
 /** A short list to pick one of, by number key or click: priority, effort, close. */
@@ -393,7 +404,7 @@ function Choice({ kind }: { kind: Kind }) {
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
       if (e.key === 'Escape') close();
-      const option = options[Number(e.key) - 1];
+      const option = /^[0-9]$/.test(e.key) ? options.find((o) => o.keys.includes(Number(e.key))) : undefined;
       if (option) { e.preventDefault(); choose(option.value); }
     };
     window.addEventListener('keydown', onKey, true);
@@ -403,7 +414,7 @@ function Choice({ kind }: { kind: Kind }) {
     <div class="overlay" onClick={close}>
       <div class="picker" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">{spec.title} for {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`}</div>
-        <ul>{options.map((o, i) => <li onClick={() => choose(o.value)}><span><kbd>{i + 1}</kbd> {o.label}</span></li>)}</ul>
+        <ul>{options.map((o) => <li onClick={() => choose(o.value)}><span>{o.keys.map((k) => <><kbd>{k}</kbd> </>)}{o.label}</span></li>)}</ul>
       </div>
     </div>
   );
@@ -740,6 +751,7 @@ function Toolbar() {
             <div><kbd>1</kbd>–<kbd>9</kbd> put in that column</div><div><kbd>0</kbd> clear: no milestone, no priority, no effort</div>
             <div><kbd>m</kbd> pick any milestone, or make one</div><div><kbd>space</kbd> select; then keys move them all</div>
             <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
+            <div>priority, effort: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low on both</div>
             <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
             <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
             <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
@@ -800,10 +812,11 @@ function onKey(e: KeyboardEvent) {
   else if (key === 'v') cycleDimension();
   else if (key === '0') place(targets(), NONE);
   else if (/^[1-9]$/.test(key)) {
-    // In the priority and effort views the unset column is 0's, so 1 is the first real one.
-    const real = dimension.value === 'milestone' ? visibleColumns.value : visibleColumns.value.filter((id) => id !== NONE);
-    const to = real[Number(key) - 1];
-    if (to !== undefined) place(targets(), to);
+    // In the priority and effort views a key is a level, the same on both (`keyedOptions`), and
+    // does nothing while that level's column is hidden; in the milestone view it is a position.
+    const kind = dimension.value;
+    const to = kind === 'milestone' ? visibleColumns.value[Number(key) - 1] : optionForKey(kind, Number(key), layout.value.fields);
+    if (to !== undefined && visibleColumns.value.includes(to)) place(targets(), to);
   }
   else return;
   e.preventDefault();
