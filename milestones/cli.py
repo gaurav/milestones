@@ -13,11 +13,14 @@ import textwrap
 import tomllib
 import tty
 import webbrowser
+from urllib.parse import quote
 from collections import Counter
 from itertools import cycle
 from pathlib import Path
 
 from . import env, gh
+# The table of priority and effort labels: pure, and the board's as much as the CLI's.
+from .board import reconcile
 
 # The one bucket the triage walk reads from as well as writes to: an issue on it has been
 # looked at and can't be placed yet — it needs a reproduction, tests, an investigation or a
@@ -69,7 +72,75 @@ def load_config() -> dict:
     # Owner -> colour, resolved here so `status` can hand org_colors plain numbers.
     config["colors"] = {owner: parse_color(path, owner, value)
                         for owner, value in config.get("colors", {}).items()}
+    # Repo -> a label of its own -> the standard label it stands for, both keyed in lower
+    # case: read as that priority or effort, and never written.
+    labels = {}
+    for repo, aliases in config.get("labels", {}).items():
+        wrong = [f'"{name}" = "{to}"' for name, to in aliases.items()
+                 if not isinstance(to, str) or to.lower() not in reconcile.STANDARD]
+        if wrong:
+            sys.exit(f"Config {path}: [labels.\"{repo}\"] {', '.join(wrong)}: a label stands "
+                     f"for one of {', '.join(standard_labels())}.")
+        labels[repo.lower()] = {name.lower(): to for name, to in aliases.items()}
+    config["labels"] = labels
     return config
+
+
+def standard_labels() -> list[str]:
+    return [reconcile.standard_label(kind, option)
+            for kind, spec in reconcile.KINDS.items() for option in spec["options"]]
+
+
+_repo_labels: dict[str, list[dict]] = {}
+
+
+def repo_labels(repo: str) -> list[dict]:
+    """A repo's labels, read once a run."""
+    if repo not in _repo_labels:
+        _repo_labels[repo] = gh.api(f"repos/{repo}/labels?per_page=100", paginate=True)
+    return _repo_labels[repo]
+
+
+def set_label_value(repo: str, number: int, kind: str, value: str, labels: list[str]) -> None:
+    """Put an issue's or a pull request's priority or effort where it is kept: the standard
+    label, in place of whatever labels said it before, made in its colour if the repo
+    hasn't got it. `labels` is what the item carries now."""
+    old = reconcile.labels_about(kind, {"labels": [{"name": n} for n in labels]})
+    wanted = [n for n in labels if n not in old] + [reconcile.standard_label(kind, value)]
+    for body in reconcile.missing_standard(wanted, [l["name"] for l in repo_labels(repo)]):
+        repo_labels(repo).append(gh.api(f"repos/{repo}/labels", method="POST", body=body))
+    gh.api(f"repos/{repo}/issues/{number}/labels", method="PUT", body={"labels": wanted})
+
+
+def label_plan(existing: list[dict]) -> tuple[list[tuple[str, dict]], list[dict], list[tuple[str, str, str]]]:
+    """What `setup` does to a repo's labels so the standard ones are all there, from the
+    labels it has: `(renames, creates, recolours)`. A standard label that is missing takes
+    over an old one that means the same (`Size: M` becomes `Effort: M`, which keeps it on
+    every issue) and is created otherwise; one that is there in another colour is listed
+    with (name, its colour, the standard one). A rename keeps the old label's colour and its
+    description, if it has one — somebody chose them — so a renamed label in another colour
+    is listed for recolouring too, under its new name."""
+    by_name = {l["name"].lower(): l for l in existing}
+    renames, creates, recolours = [], [], []
+    for kind, spec in reconcile.KINDS.items():
+        for option in spec["options"]:
+            name = reconcile.standard_label(kind, option)
+            body = {"new_name": name, "color": spec["colors"][option],
+                    "description": spec["meanings"][option]}
+            have = by_name.get(name.lower())
+            if have:
+                if have["color"].lower() != spec["colors"][option]:
+                    recolours.append((have["name"], have["color"], spec["colors"][option]))
+                continue
+            old = [l for l in existing if reconcile.label_value(kind, l["name"]) == option]
+            if old:
+                keeps = {} if old[0].get("description") else {"description": body["description"]}
+                renames.append((old[0]["name"], {"new_name": name, **keeps}))
+                if old[0]["color"].lower() != body["color"]:
+                    recolours.append((name, old[0]["color"], body["color"]))
+            else:
+                creates.append({"name": name, **{k: body[k] for k in ("color", "description")}})
+    return renames, creates, recolours
 
 
 def parse_color(path: Path, owner: str, value) -> int:
@@ -738,6 +809,36 @@ def cmd_setup(config, args):
             print(f"later:    {bucket} (made the first time triage picks it)")
             continue
         _ensure_bucket(args.repo, bucket, existing)
+    renames, creates, recolours = label_plan(repo_labels(args.repo))
+    labels = f"repos/{args.repo}/labels"
+    if gh.read_only():
+        for old, body in renames:
+            print(f"would rename label: {old} → {body['new_name']}")
+        for body in creates:
+            print(f"would create label: {body['name']}")
+        for name, colour, standard in recolours:
+            print(f"would offer to recolour: {name} (#{colour} → #{standard})")
+        return
+    for body in creates:
+        gh.api(labels, method="POST", body=body)
+        print(f"created label:  {body['name']}")
+    # A rename changes what every issue carrying the label shows, and a colour is somebody's
+    # choice: both are asked about, where a new label is nobody's business yet.
+    declined = set()
+    for old, body in renames:
+        if ask(f"Rename the label '{old}' to '{body['new_name']}' in {args.repo}, on every "
+               "issue that has it? [y/N] ").strip().lower() == "y":
+            gh.api(f"{labels}/{quote(old)}", method="PATCH", body=body)
+            print(f"renamed label:  {old} → {body['new_name']}")
+        else:
+            declined.add(body["new_name"])
+    for name, colour, standard in recolours:
+        if name in declined:
+            continue  # there is no label of that name to recolour
+        if ask(f"Recolour '{name}' from #{colour} to the standard #{standard}? "
+               "[y/N] ").strip().lower() == "y":
+            gh.api(f"{labels}/{quote(name)}", method="PATCH", body={"color": standard})
+            print(f"recoloured:     {name}")
 
 
 def cmd_rollover(config, args):
@@ -794,39 +895,6 @@ def _norm_issue(issue: dict, repo: str) -> dict:
             "updated": issue["updated_at"], "url": issue["html_url"], "id": issue["node_id"],
             "pr": "pull_request" in issue, "draft": bool(issue.get("draft")),
             "milestone": milestone["title"] if milestone else None}
-
-
-def priority_options(fields: list[dict]) -> dict[str, tuple[str, str]] | None:
-    """The walk's priority keys as (field id, option id), from an organisation's issue
-    fields — its single-select "Priority" with Urgent, High and Low options, names matched
-    ignoring case. None when it hasn't got all of that, so no key is offered by half."""
-    for field in fields:
-        if field.get("__typename") != "IssueFieldSingleSelect" or field["name"].lower() != "priority":
-            continue
-        by_name = {o["name"].lower(): o["id"] for o in field["options"]}
-        keyed = {key: (field["id"], by_name[name.lower()])
-                 for key, name in PRIORITY_KEYS.items() if name.lower() in by_name}
-        return keyed if len(keyed) == len(PRIORITY_KEYS) else None
-    return None
-
-
-def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
-    """`priority_options` for a repo owner. Issue fields are an organisation feature, so a
-    user account is answered without the GraphQL round trip (and its NOT_FOUND warning)."""
-    if gh.api(f"users/{owner}")["type"] != "Organization":
-        return None
-    data = gh.graphql(
-        f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
-        f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}",
-        owner)
-    return priority_options(data["organization"]["issueFields"]["nodes"])
-
-
-def set_priority(issue_id: str, field_id: str, option_id: str, owner: str | None = None) -> None:
-    gh.mutate("set an issue's Priority field",
-              f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
-              f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
-              f"{{ clientMutationId }} }}", owner)
 
 
 def item_marker(item: dict) -> str:
@@ -1005,8 +1073,6 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
         counts = Counter(name for _, name in done["priority"])
         lines.append(f"Set priority on {len(done['priority'])}: " + ", ".join(
             f"{counts[name]} {name}" for name in PRIORITY_KEYS.values() if name in counts))
-    for ref, reason in done["unprioritised"]:
-        lines.append(f"Priority not set on {ref}: {reason}")
     shown = 5
     if done["skipped"]:
         refs = done["skipped"]
@@ -1072,50 +1138,30 @@ def cmd_triage(config, args):
     parked = TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
     # Everything the walk does, for the summary it ends on: (ref, milestone title) for
     # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
-    # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
+    # for "failed", (repo, title) for "created" and "reopened", and
     # (title, url, "top" or "bottom") for "unordered"; "skipped" is bare refs.
     done: dict[str, list] = {key: [] for key in (
-        "assigned", "carried", "passed", "priority", "unprioritised", "failed", "skipped",
+        "assigned", "carried", "passed", "priority", "failed", "skipped",
         "created", "reopened", "unordered")}
     menus: dict[str, list[dict]] = {}
     known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
-    priorities: dict[str, dict | None] = {}  # owner -> the priority keys it can take, if any
     # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
     # run: the issue walk fetched its list before those writes, so it would offer them again.
     carried: dict[tuple[str, int], tuple[str, int]] = {}
 
-    def set_priorities(owner: str, priority: dict | None, issue: dict, key: str) -> None:
-        """Priority is an organisation issue field, and pull requests haven't got fields:
-        a PR's priority goes onto the open issues it closes, which are the work."""
+    def set_priorities(issue: dict, key: str) -> None:
+        """Priority is a label, so the item itself takes it, issue or pull request."""
         name = PRIORITY_KEYS[key]
         ref = f"{issue['repo']}#{issue['number']}"
-        if priority is None:
-            print(f"  (no Priority field for {owner}; milestone set, priority not)")
-            done["unprioritised"].append((ref, f"no Priority field for {owner}"))
+        try:
+            set_label_value(issue["repo"], issue["number"], "priority", name, issue["labels"])
+        except SystemExit as exit:
+            print(f"  {exit}")
+            # Its first line: the rest is gh's stderr, already printed above.
+            done["failed"].append((ref, str(exit).splitlines()[0]))
             return
-        # The field and its option ids are the organisation's, so only an issue of the same
-        # owner can take them.
-        targets = ([(ref, issue["id"])] if not issue["pr"] else
-                   [(f"{c['repo']}#{c['number']}", c["id"]) for c in issue.get("closes") or []
-                    if c["state"] == "OPEN" and c["repo"].split("/")[0].lower() == owner.lower()])
-        if not targets:
-            print(f"  (a PR has no fields, and this one closes no open issue of {owner}'s; "
-                  "nothing to prioritise)")
-            done["unprioritised"].append(
-                (ref, f"a PR has no fields, and it closes no open issue of {owner}'s"))
-            return
-        field_id, option_id = priority[key]
-        for target, node_id in targets:
-            try:
-                set_priority(node_id, field_id, option_id, owner)
-            except SystemExit as exit:
-                print(f"  {exit}")
-                # Its first line: the rest is gh's stderr, already printed above.
-                done["failed"].append((target, str(exit).splitlines()[0]))
-                continue
-            print(f"  → also {target} priority {name}" if issue["pr"]
-                  else f"  → priority {name}")
-            done["priority"].append((target, name))
+        print(f"  → priority {name}")
+        done["priority"].append((ref, name))
 
     def custom(repo: str, choices: list[dict]) -> dict | None:
         """A milestone typed by name: an existing one, a closed one reopened, or a new one
@@ -1172,10 +1218,6 @@ def cmd_triage(config, args):
                                 for b in free_buckets(config["buckets"], open_titles)
                                 if b in OPTIONAL_BUCKETS]
             choices = menus[repo]
-            owner = repo.split("/")[0]
-            if owner not in priorities:
-                priorities[owner] = fetch_priority_field(owner)
-            priority = priorities[owner]
 
             marker = f"  {item_marker(issue)}" if issue["pr"] else ""
             on = f"on {issue['milestone']}, " if issue["milestone"] else ""
@@ -1200,12 +1242,10 @@ def cmd_triage(config, args):
                 print(f"  {i}) {title} ({m['open_issues']} open{due}){current}")
             if not choices:
                 print(f"  (no open milestones in {repo} — run: milestones setup {repo})")
-            if priority:
-                print("  priority: " + "  ".join(f"{k} {name}"
-                                                 for k, name in PRIORITY_KEYS.items()))
+            print("  priority: " + "  ".join(f"{k} {name}" for k, name in PRIORITY_KEYS.items()))
 
             assign = f"[1-{len(choices)}] assign, " if choices else ""
-            hint = "  (add ! + - for priority)" if priority else ""
+            hint = "  (add ! + - for priority)"
             while True:
                 answer = ask(f"  {assign}c custom, s skip, o open, q quit:{hint} ").strip().lower()
                 if answer == "q":
@@ -1255,8 +1295,8 @@ def cmd_triage(config, args):
                         done["unordered"].append(
                             (chosen["title"], chosen["html_url"], ORDER_KEYS[suffix]))
                     if suffix in PRIORITY_KEYS:
-                        # After the milestone, so a failed field write can't lose the assignment.
-                        set_priorities(owner, priority, issue, suffix)
+                        # After the milestone, so a failed label write can't lose the assignment.
+                        set_priorities(issue, suffix)
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
                     for c in issue.get("closes") or []:
@@ -1300,19 +1340,10 @@ def cmd_assign(config, args):
     todo = [(r, n) for r, n in refs if r in targets]
     if not todo:
         sys.exit("Nothing to assign.")
-    # --priority is the walk's ! + - for a pipeline: the organisation's Priority field,
-    # resolved per owner before any write, and skipped with a word where there is none.
-    priority: dict[str, tuple[str, str] | None] = {}
-    if args.priority:
-        key = {name.lower(): k for k, name in PRIORITY_KEYS.items()}[args.priority]
-        for owner in {repo.split("/")[0] for repo in targets}:
-            options = fetch_priority_field(owner)
-            priority[owner] = options and options[key]
-            if not options:
-                print(f"skipping priority for {owner}: no Priority field with Urgent, High "
-                      f"and Low options")
+    # --priority is the walk's ! + - for a pipeline: the `Priority:` label, on each item.
+    name = args.priority and args.priority.capitalize()
     # A PR stands in for the issues it closes, as in the walk: `carries` says which go onto
-    # its milestone with it, and its priority lands on the open ones its owner can take.
+    # its milestone with it. Its priority is its own: a label, which a PR carries.
     # Resolved before the prompt, so the count asked about is the count written.
     items = [{"repo": r, "number": n, "pr": True} for r, n in todo]
     fetch_closing_issues(items)
@@ -1326,7 +1357,7 @@ def cmd_assign(config, args):
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
           f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
           + (f", and {plural(len(carry), 'issue')} their PRs close" if carry else "")
-          + (f", priority {PRIORITY_KEYS[key]}" if args.priority else ""))
+          + (f", priority {name}" if name else ""))
     # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
     # script, there is no tty to answer from, and a milestone is a reversible field that
     # never closes or deletes anything.
@@ -1337,25 +1368,10 @@ def cmd_assign(config, args):
         sys.exit("Aborted.")
     for repo, number in todo:
         issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
-        owner = repo.split("/")[0]
-        field = priority.get(owner)
-        # After the milestone, so a failed field write can't lose the assignment.
-        if field and "pull_request" not in issue:
-            set_priority(issue["node_id"], *field, owner)
-            print(f"  {repo}#{number} → {args.milestone}, priority {PRIORITY_KEYS[key]}")
-            continue
-        print(f"  {repo}#{number} → {args.milestone}")
-        if field:
-            # A PR has no fields: its priority goes onto the open issues it closes.
-            prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
-                           and c["repo"].split("/")[0].lower() == owner.lower()]
-            for c in prioritised:
-                set_priority(c["id"], *field, owner)
-                print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
-                      f"(closed by #{number})")
-            if not prioritised:
-                print(f"    (a PR has no fields, and #{number} closes no open issue of "
-                      f"{owner}'s; priority not set)")
+        if name:
+            # After the milestone, so a failed label write can't lose the assignment.
+            set_label_value(repo, number, "priority", name, [l["name"] for l in issue["labels"]])
+        print(f"  {repo}#{number} → {args.milestone}" + (f", priority {name}" if name else ""))
     for (repo, number), pr in carry.items():
         gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
         print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
@@ -1384,7 +1400,8 @@ def cmd_board(config, args):
             sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
                      "whose origin is on GitHub.")
     server.run(repo, config["buckets"], sort_key, port=args.port,
-               open_browser=not args.no_open, shown=args.sources, by=args.by, group=args.group)
+               open_browser=not args.no_open, shown=args.sources, by=args.by, group=args.group,
+               aliases=config["labels"].get(repo.lower()))
 
 
 def cwd_repo() -> str | None:
@@ -2013,8 +2030,8 @@ def main():
                         help="milestone title, resolved in each issue's repo")
     assign.add_argument("refs", metavar="REF", nargs="*",
                         help="OWNER/NAME#N or an issue URL; none, to read them from stdin")
-    assign.add_argument("--priority", choices=[n.lower() for n in PRIORITY_KEYS.values()],
-                        help="also set the organisation's Priority field on each issue")
+    assign.add_argument("--priority", choices=[n.lower() for n in reconcile.KINDS["priority"]["options"]],
+                        help="also set the Priority: label on each issue and pull request")
     assign.set_defaults(func=cmd_assign)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
@@ -2050,8 +2067,8 @@ def main():
     suggest.add_argument("ref", nargs="?", metavar="REF",
                          help="OWNER/NAME#N, an issue URL, or N inside the repo's checkout")
     suggest.add_argument("--milestone", metavar="TITLE", help='"none" takes it off its milestone')
-    suggest.add_argument("--priority", metavar="P", help='e.g. urgent, high, medium, low; "none" clears')
-    suggest.add_argument("--effort", metavar="E", help='e.g. high, medium, low; "none" clears')
+    suggest.add_argument("--priority", metavar="P", help='urgent, high, medium or low; "none" clears')
+    suggest.add_argument("--effort", metavar="E", help='xs, s, m, l or xl; "none" clears')
     suggest.add_argument("--add-label", action="append", metavar="LABEL")
     suggest.add_argument("--remove-label", action="append", metavar="LABEL")
     suggest.add_argument("--title", help="a new title")

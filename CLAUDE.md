@@ -46,8 +46,10 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   { id name options { id name } } } } }` (a union; `options` is a plain list) and write one with
   `setIssueFieldValue(input: {issueId, issueFields: [{fieldId, singleSelectOptionId}]})`;
   `[{fieldId, delete: true}]` clears it. The REST `orgs/{org}/issue-fields` listing carries the
-  same node ids. `fetch_priority_field` asks `users/{owner}` for the account type first, so a user
-  owner never triggers the NOT_FOUND warning the organisation query would print.
+  same node ids. `data.fetch_fields` asks `users/{owner}` for the account type first, so a user
+  owner never triggers the NOT_FOUND warning the organisation query would print. Because a pull
+  request can't hold one, **priority and effort are labels** (below); the fields are only read,
+  and cleared.
 - Advanced search takes `milestone:"Some title"` (quoted, spaces and all) alongside OR'd repos,
   and matches by **title alone, whatever the milestone's state** — so `triage --from X` where X
   is closed in one repo walks that repo's stranded items, with no `(current)` entry in the menu.
@@ -89,8 +91,8 @@ milestone has to be carried across to its other findings by hand (`walk_findings
 `gone`) — the list is never re-fetched mid-run.
 
 `MILESTONES.md` holds the conventions this tool encodes: what each bucket means, and how release
-milestones are used. It is written for agents working in *other* repos, so keep it free of CLI
-detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
+milestones are used. `LABELS.md` does the same for the priority and effort labels. Both are written
+for agents working in *other* repos, so keep them free of CLI detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
 `test_milestones_md_lists_the_default_buckets` catches a table that has fallen behind the list.
 
 `assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
@@ -207,13 +209,26 @@ far more than `_norm_issue` keeps.
 - `Board.submit` normalises each request twice: once up front so a bad one refuses the whole
   batch, and again as it is applied, against the card as the earlier requests left it. Computing
   every value from the starting card made two label changes in one batch overwrite each other.
-- `gaurav` is a user account with no issue fields, so a live run there exercises the label
-  fallback for priority and never `setIssueFieldValue`. **The field write from the board has not
-  been run against a real organisation**; it is the same mutation `set_priority` makes, with
-  `delete: true` to clear. The fallback creates a `Priority: X` label in the repo, which outlives
-  an undo — delete it after a test (`gh api -X DELETE "repos/gaurav/milestones/labels/Priority:%20High"`).
+- Priority and effort are the labels `Priority: Urgent|High|Medium|Low` and
+  `Effort: XS|S|M|L|XL`, on issues and pull requests alike: `reconcile.KINDS` is the one table
+  (options, colours, meanings, and what older spellings and the fields' values mean), used by the
+  board, by `triage`'s `!` `+` `-`, `assign --priority` and `setup` (`cli.py` imports it; it is
+  pure), and repeated for people in `LABELS.md`, which `test_labels_md_matches_the_label_table`
+  holds to it. A request of kind `priority` or `effort` becomes a `labels` action in
+  `Board.normalise`, so no action is ever of those kinds. Organisation fields were tried first and
+  dropped: `PullRequest` has no field values, so pull requests could not be sorted with issues.
+- Everything else that says a priority or effort is read and never written: `Priority: Critical`
+  and `Size: M` labels, the config's per-repo `[labels]` aliases (which are never removed either:
+  they are the repo's own), and the organisation's fields. The kinds `priority-field` and
+  `effort-field` exist only to clear a field (and to put it back on undo). **Clearing a field from
+  the board has not been run against a real organisation**: `gaurav` is a user account with none.
+  It is `setIssueFieldValue` with `delete: true`.
+- A standard label the repo lacks is created with its colour and description before the write that
+  uses it (`reconcile.missing_standard`), and outlives an undo. That is fine in
+  `gaurav/milestones`, where `setup` has made them all anyway.
 - GitHub does not say when an issue field was last changed, so `reconcile.rule_suggestions` can't
-  prefer "whichever is newer" between a field and a label; the field wins and the reason says so.
+  prefer "whichever is newer" between a field and a label; the standard label wins, because it is
+  what this tool writes, and the reason says so.
 - The board keeps undecided outside suggestions and all rejections in
   `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` — the tool's only local state. Point
   `XDG_STATE_HOME` at a scratch directory when testing, or a test rejection will hide a real
@@ -231,8 +246,9 @@ far more than `_norm_issue` keeps.
   a prompt (`askPrompt` in `ui/shared/logic.ts`) and takes its answer back as suggestions.
 - What the columns are is a front-end notion (`DimKind` in `ui/shared/logic.ts`): a dimension is
   an action kind whose values can be listed, so a drop is `{kind, value}` and the server needed
-  nothing new but `labelValues` in the snapshot — `reconcile.KINDS` itself, so the page sorts
-  `Priority: Critical` under Urgent by the same table the rules use. Don't copy that table into
+  nothing new but `labelValues` in the snapshot — `reconcile.KINDS` with the repo's aliases, so
+  the page sorts `Priority: Critical` under Urgent by the same table the rules use, and takes its
+  priority and effort columns from the table's `options`. Don't copy that table into
   `ui/`. A new dimension needs an entry in `DIMENSIONS`, branches in `dimColumns`, `columnFor`
   and `columnLabel`, and a server kind to write it.
 - `grouped` is one flat, ordered list per column (grouping only changes the sort), which is what

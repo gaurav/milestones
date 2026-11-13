@@ -154,7 +154,9 @@ Rules
   reason of another suggestion or in a comment suggestion, and leave the milestone alone.
 - Don't suggest moving an issue onto or off "Needs triage": that bucket is a person's call.
 - Priority is how much it matters; effort is how much work it is. Judge effort from the code,
-  not from the length of the issue.
+  not from the length of the issue. Both are labels, which --priority and --effort set: don't
+  suggest one with --add-label.
+%(scales)s
 - Suggest closing only what is done, duplicated or will not be done, and say which.
 """
 
@@ -174,8 +176,10 @@ BUCKET_MEANINGS = {
 def brief(buckets: list[str]) -> str:
     """What a coding agent needs to know to be useful at a board, as text to hand it."""
     return BRIEF % {
-        "priority": ", ".join(dict.fromkeys(reconcile.KINDS["priority"]["values"].values())),
-        "effort": "High, Medium, Low",
+        **{kind: ", ".join(spec["options"]) for kind, spec in reconcile.KINDS.items()},
+        # LABELS.md's tables, which `test_labels_md_matches_the_label_table` holds to this.
+        "scales": "\n".join(f"  - {spec['field']} {option}: {spec['meanings'][option]}"
+                            for spec in reconcile.KINDS.values() for option in spec["options"]),
         "buckets": "\n".join(f"- {b}: {BUCKET_MEANINGS.get(b, 'A standing bucket of this repository.')}"
                              for b in buckets),
     }
