@@ -200,7 +200,7 @@ function Places({ card }: { card: CardData }) {
   };
   return (
     <>
-      <button class={`place${milestone ? '' : ' unset'}`} title="Milestone: change it (m)" onClick={() => { modal.value = 'milestone'; }}>
+      <button class={`place${milestone ? '' : ' unset'}`} title={`Milestone${milestone ? `: ${milestone.title}` : ''} — change it (m)`} onClick={() => { modal.value = 'milestone'; }}>
         {milestone ? `${milestone.title}${milestone.state === 'closed' ? ' (closed)' : ''}` : 'no milestone'}
       </button>
       {value('priority')}
