@@ -191,8 +191,8 @@ function Column({ id, index }: { id: ColumnId; index: number }) {
         {groups.map((g) => (
           <>
             {g.label && (
-              <button class={`group-head level-${g.level}`} title="Select this group" onClick={() => selectAll(g.cards.map((c) => c.number))}>
-                {g.label} <small>{g.cards.length}</small>
+              <button class={`group-head level-${g.parts[0]!.level}`} title="Select this group" onClick={() => selectAll(g.cards.map((c) => c.number))}>
+                {g.parts.map((part, i) => <>{i > 0 && <span class="sep"> · </span>}<span class={`level-${part.level}`}>{part.text}</span></>)} <small>{g.cards.length}</small>
               </button>
             )}
             {g.cards.map((card) => <Card key={card.number} card={card} />)}

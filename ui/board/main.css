@@ -182,17 +182,20 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .segmented button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .column.inbox { border-style: dashed; }
 .group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.5rem 0.125rem 0.25rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
-.group-head:hover { color: var(--accent); }
-/* A heading takes the colour of its place in what the column is grouped by first, most pressing
-   (Urgent, or XL) warmest, so the eye finds the top of a column's work. What nobody has judged
-   is blue, so that it is as easy to find: the text darker than its bar, to stay readable. */
+.group-head:hover { text-decoration: underline; }
+/* Each part of a heading takes the colour of its place in its own scale, most pressing or
+   largest (Urgent, XL) warmest, so "High · S" can be picked out by eye; the bar down the left is
+   the first part's. What nobody has judged is blue, so that it is as easy to find: the text
+   darker than the bar, to stay readable. */
 .group-head:not(.level--1) { border-left: 0.25rem solid currentColor; padding-left: 0.375rem; }
-.group-head.level-0 { color: var(--accent); border-left-color: #54aeff; }
-.group-head.level-1 { color: var(--bad); }
-.group-head.level-2 { color: #bc4c00; }
-.group-head.level-3 { color: var(--warn); }
-.group-head.level-4 { color: var(--good); }
-.group-head.level-5 { color: var(--ink); }
+.group-head.level-0 { border-left-color: #54aeff; }
+.group-head .sep, .group-head small { color: var(--muted); }
+.group-head .level-0 { color: var(--accent); }
+.group-head.level-1, .group-head .level-1 { color: var(--bad); }
+.group-head.level-2, .group-head .level-2 { color: #bc4c00; }
+.group-head.level-3, .group-head .level-3 { color: var(--warn); }
+.group-head.level-4, .group-head .level-4 { color: var(--good); }
+.group-head.level-5, .group-head .level-5 { color: light-dark(#1b7c83, #39c5cf); }
 .chip.milestone { border: 1px solid var(--line); background: none; }
 .banner { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
 .banner.rehearsal { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }
