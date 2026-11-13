@@ -468,13 +468,24 @@ const openMenu = signal<string | null>(null);
 /** A button that drops a panel under itself. It closes on a press anywhere outside and on
  *  Escape. A press in the card panel's description would not count — that is a sandboxed frame,
  *  whose events never reach this document — so `main` is given `menu-open` while a menu is, and
- *  the stylesheet lets presses through the frame for as long. `align` is the edge of the button the panel hangs from; a menu at the right of the toolbar
- *  hangs from its right edge, so that it opens into the page and not off it. */
+ *  the stylesheet lets presses through the frame for as long. `align` is the edge of the
+ *  button the panel hangs from to begin with; one that would run off the page that way is hung
+ *  from the other edge instead, since where a button sits depends on how the bar has wrapped. */
 function Menu({ name, label, title, align = 'left', wide, children }: {
   name: string; label: ComponentChildren; title?: string; align?: 'left' | 'right'; wide?: boolean; children: ComponentChildren;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const [side, setSide] = useState(align);
   const open = openMenu.value === name;
+  // Before the panel is painted: measure it where `align` puts it, and turn it round if it is
+  // over the edge of the page.
+  useLayoutEffect(() => {
+    if (!open) { setSide(align); return; }
+    const box = body.current?.getBoundingClientRect();
+    if (box && side === 'left' && box.right > document.documentElement.clientWidth) setSide('right');
+    else if (box && side === 'right' && box.left < 0) setSide('left');
+  }, [open]);
   // A layout effect, so the listeners are there as soon as the panel is: a plain effect waits
   // for the next frame, and an Escape sent straight after the click (by a script) was missed.
   useLayoutEffect(() => {
@@ -493,7 +504,7 @@ function Menu({ name, label, title, align = 'left', wide, children }: {
   return (
     <div class="menu" ref={ref}>
       <button class={open ? 'on' : ''} aria-haspopup="true" aria-expanded={open} title={title} onClick={() => { openMenu.value = open ? null : name; }}>{label}</button>
-      {open && <div class={`menu-body ${align}${wide ? ' wide' : ''}`}>{children}</div>}
+      {open && <div ref={body} class={`menu-body ${side}${wide ? ' wide' : ''}`}>{children}</div>}
     </div>
   );
 }
@@ -522,10 +533,10 @@ function ColumnsMenu() {
 
 const GROUPINGS: { label: string; by: DimKind[] }[] = [
   { label: 'No grouping', by: [] },
-  { label: 'Group by priority', by: ['priority'] },
-  { label: 'Group by effort', by: ['effort'] },
-  { label: 'Group by priority, then effort', by: ['priority', 'effort'] },
-  { label: 'Group by milestone', by: ['milestone'] },
+  { label: 'Group: priority', by: ['priority'] },
+  { label: 'Group: effort', by: ['effort'] },
+  { label: 'Group: priority, effort', by: ['priority', 'effort'] },
+  { label: 'Group: milestone', by: ['milestone'] },
 ];
 
 /** What the columns are, and what the cards in a column are grouped by. */
@@ -554,33 +565,47 @@ function Toolbar() {
   const all = [...cards.value.values()];
   const labels = [...new Set(all.flatMap((c) => c.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const priorities = [...new Set(all.map((c) => priorityOf(c, layout.value.mapping)).filter(Boolean))].sort();
-  const active = JSON.stringify(f) !== JSON.stringify(noFilters);
+  // How many filters are on besides the search box, which shows its own text.
+  const on = [f.kind, f.label, f.priority, f.hasPr, f.unlabelled].filter(Boolean).length;
+  const scoped = shown.value.map((id) => columnTitle(id, 'milestone'));
   const unsaved = pending.value;
   return (
     <header class="toolbar">
       <strong>{board.value?.repo}</strong>
-      {readOnly.value && <span class="chip would" title="MILESTONES_PERMISSIONS=read: moves are shown here and not written to GitHub">read-only</span>}
       <ViewControls />
       {dimension.value !== 'milestone' && scope.value && (
-        <span class="chip" title="Only cards on these milestones are being sorted. Change it under 'In milestones'.">
-          in {shown.value.length <= 3 ? shown.value.map((id) => columnTitle(id, 'milestone')).join(', ') : `${shown.value.length} milestones`}
+        <span class="chip scope" title={`Only cards on these milestones are being sorted: ${scoped.join(', ') || 'none'}. Change it under 'In milestones'.`}>
+          in {scoped.length <= 3 ? scoped.join(', ') : `${scoped.length} milestones`}
         </span>
       )}
       <input id="search" type="search" placeholder="Search (/)" value={f.text}
         onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
-      <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
-        <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
-      </select>
-      <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
-        <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
-      </select>
-      <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
-        <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
-      </select>
-      <label><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> has PR</label>
-      <label><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> no labels</label>
-      {active && <button onClick={() => { filters.value = noFilters; }}>Clear</button>}
+      {/* The filters other than the search live in a menu: laid out in the bar they were wider
+          than a laptop's screen, and the bar wrapped with nothing optional showing. The button
+          counts the ones that are on, so a filtered board never looks like a whole one. */}
+      <Menu name="filters" wide label={<span class={on ? 'filtering' : ''}>{on ? `Filters (${on})` : 'Filters'}</span>} title="Show only some cards">
+        <div class="filters">
+          <label>Show
+            <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>
+              <option value="">Issues and PRs</option><option value="issue">Issues</option><option value="pr">Pull requests</option>
+            </select>
+          </label>
+          <label>Label
+            <select value={f.label} onChange={(e) => set({ label: (e.target as HTMLSelectElement).value })}>
+              <option value="">Any label</option>{labels.map((l) => <option value={l}>{l}</option>)}
+            </select>
+          </label>
+          <label>Priority
+            <select value={f.priority} onChange={(e) => set({ priority: (e.target as HTMLSelectElement).value })}>
+              <option value="">Any priority</option>{priorities.map((p) => <option value={p}>{p}</option>)}
+            </select>
+          </label>
+          <label class="tick"><input type="checkbox" checked={f.hasPr} onChange={() => set({ hasPr: !f.hasPr })} /> Has a pull request</label>
+          <label class="tick"><input type="checkbox" checked={f.unlabelled} onChange={() => set({ unlabelled: !f.unlabelled })} /> Has no labels</label>
+          <button disabled={!on && !f.text} onClick={() => { filters.value = noFilters; }}>Clear filters{f.text ? ' and search' : ''}</button>
+        </div>
+      </Menu>
       <div class="toolbar-end">
         {selected.value.size > 0 && <span class="chip">{selected.value.size} selected</span>}
         {unsaved.length > 0 && <span class={`chip ${unsaved.some((a) => a.status === 'failed') ? 'failed' : 'saving'}`}>
@@ -590,8 +615,8 @@ function Toolbar() {
           Suggestions ({openSuggestions.value.length})
         </button>
         <ColumnsMenu />
-        <button onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
-        <Menu name="keys" align="right" label="Keys">
+        <button class="refresh" onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
+        <Menu name="keys" align="right" label="?" title="Keys">
           <div class="keys">
             <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
             <div><kbd>v</kbd> columns by milestone, priority, effort</div>

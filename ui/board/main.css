@@ -31,9 +31,17 @@ kbd { font: 0.8125rem ui-monospace, monospace; border: 1px solid var(--line); bo
 small { color: var(--muted); }
 
 .toolbar { display: flex; align-items: center; gap: 0.625rem; padding: 0.625rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-.toolbar input[type="search"] { width: 16em; }
-.toolbar select { max-width: 13em; }
+.toolbar input[type="search"] { flex: 1 1 6em; min-width: 6em; max-width: 20em; }
+.toolbar > select { max-width: 10em; }
 .toolbar label { white-space: nowrap; }
+.toolbar .scope { max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
+/* As wide as its longer label, so "Reading…" doesn't move where the bar wraps. */
+.toolbar .refresh { min-width: 5.75em; }
+.filtering { color: var(--accent); }
+.filters { display: flex; flex-direction: column; gap: 0.5rem; }
+.filters label:not(.tick) { justify-content: space-between; gap: 1rem; }
+.filters select { max-width: 14em; }
+.filters button:disabled { opacity: 0.5; cursor: default; }
 /* The right-hand group. Its auto margin takes the row's spare room, and when the bar wraps it
    takes the whole of the new row's, so the group stays at the right edge — where its menus,
    which hang from their buttons' right edges, have the page to open into. */

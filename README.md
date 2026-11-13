@@ -203,7 +203,7 @@ backlog can be triaged in passes:
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
 3. Switch to **Effort** and do the same.
-4. Back in **Milestone**, choose *Group by priority, then effort*. Each column is now cut into
+4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
    groups — "Urgent · Low", "High · Medium" — judged cards first. Click a group's heading to select
    it, and one key sends the whole group to a milestone.
 
