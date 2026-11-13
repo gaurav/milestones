@@ -19,6 +19,11 @@ import {
 
 const DRAG = 'application/x-milestones-cards';
 
+/** Puts the keyboard in a field as it appears. The `autofocus` attribute is not enough: a browser
+ *  ignores it while something else has focus, which is the case whenever a dialog is opened by
+ *  a click on a button rather than by a key — the field then took no typing and no Escape. */
+const focusOnMount = (el: HTMLElement | null) => { el?.focus(); };
+
 function Status({ action }: { action: Action | undefined }) {
   if (!action) return null;
   if (action.status === 'pending') return <span class="status saving" title="Writing to GitHub…">saving…</span>;
@@ -109,7 +114,7 @@ function DueDate({ id }: { id: number }) {
         type="date"
         class="due-input"
         value={milestone.due ?? ''}
-        autoFocus
+        ref={focusOnMount}
         onBlur={() => setEditing(false)}
         onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); e.stopPropagation(); }}
         onChange={(e) => { setDue(id, (e.target as HTMLInputElement).value || null); setEditing(false); }}
@@ -296,7 +301,8 @@ function Choice({ kind }: { kind: Kind }) {
   const issues = targets();
   const close = () => { modal.value = null; };
   const choose = (value: string | null) => { close(); change(issues, kind, value); };
-  useEffect(() => {
+  // A layout effect, as in Menu: the number key may come before the next frame does.
+  useLayoutEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       e.stopPropagation();
       if (e.key === 'Escape') close();
@@ -333,8 +339,8 @@ function TextDialog({ kind }: { kind: 'title' | 'comment' }) {
       <div class="picker wide" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">{kind === 'title' ? `Retitle #${issues[0]}` : `Comment on ${issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`}`}</div>
         {kind === 'title'
-          ? <input autoFocus value={text} onInput={(e) => setText((e.target as HTMLInputElement).value)} onKeyDown={keys} />
-          : <textarea autoFocus rows={8} placeholder="Markdown. ⌘↵ or Ctrl+↵ to post." value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onKeyDown={keys} />}
+          ? <input ref={focusOnMount} value={text} onInput={(e) => setText((e.target as HTMLInputElement).value)} onKeyDown={keys} />
+          : <textarea ref={focusOnMount} rows={8} placeholder="Markdown. ⌘↵ or Ctrl+↵ to post." value={text} onInput={(e) => setText((e.target as HTMLTextAreaElement).value)} onKeyDown={keys} />}
         <div class="picker-foot"><button onClick={close}>Cancel</button><button class="primary" onClick={save}>{kind === 'title' ? 'Save' : 'Comment'}</button></div>
       </div>
     </div>
@@ -359,7 +365,7 @@ function LabelsDialog() {
     <div class="overlay" onClick={() => { modal.value = null; }}>
       <div class="picker" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">Labels for {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`} — ↵ toggles, esc closes</div>
-        <input autoFocus placeholder="Type a label's name" value={text}
+        <input ref={focusOnMount} placeholder="Type a label's name" value={text}
           onInput={(e) => { setText((e.target as HTMLInputElement).value); setAt(0); }}
           onKeyDown={(e) => {
             e.stopPropagation();
@@ -400,7 +406,7 @@ function AskDialog() {
     <div class="overlay" onClick={close}>
       <div class="picker wide" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">Ask a coding agent about {asked.length === 1 ? `#${asked[0]!.number}` : `${asked.length} cards`} — what do you think?</div>
-        <textarea autoFocus rows={4} placeholder="e.g. medium priority, medium effort: we can add this as its own identifier source that won't conflict with existing ones"
+        <textarea ref={focusOnMount} rows={4} placeholder="e.g. medium priority, medium effort: we can add this as its own identifier source that won't conflict with existing ones"
           value={view} onInput={(e) => setView((e.target as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {
             e.stopPropagation();
@@ -438,7 +444,7 @@ function Picker() {
       <div class="picker" onClick={(e) => e.stopPropagation()}>
         <div class="picker-head">Move {issues.length === 1 ? `#${issues[0]}` : `${issues.length} cards`} to…</div>
         <input
-          autoFocus
+          ref={focusOnMount}
           placeholder="Type a milestone's name"
           value={text}
           onInput={(e) => { setText((e.target as HTMLInputElement).value); setAt(0); }}

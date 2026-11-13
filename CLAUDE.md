@@ -249,6 +249,9 @@ far more than `_norm_issue` keeps.
   open; a listener for window `blur` was tried for that and does not fire in headless Chromium.
   Its listeners go on in a layout effect: a plain effect waits a frame, and a scripted Escape
   sent straight after the click was missed.
+- A dialog's field takes the keyboard through `ref={focusOnMount}`, not `autoFocus`: a browser
+  ignores the attribute while another element has focus, so a dialog opened by clicking a button
+  (rather than by its key) got no typing and no Escape. Use it for any field a click can open.
 - A read-only board saves its changes to a plan file (`board/plan.py`; `Board.save_plan` after
   every submit and resolve). The plan is the **net** of the `would` actions, so an undone change
   is not in it. A writable board never applies a plan by itself: `review_plan` turns it into
