@@ -178,11 +178,13 @@ function Column({ id, index }: { id: ColumnId; index: number }) {
           {index < 9 && <kbd>{byMilestone ? index + 1 : index}</kbd>}
           {milestone ? <a href={milestone.url} target="_blank" rel="noreferrer">{milestone.title}</a> : columnTitle(id)}
           {closed && <span class="chip closed">closed</span>}
+          {/* On the title's line, not the one below: there it sat beside the due date and read
+              as clearing the date. */}
+          {byMilestone && <button class="hide" title="Hide this column" aria-label="Hide this column" onClick={() => toggleColumn(id)}>×</button>}
         </div>
         <div class="column-sub">
           <span>{list.length === total ? total : `${list.length} of ${total}`}</span>
           {byMilestone && id !== NONE && <DueDate id={id as number} />}
-          {byMilestone && <button class="hide" title="Hide this column" onClick={() => toggleColumn(id)}>×</button>}
         </div>
       </header>
       <div class="cards">

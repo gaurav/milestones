@@ -113,6 +113,10 @@ try {
   await menu('Columns'); await page.click('.menu-actions button:has-text("All")'); await page.keyboard.press('Escape');
   check('all ticked drops from=', !(await search()).includes('from='), await search());
 
+  // --- A column's hide button is on its title line, not beside the due date it once seemed to clear.
+  check("a column's × is on its title line",
+    (await page.locator('.column-title .hide').count()) > 0 && (await page.locator('.column-sub .hide').count()) === 0);
+
   // --- Filters ride in the URL too.
   await page.fill('#search', 'the'); await page.keyboard.press('Enter');
   await page.selectOption('.filterbar select >> nth=0', 'issue');
