@@ -169,6 +169,17 @@ try {
     note('card buttons', 'not in this build; skipped');
   }
 
+  // --- A pull request's card: its lines changed among the facts, what it closes below them.
+  const prCards = await page.locator('.card .tag.kind.pr').count();
+  if (prCards && await page.locator('.card-facts .diff').count()) {
+    check("every pull request's card shows its lines added and removed", (await page.locator('.card-facts .diff').count()) === prCards);
+    check('what a pull request closes is below its facts, not among them',
+      !(await page.$$eval('.card-facts', (e) => e.some((x) => /closes/.test(x.textContent)))));
+    note('cards saying what they close', await page.locator('.card-ties .closes').count());
+  } else {
+    note('pull request rows', 'none in view or not in this build; skipped');
+  }
+
   // --- The card panel's buttons, where this build has them.
   if (await page.locator('.places .place').count()) {
     const places = () => page.$$eval('.places .place, .detail-strip .place', (e) => e.map((x) => x.textContent));
