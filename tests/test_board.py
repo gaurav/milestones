@@ -505,6 +505,17 @@ def test_brief_buckets_match_milestones_md():
     assert "Urgent, High, Medium, Low" in text
 
 
+def test_labels_md_matches_the_label_table():
+    doc = " ".join(Path(__file__).parent.parent.joinpath("LABELS.md").read_text().split())
+    brief = client.brief(DEFAULT_BUCKETS)
+    for kind, spec in reconcile.KINDS.items():
+        for option in spec["options"]:
+            label, meaning = reconcile.standard_label(kind, option), spec["meanings"][option]
+            assert f"| `{label}` | `#{spec['colors'][option]}` | {meaning} |" in doc
+            assert f"- {spec['field']} {option}: {meaning}" in brief
+    assert "XS, S, M, L, XL" in brief
+
+
 def test_the_board_hands_the_page_its_label_table(monkeypatch):
     monkeypatch.setattr(gh, "read_only", lambda: False)
     board = server.Board("o/r", [], sort_key, aliases={"p0": "Priority: Urgent", "easy": "Effort: S"})

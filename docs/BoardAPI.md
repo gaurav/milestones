@@ -65,8 +65,9 @@ you retry it or revert it.
 | `kind` | `value` | Written as |
 | --- | --- | --- |
 | `milestone` | a milestone's number, or `null` for none | the issue's milestone |
-| `priority`, `effort` | an option's name (any case), or `null` to clear | the organisation's Priority or Effort issue field. Where the owner has no such field, a `Priority: X` or `Effort: X` label instead — the action that comes back is then of kind `labels`. A pull request has no fields: `400`. |
-| `labels` | the whole list of names, or a change `{add: [...], remove: [...]}` | the issue's label set. The action's `value` is always the resulting list. A name the repo hasn't got is created. |
+| `priority`, `effort` | an option's name (any case: `High`, `m`), or `null` to clear | the standard label, `Priority: X` or `Effort: X`, in place of every other label about that kind (`Priority: Critical`, `Size: M`). The action that comes back is of kind `labels`; an issue and a pull request take it alike. A value that is not one of `labelValues`' options: `400`. |
+| `priority-field`, `effort-field` | `null`, to clear it (or an option's name, which is how an undo puts it back) | the organisation's Priority or Effort issue field, which is read but no longer where either is kept. A pull request, or an owner with no such field: `400`. |
+| `labels` | the whole list of names, or a change `{add: [...], remove: [...]}` | the issue's label set. The action's `value` is always the resulting list. A name the repo hasn't got is created, a standard priority or effort label in its colour and with its description. |
 | `title` | text | the title |
 | `state` | `"completed"` or `"not_planned"` to close, `null` to reopen | the issue's state |
 | `comment` | Markdown | a new comment. Not card state: `previous` is `null`, and it cannot be undone. |
@@ -81,9 +82,10 @@ you retry it or revert it.
 | `status` | `open`, `accepted`, `rejected`, or `withdrawn` (a rule's suggestion that no longer applies) |
 | `action` | the action an accepted suggestion became |
 
-The board makes suggestions of its own from each card (`milestones/board/reconcile.py`): fill an
-empty Priority or Effort field from a `Priority:` or `Size:` label, then remove a label the field
-repeats or contradicts. Undecided suggestions from outside, and every rejection, are kept in
+The board makes suggestions of its own from each card (`milestones/board/reconcile.py`): set the
+standard `Priority:` or `Effort:` label from an older label, one of the repo's own or the
+organisation's field, where those agree; then remove an older label, and clear a field
+(`priority-field`, `effort-field`), that repeats or contradicts it. Undecided suggestions from outside, and every rejection, are kept in
 `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` (default `~/.local/state`), so a restart
 loses neither and a rejected suggestion is not made again.
 
@@ -91,7 +93,7 @@ loses neither and a rejected suggestion is not made again.
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is what a label means in a field's terms, as `{priority: {field, prefix, values}, effort: {…}}` — `prefix` is a regular expression for the label's name before its colon, and `values` maps what follows it, lower-cased, to an option's name; `view` is what was last saved with `POST /api/v1/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is the priority and effort label scheme, as `{priority: {field, prefix, options, colors, meanings, values, aliases}, effort: {…}}` — `options` are the values in order, each written as the label `<field>: <option>`; `prefix` is a regular expression for the name, before its colon, of any label about the kind; `values` maps what follows the colon, or the organisation field's value, lower-cased, to an option; `aliases` maps a label of the repo's own, lower-cased, to the option it stands for; `view` is what was last saved with `POST /api/v1/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
 | `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |

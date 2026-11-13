@@ -2021,7 +2021,7 @@ def main():
     assign.add_argument("refs", metavar="REF", nargs="*",
                         help="OWNER/NAME#N or an issue URL; none, to read them from stdin")
     assign.add_argument("--priority", choices=[n.lower() for n in reconcile.KINDS["priority"]["options"]],
-                        help="also set the organisation's Priority field on each issue")
+                        help="also set the Priority: label on each issue and pull request")
     assign.set_defaults(func=cmd_assign)
     rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
     rollover.add_argument("repo", metavar="OWNER/NAME")
@@ -2057,8 +2057,8 @@ def main():
     suggest.add_argument("ref", nargs="?", metavar="REF",
                          help="OWNER/NAME#N, an issue URL, or N inside the repo's checkout")
     suggest.add_argument("--milestone", metavar="TITLE", help='"none" takes it off its milestone')
-    suggest.add_argument("--priority", metavar="P", help='e.g. urgent, high, medium, low; "none" clears')
-    suggest.add_argument("--effort", metavar="E", help='e.g. high, medium, low; "none" clears')
+    suggest.add_argument("--priority", metavar="P", help='urgent, high, medium or low; "none" clears')
+    suggest.add_argument("--effort", metavar="E", help='xs, s, m, l or xl; "none" clears')
     suggest.add_argument("--add-label", action="append", metavar="LABEL")
     suggest.add_argument("--remove-label", action="append", metavar="LABEL")
     suggest.add_argument("--title", help="a new title")

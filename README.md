@@ -58,6 +58,12 @@ focus = ["gaurav/milestones"]
 NCATSTranslator = "blue"
 TranslatorSRI = "blue"
 phyloref = "yellow"
+
+# Optional: a repo's own labels that say a priority or an effort, each with the standard
+# label it stands for (see LABELS.md). They are read, never written or removed.
+[labels."NCATSTranslator/Babel"]
+"P0" = "Priority: Urgent"
+"good first issue" = "Effort: S"
 ```
 
 Colour names are `blue`, `cyan`, `teal`, `indigo`, `violet`, `magenta`, `purple`, `yellow`,
@@ -89,8 +95,9 @@ Every command is described below; this is the order they are useful in.
    "v1.2"` is the same job one issue at a time, for when they shouldn't all go the same way.
 
 [MILESTONES.md](MILESTONES.md) is the other half: what the buckets mean and how a release is
-put together. It is written for the people and coding agents working in the repos themselves,
-so it says nothing about this tool.
+put together. [LABELS.md](LABELS.md) goes with it: the `Priority:` and `Effort:` labels that
+order the work on a milestone. Both are written for the people and coding agents working in the
+repos themselves, so they say next to nothing about this tool.
 
 ## Tokens and read-only runs
 
@@ -137,10 +144,11 @@ work on it.
 A card shows what has already been decided about it, wherever that was written down. Its title
 comes first, alone; under it, the number, age, comments, sub-issues, a pull request's lines added
 and removed, and who opened it (`@login`); then whether it is an issue or a pull request (a draft,
-closed, its issue type), and beside that its priority, effort and milestone — the organisation's
-fields, or a `Priority:`/`Size:` label where the field is unset, in italics. A pull request with no
-effort recorded shows one estimated from its lines changed instead, `~M`, in the size bands prcoder
-uses; it is only shown, never written. Those three are buttons, the same as the pane's below, and a
+closed, its issue type), and beside that its priority, effort and milestone. Priority and effort
+are its `Priority:` and `Effort:` labels ([LABELS.md](LABELS.md)); one read from anywhere else — an
+older label such as `Size: M`, a label of the repo's own, the organisation's issue field — is in
+italics. A pull request with no effort recorded shows one estimated from its lines changed instead,
+`~M`, in the size bands prcoder uses; it is only shown, never written. Those three are buttons, the same as the pane's below, and a
 card leaves off whichever the columns or the grouping already show. Then, small, who is assigned
 (each with a link to their GitHub profile), the issues a pull request closes, and the pull requests
 that close an issue or only mention it; and its other labels on a line of their own; the filter row
@@ -163,16 +171,17 @@ Moving a pull request also moves the open issues it closes that nobody has place
 
 The same keys reach the rest of a card: `p` sets its priority and `e` its effort, `L` toggles
 labels, `t` retitles it, `c` comments, and `x` closes or reopens it. Priority and effort are
-written to the organisation's issue fields; a repo whose owner has none (a personal account) gets a
-`Priority: High` label instead. All of them work on a selection, and `z` undoes all but a comment.
-A number picks the same level in the priority and effort dialogs — `1` Urgent, `2` High, `3`
-Medium, `4` Low — and effort, having no Urgent, takes `1` as High too; `0` clears either.
+written as labels, `Priority: High` and `Effort: M`, on issues and pull requests alike: a pull
+request can't hold an organisation issue field, and the two need to sort together. A label the repo
+hasn't got is made in its standard colour. All of them work on a selection, and `z` undoes all but
+a comment. A number picks an option by its place in the dialog — `1` to `4` are Urgent, High,
+Medium and Low, and for effort `1` to `5` are XS to XL; `0` clears either.
 
 **Suggestions** (`s`, or the button) is the list of changes waiting for a yes or no. The board
-puts its own there: where a `Priority:` or `Size:` label records what the Priority or Effort field
-should, it suggests filling the field, and then removing the label the field has made redundant —
-read from anywhere, written one way. Where a label and a field disagree it keeps the field and says
-so. Accept or reject them one at a time on the card, or a whole rule at once from the list;
+puts its own there: where an older label (`Priority: Critical`, `Size: M`), a label of the repo's
+own or the organisation's field records a priority or an effort, it suggests setting the standard
+label, and then removing the older label and clearing the field that it has made redundant — read
+from anywhere, written one way. Where they disagree it keeps the standard label and says so. Accept or reject them one at a time on the card, or a whole rule at once from the list;
 accepting is an ordinary change, written and undone like any other, and a rejection is remembered.
 
 Every move is written to GitHub as you make it, in order, while you carry on. A card whose write
@@ -214,16 +223,16 @@ backlog can be triaged in passes:
 2. Switch to **Priority**. The first column, *No priority*, is the inbox; `1`–`4` send the focused
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
-3. Switch to **Effort** and do the same. The keys are the same levels: `3` is Medium, and both
-   `1` and `2` are High.
+3. Switch to **Effort** and do the same: `1`–`5` are XS to XL.
 4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
-   groups — "Urgent · Low", "High · Medium" — judged cards first. Click a group's heading to select
+   groups — "Urgent · S", "High · M" — judged cards first, the smallest effort first within a
+   priority, which is the order to work a milestone in. Click a group's heading to select
    it, and one key sends the whole group to a milestone.
 
-A card stands in the column of what was recorded about it, wherever that was: the field, or else a
-label read in the field's terms (`Priority: Critical` under Urgent, `Size: M` under Medium), marked
-*from label*. Putting it in a column sets the field. Pull requests are left out of the priority
-and effort views where the owner has those fields, since a pull request cannot hold one.
+A card stands in the column of what was recorded about it, wherever that was: its standard label,
+or else an older record read in the same terms (`Priority: Critical` under Urgent, the Effort
+field's High under L), marked *from old label* or *from field*. Putting it in a column sets the
+standard label. Pull requests are sorted with the issues.
 
 The board opens the way you left it — the view, the grouping and the milestones ticked — unless
 you say otherwise: `milestones board --by priority --group effort`, or `--from`, wins. `p`, `e` and `m` still set
@@ -249,7 +258,7 @@ agent's session. The agent reads the issue and the code, argues if it disagrees,
 settled it, proposes the changes:
 
 ```sh
-milestones suggest 62 --priority medium --effort medium --milestone "Needed soon" \
+milestones suggest 62 --priority medium --effort m --milestone "Needed soon" \
     --add-label "new data source" \
     --reason "Own identifier source; overlaps MeSH on about 40 IDs, see src/createcompendia" \
     --source opus
@@ -302,7 +311,7 @@ milestones triage [--repo OWNER/NAME] [--prs] [--from MILESTONE ...] [--list|--j
                                          # opens with how many it found where, and ends —
                                          # on q, ^C or an error too — on what it assigned,
                                          # skipped, created and left to do
-milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
+milestones assign MILESTONE [REF ...] [--priority urgent|high|medium|low]
                                          # put issues on the milestone of that title in
                                          # each of their repos; REF is OWNER/NAME#N or an
                                          # issue URL, or read from stdin one per line — a
@@ -310,11 +319,13 @@ milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
                                          # terminal; a repo without that milestone is
                                          # skipped, not fatal. A PR takes the issues it
                                          # closes along, as in the walk. --priority also sets
-                                         # the organisation's Priority field, where there is one
+                                         # each one's `Priority:` label
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
-milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
+milestones setup OWNER/NAME              # create the standing buckets and the priority and
+                                         # effort labels in a repo (idempotent); asks before
+                                         # renaming or recolouring a label that is there
                                          # except Critical, which triage offers anyway and
                                          # creates the first time you pick it
 milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
@@ -417,9 +428,8 @@ is the same pipeline with `Needs triage` as the title (`grep -i 'cannot reproduc
 `triage --from "Needs triage" --list` is the parked set, ready to be piped back in once it is
 clearer where each belongs. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
-is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
-one item: the organisation's Priority field is set on each issue after its milestone, skipped with
-a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags
+is the answer. `--priority urgent|high|medium|low` does for a pipeline what the walk's `!` `+` `-`
+do for one item: the `Priority:` label is set on each issue or pull request after its milestone. The listing GitHub returns lags
 writes by a few seconds, so a `--list` straight after an `assign` can still show what was just
 moved — re-running is harmless.
 
@@ -462,10 +472,10 @@ open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
 An answer in either walk takes one modifier after the number (or after `c`), regex-style. `2!`
 assigns milestone 2 and then sets the item's priority to Urgent, `2+` High, `2-` Low. Priority
-is an organisation issue field, so the keys are offered only where the repo's owner has a
-single-select `Priority` field with those option names, and since a pull request has no fields a
-PR's priority goes onto the open issues it closes. `assign --priority urgent|high|low` is the same
-thing for a pipeline. `2^` and `2$`, for the top and bottom of the milestone's order, are parsed
+is a label ([LABELS.md](LABELS.md)), `Priority: Urgent` and so on, which replaces any other
+`Priority:` label on the item and is made in its standard colour if the repo hasn't got it; a pull
+request takes it as an issue does. `assign --priority urgent|high|medium|low` is the same thing for
+a pipeline. `2^` and `2$`, for the top and bottom of the milestone's order, are parsed
 and refused: GitHub has no API that writes that order
 ([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
 links to it for dragging by hand.
