@@ -313,7 +313,7 @@ function Detail() {
         {(card.closingPrs?.length ?? 0) > 0 && <><dt>Closed by</dt><dd>{card.closingPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {(card.mentionedPrs?.length ?? 0) > 0 && <><dt>Mentioned in</dt><dd>{card.mentionedPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {card.branch && <><dt>Branch</dt><dd><code>{card.branch}</code></dd></>}
-        {card.base && <><dt>Targets</dt><dd><code>{card.base}</code>{card.basePr && <PrLink pr={card.basePr} />}</dd></>}
+        {card.base && <><dt>Targets</dt><dd><code>{card.base}</code>{card.basePr && <PrLink pr={card.basePr} onBoard />}</dd></>}
         {(card.closes?.length ?? 0) > 0 && <><dt>Closes</dt><dd>{card.closes!.map((c) => <div>#{c.number} {c.title} <small>({c.state.toLowerCase()})</small></div>)}</dd></>}
       </dl>
       <div class="detail-actions">
@@ -533,8 +533,23 @@ function PrNumbers({ prs }: { prs: PrRef[] }) {
   );
 }
 
-function PrLink({ pr }: { pr: { number: number; title: string; state: string; draft: boolean; url: string } }) {
-  return <div><a href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a> {pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small></div>;
+/** A pull request, linked to GitHub. With `onBoard`, a plain click on one that has a card here
+ * focuses that card instead, even in a column that is hidden, since the panel shows it either
+ * way; a click with a modifier still opens it on GitHub. */
+function PrLink({ pr, onBoard }: { pr: { number: number; title: string; state: string; draft: boolean; url: string }; onBoard?: boolean }) {
+  const here = onBoard && cards.value.has(pr.number);
+  const focus = (e: MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    focused.value = pr.number;
+  };
+  return (
+    <div>
+      <a href={pr.url} target="_blank" rel="noreferrer" onClick={here ? focus : undefined}
+        title={here ? 'Show it on the board (⌘- or Ctrl-click opens it on GitHub)' : undefined}>#{pr.number}</a>
+      {' '}{pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small>
+    </div>
+  );
 }
 
 function Picker() {

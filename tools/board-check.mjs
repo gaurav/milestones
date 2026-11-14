@@ -205,7 +205,14 @@ try {
         return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
       });
       check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
-      note('target pull request shown', below.length ? 'yes' : 'none for this one');
+      if (below.length) {
+        const target = below[0].match(/\/pull\/(\d+)$/)[1];
+        await page.click('.detail dd:has(code) a >> nth=-1'); await settle();
+        const head = (await page.textContent('.detail h2 a')).trim();
+        check("a click on the target pull request focuses its card", head === `#${target}`, [target, head]);
+      } else {
+        note('target pull request', 'none for this one; focusing it not checked');
+      }
     } else {
       note('pull request branches', 'not in this build; skipped');
     }
