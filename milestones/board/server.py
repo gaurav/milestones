@@ -901,14 +901,23 @@ HANDOFF = "MILESTONES_BOARD_HANDOFF"
 SOURCE = Path(__file__).resolve().parents[1]
 
 
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:
+        """A page that goes away before its answer is written (a reload, a closed tab) is not
+        worth a traceback in the board's log; anything else still gets one."""
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def listen(port: int, handler, fd: int | None = None) -> ThreadingHTTPServer:
     """The board's server: on a new socket, or on the one a reloaded board handed over. Taking
     it over rather than binding the port again means a request made while the new process is
     still reading the repo waits in the socket's backlog instead of being refused."""
     if fd is None:
-        server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+        server = Server(("127.0.0.1", port), handler)
     else:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler, bind_and_activate=False)
+        server = Server(("127.0.0.1", 0), handler, bind_and_activate=False)
         server.socket.close()
         server.socket = socket.socket(fileno=fd)
         server.server_address = server.socket.getsockname()
