@@ -139,7 +139,8 @@ export function initialView(
   const kinds = DIMENSIONS.map((d) => d.kind as string);
   const kept = (saved?.shown ?? []).filter((id) => all.includes(id));
   const by = [asked.by, saved?.by].find((k) => k && kinds.includes(k)) ?? 'milestone';
-  const group = asked.group.length ? asked.group : saved?.group ?? [];
+  // Grouped by default: it costs nothing to read past, and `No grouping` is one click away.
+  const group = asked.group.length ? asked.group : saved?.group ?? ['priority', 'effort'];
   return {
     by: by as DimKind,
     group: group.filter((g) => kinds.includes(g)) as DimKind[],
@@ -282,15 +283,24 @@ export function group(cards: Card[], f: Filters, layout: Layout, scope: Set<Colu
   return groups;
 }
 
-/** A column's cards cut into its groups, each with a heading like "High · Medium". One
- *  group with no heading when nothing is grouped. */
-export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; cards: Card[] }[] {
-  if (groupBy.length === 0) return list.length ? [{ label: '', cards: list }] : [];
-  const out: { label: string; cards: Card[] }[] = [];
+/** A column's cards cut into its groups, each with a heading like "High · M". One group with
+ *  no heading when nothing is grouped. `parts` is the heading a dimension at a time, each with
+ *  its `level`: where it stands in that dimension — 1 for Urgent or XL, counting down the
+ *  options, and 0 where it is unset — which is what its colour is taken from, so that
+ *  "High · S" shows both at a glance. A milestone has no such scale: -1, but for the cards with
+ *  none, which are unset like any other. */
+export function sections(list: Card[], groupBy: DimKind[], layout: Layout): { label: string; parts: { text: string; level: number }[]; cards: Card[] }[] {
+  if (groupBy.length === 0) return list.length ? [{ label: '', parts: [], cards: list }] : [];
+  const out: { label: string; parts: { text: string; level: number }[]; cards: Card[] }[] = [];
   for (const card of list) {
-    const label = groupBy.map((kind) => columnLabel(columnFor(card, kind, layout), kind, layout.milestones)).join(' · ');
-    if (out.at(-1)?.label === label) out.at(-1)!.cards.push(card);
-    else out.push({ label, cards: [card] });
+    const at = groupBy.map((kind) => columnFor(card, kind, layout));
+    const label = groupBy.map((kind, i) => columnLabel(at[i]!, kind, layout.milestones)).join(' · ');
+    if (out.at(-1)?.label === label) { out.at(-1)!.cards.push(card); continue; }
+    const parts = groupBy.map((kind, i) => ({
+      text: columnLabel(at[i]!, kind, layout.milestones),
+      level: kind === 'milestone' ? (at[i] === NONE ? 0 : -1) : optionsOf(kind, layout.mapping).indexOf(String(at[i])) + 1,
+    }));
+    out.push({ label, parts, cards: [card] });
   }
   return out;
 }
@@ -303,6 +313,16 @@ export function nextFocus(column: Card[], leaving: Set<number>, focused: number)
   for (let i = at + 1; i < column.length; i++) if (!leaving.has(column[i]!.number)) return column[i]!.number;
   for (let i = at - 1; i >= 0; i--) if (!leaving.has(column[i]!.number)) return column[i]!.number;
   return null;
+}
+
+/** Where focus goes after a change, given the focused card's column before it and after it:
+ *  `nextFocus` over every card that left, read off the column rather than off the change asked
+ *  for. Moving a pull request also moves the issues it closes, which are often unplaced too and
+ *  right below it; counting only the cards asked for sent the focus after them, out of the
+ *  column the walk was going down. */
+export function focusAfter(before: Card[], after: Card[], focused: number): number | null {
+  const still = new Set(after.map((c) => c.number));
+  return nextFocus(before, new Set(before.map((c) => c.number).filter((n) => !still.has(n))), focused);
 }
 
 /** The action that decides what a card shows for a kind: the latest one that wasn't reverted. */

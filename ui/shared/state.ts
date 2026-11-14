@@ -5,7 +5,7 @@ import { Api, parseLocation } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
   DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, filtersFrom, group, initialView,
-  latestAction, nextFocus, noFilters, unsettled, viewQuery, withValue,
+  focusAfter, latestAction, nextFocus, noFilters, unsettled, viewQuery, withValue,
 } from './logic.ts';
 import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
 
@@ -253,10 +253,11 @@ async function submit(moves: Move[], undoable = true, advance = true): Promise<b
       say('Read-only: this was not written to GitHub. It is kept in the plan file, and a writable board can apply it.');
     }
     const now = here ? cards.value.get(here.number) : undefined;
-    if (advance && now && (currentColumn(now) !== before || !(grouped.value.get(before) ?? []).some((c) => c.number === now.number))) {
-      // It left its column (or the view): carry on with the card that was below it, so a
-      // run of keys walks down a column.
-      focused.value = nextFocus(list, new Set(moves.map((m) => m.issue)), now.number) ?? now.number;
+    const after = grouped.value.get(before) ?? [];
+    if (advance && now && (currentColumn(now) !== before || !after.some((c) => c.number === now.number))) {
+      // It left its column (or the view): carry on with the card that was below it and is
+      // still there, so a run of keys walks down a column.
+      focused.value = focusAfter(list, after, now.number) ?? now.number;
     }
     return true;
   } catch (error) {

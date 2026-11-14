@@ -1,6 +1,8 @@
 /* Every size that should grow with the text is in rem, against the one root size on `html`:
    change that and the whole board scales — text, columns, panels and pickers together. Borders,
-   radii and shadows stay in px. Cards are read at a glance during triage, so 16px is the floor. */
+   radii and shadows stay in px. The root is 14px, between 13px (too small to read at a glance on
+   a laptop) and 16px (too large on a big monitor), and browser zoom tunes it for each screen.
+   The description's iframe in main.tsx can't inherit it, so it repeats the number. */
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9; --panel: #fff; --ink: #1f2328; --muted: #656d76; --line: #d0d7de;
@@ -15,7 +17,7 @@
   }
 }
 * { box-sizing: border-box; }
-html { font-size: 16px; }
+html { font-size: 14px; }
 html, body, #app { height: 100%; }
 body { margin: 0; font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
 #app { display: flex; flex-direction: column; }
@@ -62,7 +64,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .column-title { font-weight: 600; font-size: 1.0625rem; display: flex; gap: 0.375rem; align-items: center; }
 .column-title a { color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column-sub { display: flex; gap: 0.625rem; align-items: center; color: var(--muted); font-size: 0.875rem; margin-top: 0.125rem; }
-.column-sub .hide { margin-left: auto; border: none; background: none; color: var(--muted); padding: 0 0.25rem; }
+.column-title .hide { flex: none; margin-left: auto; border: none; background: none; color: var(--muted); font-weight: 400; font-size: 1.25rem; line-height: 1; padding: 0 0.25rem; }
+.column-title .hide:hover { color: var(--ink); }
 .due { border: none; background: none; padding: 0; color: var(--muted); text-decoration: underline dotted; }
 .due.overdue { color: var(--bad); }
 .due-input { padding: 0 0.25rem; }
@@ -178,8 +181,26 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .segmented button:last-child { border-radius: 0 6px 6px 0; }
 .segmented button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .column.inbox { border-style: dashed; }
-.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.5rem 0.125rem 0.25rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
-.group-head:hover { color: var(--accent); }
+.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.1875rem 0.125rem; margin-top: 0.3125rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
+/* The space above a heading is margin, not padding, so that the bar down its left is no taller
+   than the text needs and the text sits in the middle of it. */
+.group-head:hover { text-decoration: underline; }
+/* Each part of a heading takes the colour of its place in its own scale, most pressing or
+   largest (Urgent, XL) warmest, so "High · S" can be picked out by eye; the bar down the left is
+   the first part's. What nobody has judged is blue, so that it is as easy to find: the text
+   darker than the bar, to stay readable. */
+/* An inset shadow rather than a border, which would meet the line below at a slant. */
+.group-head:not(.level--1) { box-shadow: inset 0.25rem 0 0 currentColor; padding-left: 0.625rem; }
+.group-head.level-0 { box-shadow: inset 0.25rem 0 0 #54aeff; }
+.group-head .sep, .group-head small { color: var(--muted); }
+/* A little brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
+   bold and is there to be spotted. Light and dark, in that order. */
+.group-head .level-0 { color: light-dark(#157aed, #4e9dfc); }
+.group-head.level-1, .group-head .level-1 { color: light-dark(#da2935, #fc5e56); }
+.group-head.level-2, .group-head .level-2 { color: light-dark(#ce5906, #d66a1f); }
+.group-head.level-3, .group-head .level-3 { color: light-dark(#ad7700, #dba632); }
+.group-head.level-4, .group-head .level-4 { color: light-dark(#249243, #4bc65a); }
+.group-head.level-5, .group-head .level-5 { color: light-dark(#1d8d96, #48cdd6); }
 .chip.milestone { border: 1px solid var(--line); background: none; }
 .banner { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
 .banner.rehearsal { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }

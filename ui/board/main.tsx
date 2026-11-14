@@ -59,6 +59,16 @@ function Card({ card }: { card: CardData }) {
         if (e.shiftKey || e.metaKey || e.ctrlKey) toggleSelected(card.number);
         focused.value = card.number;
       }}
+      // A double-click opens the card panel on this card, taking the place of the suggestions
+      // tray if that is up. Not from a button or link on the card, whose first click has
+      // already done something of its own; and the second press must not select a word.
+      onMouseDown={(e) => { if (e.detail > 1) e.preventDefault(); }}
+      onDblClick={(e) => {
+        if ((e.target as Element).closest('button, a, input')) return;
+        focused.value = card.number;
+        trayOpen.value = false;
+        detailOpen.value = true;
+      }}
       onDragStart={(e) => {
         e.dataTransfer!.setData(DRAG, JSON.stringify(targets(card.number)));
         e.dataTransfer!.effectAllowed = 'move';
@@ -178,19 +188,21 @@ function Column({ id, index }: { id: ColumnId; index: number }) {
           {index < 9 && <kbd>{byMilestone ? index + 1 : index}</kbd>}
           {milestone ? <a href={milestone.url} target="_blank" rel="noreferrer">{milestone.title}</a> : columnTitle(id)}
           {closed && <span class="chip closed">closed</span>}
+          {/* On the title's line, not the one below: there it sat beside the due date and read
+              as clearing the date. */}
+          {byMilestone && <button class="hide" title="Hide this column" aria-label="Hide this column" onClick={() => toggleColumn(id)}>×</button>}
         </div>
         <div class="column-sub">
           <span>{list.length === total ? total : `${list.length} of ${total}`}</span>
           {byMilestone && id !== NONE && <DueDate id={id as number} />}
-          {byMilestone && <button class="hide" title="Hide this column" onClick={() => toggleColumn(id)}>×</button>}
         </div>
       </header>
       <div class="cards">
         {groups.map((g) => (
           <>
             {g.label && (
-              <button class="group-head" title="Select this group" onClick={() => selectAll(g.cards.map((c) => c.number))}>
-                {g.label} <small>{g.cards.length}</small>
+              <button class={`group-head level-${g.parts[0]!.level}`} title="Select this group" onClick={() => selectAll(g.cards.map((c) => c.number))}>
+                {g.parts.map((part, i) => <>{i > 0 && <span class="sep"> · </span>}<span class={`level-${part.level}`}>{part.text}</span></>)} <small>{g.cards.length}</small>
               </button>
             )}
             {g.cards.map((card) => <Card key={card.number} card={card} />)}
@@ -281,12 +293,13 @@ function Detail() {
   // Priority and Effort are among the controls at the top; the rest are only shown.
   const fields = Object.entries(card.fields ?? {}).filter(([k]) => k !== FIELD_OF.priority && k !== FIELD_OF.effort);
   // GitHub has already sanitised bodyHTML; the sandbox (no scripts, no same-origin) is the
-  // second lock. Links open in a new tab, since the frame itself may not navigate.
+  // second lock. Links open in a new tab, since the frame itself may not navigate. The frame is
+  // a document of its own, so it can't inherit the board's root size: 14px is `html` in main.css.
   const doc = `<!doctype html><base target="_blank"><style>
     :root { color-scheme: light dark; }
-    body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 0 2px; overflow-wrap: anywhere; }
     img, video { max-width: 100%; height: auto; } pre { overflow: auto; padding: 8px; background: #8881; }
-    code { font-size: 14px; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
+    code { font-size: 0.875em; } table { border-collapse: collapse; } td, th { border: 1px solid #8885; padding: 2px 6px; }
     blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #8885; } a { color: #2f81f7; }
   </style>${card.bodyHTML || '<p><em>No description.</em></p>'}`;
   return (
@@ -787,7 +800,7 @@ function Toolbar() {
             <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
             <div>priority: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low; effort: <kbd>1</kbd>–<kbd>5</kbd> XL to XS</div>
             <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
+            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel (or double-click a card)</div>
             <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>r</kbd> read the card again from GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
             <div>Drag a card, or a selection, onto a column.</div>
           </div>

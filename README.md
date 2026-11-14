@@ -155,7 +155,8 @@ that close an issue or only mention it; and its other labels on a line of their 
 can narrow the board to one author. The pane on the right has the description and the rest. At its
 top are the card's milestone, priority and effort as buttons — click one to change it, as `m`, `p`
 and `e` do — and under them whatever has been suggested for that card. Collapse the pane (`i`) and
-the same buttons run down the strip that is left, with a count of the suggestions waiting.
+the same buttons run down the strip that is left, with a count of the suggestions waiting;
+double-click a card to open it again on that card.
 
 There are three ways to move a card, and they are the same write:
 
@@ -225,10 +226,13 @@ backlog can be triaged in passes:
    card to Urgent, High, Medium or Low and move on to the next, so a pass is a run of keys down
    that column. Its count is what is left.
 3. Switch to **Effort** and do the same: `1`–`5` are XL to XS.
-4. Back in **Milestone**, choose *Group: priority, effort*. Each column is now cut into
-   groups — "Urgent · L", "High · M" — judged cards first, the largest effort first within a
-   priority, so a milestone reads from what matters most and costs most down. Click a group's
-   heading to select it, and one key sends the whole group to a milestone.
+4. Back in **Milestone**, each column is cut into groups by priority and then effort — "Urgent ·
+   L", "High · M" — judged cards first, the largest effort first within a priority, so a milestone
+   reads from what matters most and costs most down. Each part of a heading is coloured by its place in its own scale,
+   red for Urgent or XL down through orange, amber and green, and blue for one nobody has set, so
+   "High · XS" can be picked out by eye. That grouping is the default; *No grouping* in the toolbar
+   turns it off. Click a group's heading to select it, and one key sends the whole
+   group to a milestone.
 
 A card stands in the column of what was recorded about it, wherever that was: its standard label,
 or else an older record read in the same terms (`Priority: Critical` under Urgent, the Effort
