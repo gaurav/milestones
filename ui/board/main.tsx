@@ -59,6 +59,16 @@ function Card({ card }: { card: CardData }) {
         if (e.shiftKey || e.metaKey || e.ctrlKey) toggleSelected(card.number);
         focused.value = card.number;
       }}
+      // A double-click opens the card panel on this card, taking the place of the suggestions
+      // tray if that is up. Not from a button or link on the card, whose first click has
+      // already done something of its own; and the second press must not select a word.
+      onMouseDown={(e) => { if (e.detail > 1) e.preventDefault(); }}
+      onDblClick={(e) => {
+        if ((e.target as Element).closest('button, a, input')) return;
+        focused.value = card.number;
+        trayOpen.value = false;
+        detailOpen.value = true;
+      }}
       onDragStart={(e) => {
         e.dataTransfer!.setData(DRAG, JSON.stringify(targets(card.number)));
         e.dataTransfer!.effectAllowed = 'move';
@@ -790,7 +800,7 @@ function Toolbar() {
             <div><kbd>p</kbd> priority <kbd>e</kbd> effort <kbd>L</kbd> labels</div>
             <div>priority: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low; effort: <kbd>1</kbd>–<kbd>5</kbd> XL to XS</div>
             <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
-            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
+            <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel (or double-click a card)</div>
             <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>r</kbd> read the card again from GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
             <div>Drag a card, or a selection, onto a column.</div>
           </div>

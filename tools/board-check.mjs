@@ -249,6 +249,17 @@ try {
     }
   }
 
+  // --- A double-click on a card opens the collapsed panel on it.
+  if (await page.locator('.detail .collapse').count()) {
+    await page.click('.detail .collapse'); await settle();
+    const card = page.locator('.column:first-child .card >> nth=1');
+    const number = (await card.locator('.card-facts a').first().textContent()).trim();
+    await card.locator('.card-title').dblclick(); await settle();
+    const head = (await page.textContent('.detail h2 a').catch(() => '')).trim();
+    check('a double-click on a card opens the panel on it', head === number, [number, head]);
+    check('and selects no text', (await page.evaluate(() => String(getSelection()))) === '');
+  }
+
   // --- The panel's ↻ reads its card again on its own: a read, so safe on a read-only board.
   if (await page.locator('.detail .reread').count()) {
     const head = (await page.textContent('.detail h2 a')).trim();
