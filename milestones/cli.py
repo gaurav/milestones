@@ -1401,7 +1401,7 @@ def cmd_board(config, args):
                      "whose origin is on GitHub.")
     server.run(repo, config["buckets"], sort_key, port=args.port,
                open_browser=not args.no_open, shown=args.sources, by=args.by, group=args.group,
-               aliases=config["labels"].get(repo.lower()))
+               aliases=config["labels"].get(repo.lower()), reload=args.reload)
 
 
 def cwd_repo() -> str | None:
@@ -2056,6 +2056,9 @@ def main():
                        help="group the cards within each column to begin with")
     board.add_argument("--port", type=int, default=0, help="default: any free port")
     board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
+    board.add_argument("--reload", action="store_true",
+                       help="restart on the same URL whenever the package's Python changes "
+                            "(for working on the board; the page needs a refresh after)")
     board.add_argument("--brief", action="store_true",
                        help="print the briefing to give a coding agent that will suggest "
                             "changes, and exit")

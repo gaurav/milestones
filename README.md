@@ -539,6 +539,7 @@ What it deliberately leaves out:
 uv run pytest                     # the Python: pure functions only, nothing calls gh
 npm run typecheck && npm test     # the board's front end, in ui/
 npm run dev                       # rebuild the front end on every change
+uv run milestones board OWNER/NAME --reload   # and restart the board, same URL, on a Python change
 PLAYWRIGHT_FROM=~/code/prcoder npm run drive   # drive a read-only board in a headless browser
 ```
 

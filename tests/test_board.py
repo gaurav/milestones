@@ -172,6 +172,21 @@ def test_a_move_shows_at_once_and_is_queued(monkeypatch):
     assert board.actions[1]["status"] == "done" and board.unsettled() == []
 
 
+def test_a_reloaded_board_numbers_its_actions_on_from_the_last(monkeypatch):
+    # A page not refreshed after a --reload still holds the old ids; an undo from it must
+    # find nothing rather than whichever new action took the same number.
+    monkeypatch.setattr(gh, "read_only", lambda: False)
+    reloaded = server.Board("o/r", [], sort_key, fetch=lambda repo, progress: {
+        "repo": "o/r", "cards": [card(5)], "milestones": [
+            {"number": 1, "title": "Soon", "state": "open", "due": None}]},
+        write=lambda action: None, first_id=8)
+    reloaded.load()
+    (action,) = reloaded.submit([{"issue": 5, "kind": "milestone", "value": 1}])
+    assert action["id"] == 8 and list(reloaded.actions) == [8]
+    with pytest.raises(server.Refused):
+        reloaded.revert(1)
+
+
 def test_a_bad_request_refuses_the_whole_batch(monkeypatch):
     board = make_board(monkeypatch, [card(5), card(6)])
     for bad, status in (({"issue": 6, "kind": "milestone", "value": 99}, 404),
