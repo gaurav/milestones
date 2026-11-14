@@ -189,6 +189,19 @@ try {
     check('each linked pull request is a link to it',
       await page.$$eval('.card-ties .closed-by a, .card-ties .mentioned-in a', (e) => e.length > 0 && e.every((a) => /\/pull\/\d+$/.test(a.href))));
     note('cards saying which pull requests close or mention them', issueTies);
+    // In the panel, a linked pull request that is on the board (an open one) is focused rather
+    // than opened on GitHub; a closed one, which has no card, still opens GitHub.
+    if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
+    await page.click('.card:has(.card-ties .closed-by) .card-title >> nth=0'); await settle();
+    const link = page.locator('.detail dt:text-is("Closed by") + dd a').first();
+    if (await link.count()) {
+      const number = (await link.textContent()).trim();
+      const popup = page.context().waitForEvent('page', { timeout: 1500 }).catch(() => null);
+      await link.click(); await settle();
+      const opened = await popup;
+      if (opened) { await opened.close(); note('closed-by link in the panel', `${number} is closed, so it opened GitHub`); }
+      else check("the panel's closed-by link focuses an open pull request's card", (await page.textContent('.detail h2 a')).trim() === number, number);
+    }
   } else {
     note('closed by / mentioned in', 'none in view or not in this build; skipped');
   }
