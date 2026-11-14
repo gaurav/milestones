@@ -310,4 +310,6 @@ far more than `_norm_issue` keeps.
   stays ignored across `exec`, so a reload puts SIGTERM back to the default first.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
-  `MILESTONES_PERMISSIONS=read`.
+  `MILESTONES_PERMISSIONS=read`. That is for testing only. When the user asks for a board to work
+  in, start it writable: they manage and triage Babel, and read-only is for repos they don't want
+  to change by accident.
