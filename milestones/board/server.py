@@ -113,7 +113,7 @@ class Board:
     network, and two moves of one issue can't arrive out of order."""
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
-                 write=None, state_file: Path | None = None, plan_file: Path | None = None,
+                 write=None, fetch_cards=data.fetch_cards, state_file: Path | None = None, plan_file: Path | None = None,
                  aliases: dict[str, str] | None = None, first_id: int = 1):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
         # Action ids carry on from a reloaded board's, so an undo from a page that wasn't
@@ -135,6 +135,7 @@ class Board:
         self._restored: list[dict] = []
         self._read_state()
         self.fetch, self.write = fetch, write or self._write
+        self.fetch_cards = fetch_cards
         self.lock = threading.RLock()
         self.repo, self.cards, self.milestones = repo, {}, {}
         self.actions: dict[int, dict] = {}
@@ -152,16 +153,35 @@ class Board:
             self.cards = {c["number"]: c for c in fetched["cards"]}
             self.labels = fetched.get("labels", [])
             self.fields = fetched.get("fields", {})
-            # What this session changed and GitHub hasn't confirmed is still the truth
-            # here: a refetch must not put a card back where a failed write left it.
-            for action in self.actions.values():
-                if action["status"] in (*UNSETTLED, "would") and action["issue"] in self.cards:
-                    set_card_value(self.cards[action["issue"]], action["kind"], action["value"],
-                                   self._colours())
+            self._reapply(self.cards)
             # Suggestions kept from the last run, for the issues that are still open.
             restored, self._restored = self._restored, []
             self._add_suggestions([s for s in restored if s["issue"] in self.cards])
             self._rules(self.cards)
+
+    def _reapply(self, cards: dict[int, dict]) -> None:
+        """What this session changed and GitHub hasn't confirmed is still the truth here: a
+        refetch must not put a card back where a failed write left it."""
+        for action in self.actions.values():
+            if action["status"] in (*UNSETTLED, "would") and action["issue"] in cards:
+                set_card_value(cards[action["issue"]], action["kind"], action["value"],
+                               self._colours())
+
+    def refresh_cards(self, numbers: list[int]) -> list[int]:
+        """Read some cards again, and the milestones with them, without the rest of the
+        repo: for a change made on GitHub, or a pull request that has merged. A card that
+        is no longer open leaves the board; returns the numbers that did."""
+        fetched = self.fetch_cards(self.repo, numbers)
+        with self.lock:
+            self.milestones = {m["number"]: m for m in fetched["milestones"]}
+            fresh = {n: c for n, c in fetched["cards"].items() if c is not None}
+            gone = [n for n, c in fetched["cards"].items() if c is None and n in self.cards]
+            for n in gone:
+                del self.cards[n]
+            self._reapply(fresh)
+            self.cards.update(fresh)
+            self._rules(fresh)
+        return gone
 
     def _colours(self) -> dict[str, str]:
         return {l["name"]: l["color"] for l in self.labels}
@@ -815,12 +835,17 @@ def make_handler(board: Board, token: str):
                     return self._json(200, {"milestone": board.set_due(int(rest[1]),
                                                                         body["due"])})
                 if method == "POST" and rest == ["refresh"]:
+                    # With {issues: [N, …]}, just those cards; otherwise the whole repo.
+                    numbers = self._body().get("issues")
+                    if numbers is not None and (not isinstance(numbers, list) or not numbers
+                                                or not all(isinstance(n, int) for n in numbers)):
+                        raise Refused(400, "send {issues: [number, …]}, or no body")
                     try:
-                        board.load()
+                        gone = board.refresh_cards(numbers) if numbers else board.load()
                     except SystemExit as exit:
                         raise Refused(502, str(exit))
                     board.publish("reload", {})
-                    return self._json(200, board.snapshot())
+                    return self._json(200, {**board.snapshot(), "gone": gone or []})
                 raise Refused(404, "not found")
             except Refused as refused:
                 self._json(refused.status, {"error": str(refused)})
