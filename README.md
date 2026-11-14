@@ -155,7 +155,8 @@ that close an issue or only mention it; and its other labels on a line of their 
 can narrow the board to one author. The pane on the right has the description and the rest. At its
 top are the card's milestone, priority and effort as buttons — click one to change it, as `m`, `p`
 and `e` do — and under them whatever has been suggested for that card. Collapse the pane (`i`) and
-the same buttons run down the strip that is left, with a count of the suggestions waiting.
+the same buttons run down the strip that is left, with a count of the suggestions waiting;
+double-click a card to open it again on that card.
 
 There are three ways to move a card, and they are the same write:
 
