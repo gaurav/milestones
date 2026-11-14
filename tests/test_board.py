@@ -53,13 +53,39 @@ def test_norm_issue_reads_fields_and_keeps_mentions_apart_from_closers():
 
 
 def test_norm_pr_carries_only_the_issues_it_closes_in_its_own_repo():
-    node = issue_node(20, isDraft=True, additions=120, deletions=30, closingIssuesReferences={"nodes": [
+    node = issue_node(20, isDraft=True, additions=120, deletions=30, headRefName="b",
+                      baseRefName="main", baseRef=None, closingIssuesReferences={"nodes": [
         {"number": 7, "title": "a", "state": "OPEN", "repository": {"nameWithOwner": "o/r"}},
         {"number": 8, "title": "b", "state": "OPEN", "repository": {"nameWithOwner": "x/y"}}]})
     card = data.norm_pr(node, "o/r")
     assert card["kind"] == "pr" and card["draft"] is True
     assert (card["additions"], card["deletions"]) == (120, 30)
     assert [c["number"] for c in card["closes"]] == [7]
+
+
+def pr_node(**extra):
+    return issue_node(20, isDraft=False, additions=1, deletions=1,
+                      closingIssuesReferences={"nodes": []}, **extra)
+
+
+def test_norm_pr_names_its_branch_and_the_pull_request_it_targets():
+    card = data.norm_pr(pr_node(
+        headRefName="label-priority", isCrossRepository=False,
+        headRepositoryOwner={"login": "o"}, baseRefName="board-key-scale",
+        baseRef={"associatedPullRequests": {"nodes": [pr(64)]}}), "o/r")
+    assert (card["branch"], card["base"]) == ("label-priority", "board-key-scale")
+    assert card["basePr"]["number"] == 64 and card["basePr"]["url"] == "p/64"
+
+
+def test_norm_pr_names_a_forks_owner_and_survives_a_deleted_base_or_fork():
+    card = data.norm_pr(pr_node(
+        headRefName="fix", isCrossRepository=True, headRepositoryOwner={"login": "someone"},
+        baseRefName="main", baseRef={"associatedPullRequests": {"nodes": []}}), "o/r")
+    assert (card["branch"], card["base"], card["basePr"]) == ("someone:fix", "main", None)
+    card = data.norm_pr(pr_node(
+        headRefName="fix", isCrossRepository=True, headRepositoryOwner=None,
+        baseRefName="gone", baseRef=None), "o/r")
+    assert card["branch"] == "(deleted fork):fix" and card["basePr"] is None
 
 
 def test_milestone_dates_go_out_at_midday_and_come_back_as_days():

@@ -312,6 +312,8 @@ function Detail() {
         {(card.projects ?? 0) > 0 && <><dt>Projects</dt><dd>in {card.projects} project{card.projects === 1 ? '' : 's'}</dd></>}
         {(card.closingPrs?.length ?? 0) > 0 && <><dt>Closed by</dt><dd>{card.closingPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {(card.mentionedPrs?.length ?? 0) > 0 && <><dt>Mentioned in</dt><dd>{card.mentionedPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
+        {card.branch && <><dt>Branch</dt><dd><CopyText text={card.branch} /></dd></>}
+        {card.base && <><dt>Targets</dt><dd><CopyText text={card.base} />{card.basePr && <PrLink pr={card.basePr} />}</dd></>}
         {(card.closes?.length ?? 0) > 0 && <><dt>Closes</dt><dd>{card.closes!.map((c) => <div>#{c.number} {c.title} <small>({c.state.toLowerCase()})</small></div>)}</dd></>}
       </dl>
       <div class="detail-actions">
@@ -531,8 +533,36 @@ function PrNumbers({ prs }: { prs: PrRef[] }) {
   );
 }
 
+/** A branch name, which a click copies: there is nothing else anyone does with one. */
+function CopyText({ text }: { text: string }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify(`Copied ${text}`);
+    } catch {
+      notify('Could not reach the clipboard; select the text and copy it by hand.');
+    }
+  };
+  return <button class="copy" title="Copy" onClick={copy}><code>{text}</code></button>;
+}
+
+/** A pull request, linked to GitHub. A plain click on one that has a card here (an open one)
+ * focuses that card instead, even in a column that is hidden, since the panel shows it either
+ * way; a click with a modifier, or on a closed one, opens it on GitHub. */
 function PrLink({ pr }: { pr: { number: number; title: string; state: string; draft: boolean; url: string } }) {
-  return <div><a href={pr.url} target="_blank" rel="noreferrer">#{pr.number}</a> {pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small></div>;
+  const here = cards.value.has(pr.number);
+  const focus = (e: MouseEvent) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    focused.value = pr.number;
+  };
+  return (
+    <div>
+      <a href={pr.url} target="_blank" rel="noreferrer" onClick={here ? focus : undefined}
+        title={here ? 'Show it on the board (⌘- or Ctrl-click opens it on GitHub)' : undefined}>#{pr.number}</a>
+      {' '}{pr.title} <small>({pr.draft ? 'draft' : pr.state.toLowerCase()})</small>
+    </div>
+  );
 }
 
 function Picker() {

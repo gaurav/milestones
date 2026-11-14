@@ -65,6 +65,7 @@ const note = (what, value) => console.log(`     ${what}: ${JSON.stringify(value)
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 const shot = async (name, clip) => {
@@ -188,8 +189,51 @@ try {
     check('each linked pull request is a link to it',
       await page.$$eval('.card-ties .closed-by a, .card-ties .mentioned-in a', (e) => e.length > 0 && e.every((a) => /\/pull\/\d+$/.test(a.href))));
     note('cards saying which pull requests close or mention them', issueTies);
+    // In the panel, a linked pull request that is on the board (an open one) is focused rather
+    // than opened on GitHub; a closed one, which has no card, still opens GitHub.
+    if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
+    await page.click('.card:has(.card-ties .closed-by) .card-title >> nth=0'); await settle();
+    const link = page.locator('.detail dt:text-is("Closed by") + dd a').first();
+    if (await link.count()) {
+      const number = (await link.textContent()).trim();
+      const popup = page.context().waitForEvent('page', { timeout: 1500 }).catch(() => null);
+      await link.click(); await settle();
+      const opened = await popup;
+      if (opened) { await opened.close(); note('closed-by link in the panel', `${number} is closed, so it opened GitHub`); }
+      else check("the panel's closed-by link focuses an open pull request's card", (await page.textContent('.detail h2 a')).trim() === number, number);
+    }
   } else {
     note('closed by / mentioned in', 'none in view or not in this build; skipped');
+  }
+
+  // --- A pull request's panel: its branch, and the branch and the pull request it targets.
+  if (prCards) {
+    if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
+    await page.click('.card:has(.tag.kind.pr) .card-title >> nth=0'); await settle();
+    const facts = await page.$$eval('.detail dt', (e) => e.map((x) => x.textContent));
+    if (facts.includes('Branch')) {
+      check("a pull request's panel names its branch and the branch it targets",
+        facts.includes('Targets') && (await page.locator('.detail dd code').count()) === 2, facts);
+      const below = await page.$$eval('.detail dt', (e) => {
+        const dd = e.find((x) => x.textContent === 'Targets')?.nextElementSibling;
+        return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
+      });
+      check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
+      const branch = (await page.textContent('.detail button.copy >> nth=0')).trim();
+      await page.click('.detail button.copy >> nth=0'); await settle();
+      const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`);
+      check('a click on the branch copies it', copied === branch, [branch, copied]);
+      if (below.length) {
+        const target = below[0].match(/\/pull\/(\d+)$/)[1];
+        await page.click('.detail dd:has(code) a >> nth=-1'); await settle();
+        const head = (await page.textContent('.detail h2 a')).trim();
+        check("a click on the target pull request focuses its card", head === `#${target}`, [target, head]);
+      } else {
+        note('target pull request', 'none for this one; focusing it not checked');
+      }
+    } else {
+      note('pull request branches', 'not in this build; skipped');
+    }
   }
 
   // --- The card panel's buttons, where this build has them.

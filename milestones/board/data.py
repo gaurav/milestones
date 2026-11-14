@@ -53,6 +53,9 @@ query { repository(owner: "%(owner)s", name: "%(name)s") {
       milestone { number }
       closingIssuesReferences(first: 50) {
         nodes { number title state repository { nameWithOwner } } }
+      headRefName isCrossRepository headRepositoryOwner { login } baseRefName
+      baseRef { associatedPullRequests(states: OPEN, first: 1) {
+        nodes { number title state isDraft url } } }
     } } } }
 """
 
@@ -115,7 +118,16 @@ def norm_pr(node: dict, repo: str) -> dict:
     """A card for a pull request. `closes` is the open-or-closed issues its description
     closes, in this repo only — the ones a move can carry, since milestone numbers are per
     repo. `additions` and `deletions` are its lines added and removed, from which the page
-    estimates its effort."""
+    estimates its effort. `branch` is its head branch, as `owner:branch` when it comes from a
+    fork; `base` is the branch it targets, and `basePr` the open pull request whose head is
+    that branch — the one below it in a stack — or None. A base branch's
+    `associatedPullRequests` lists only the pull requests with it as their head."""
+    owner = (node.get("headRepositoryOwner") or {}).get("login")
+    branch = node["headRefName"]
+    if node.get("isCrossRepository"):
+        # A deleted fork leaves no owner to name.
+        branch = f"{owner or '(deleted fork)'}:{branch}"
+    below = ((node.get("baseRef") or {}).get("associatedPullRequests") or {}).get("nodes") or []
     return {
         **_common(node),
         "kind": "pr",
@@ -125,6 +137,9 @@ def norm_pr(node: dict, repo: str) -> dict:
         "closes": [{"number": i["number"], "title": i["title"], "state": i["state"]}
                    for i in node["closingIssuesReferences"]["nodes"]
                    if i["repository"]["nameWithOwner"].lower() == repo.lower()],
+        "branch": branch,
+        "base": node["baseRefName"],
+        "basePr": _pr_ref(below[0]) if below else None,
     }
 
 
