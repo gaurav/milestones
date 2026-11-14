@@ -202,6 +202,17 @@ far more than `_norm_issue` keeps.
   Playwright's `dragTo` scrolls the target into view mid-drag, so a card in a column that is
   off-screen picks up whatever card ends under the pointer — drag between columns that are both
   visible.
+- Start a board the user will work in while you change the code with `--reload` (in the
+  background, from this checkout: `uv run milestones board OWNER/NAME --reload`). When any
+  `milestones/**/*.py` changes and then stays put for a couple of seconds, it waits for queued
+  writes, then `exec`s itself, keeping its pid, its listening socket and its token, so the URL
+  and `milestones suggest`'s session file stay good. The user refreshes the page when they want
+  the change. It refetches the repo on every reload (about a minute for Babel), and a request in
+  the meantime waits in the socket's backlog rather than failing. It keeps only the undo history
+  and failed writes' log in memory, so those go; action ids carry on, so a stale page's undo
+  finds nothing rather than the wrong action. Code that doesn't import, or that has no
+  `--reload` (a branch below the one that added it, checked out to restack), is reported and
+  not loaded, so the board stays on the code it had until you are back. Without `--reload`, a Python change needs a restart, which gives a new port and URL.
 - An action's kind decides how its value is read off a card and put on one: `card_value` and
   `set_card_value` in `server.py`, mirrored by `cardValue` and `withValue` in `ui/shared/logic.ts`.
   A new kind needs all four, a branch in `Board.normalise` and `Board._write`, a row in
@@ -288,7 +299,8 @@ far more than `_norm_issue` keeps.
   suggestions (source `plan`) and deletes the file — the suggestions persist in the state file
   from then on. Keep it that way; a plan is hours old and was made looking at a different board.
 - `uv run` forwards SIGTERM to its child, so `pkill -f` on a board's command line delivers it
-  twice; `server.run` ignores the second during clean-up.
+  twice, near enough at once; the first SIGTERM's handler ignores the rest. An ignored signal
+  stays ignored across `exec`, so a reload puts SIGTERM back to the default first.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.

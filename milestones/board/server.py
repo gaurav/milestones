@@ -9,6 +9,8 @@ import os
 import queue
 import secrets
 import signal
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -112,8 +114,11 @@ class Board:
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
                  write=None, state_file: Path | None = None, plan_file: Path | None = None,
-                 aliases: dict[str, str] | None = None):
+                 aliases: dict[str, str] | None = None, first_id: int = 1):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
+        # Action ids carry on from a reloaded board's, so an undo from a page that wasn't
+        # refreshed finds no action rather than the wrong one.
+        self.first_id = first_id
         # The repo's own labels that say a priority or effort, lower-cased name -> the
         # standard label it stands for (the config's `[labels]`). Read, never written.
         self.aliases = aliases or {}
@@ -203,7 +208,7 @@ class Board:
 
     def _new_action(self, issue: int, kind: str, value, carried_by: int | None = None) -> dict:
         card = self.cards[issue]
-        action = {"id": len(self.actions) + 1, "issue": issue, "kind": kind, "value": value,
+        action = {"id": self.first_id + len(self.actions), "issue": issue, "kind": kind, "value": value,
                   "previous": card_value(card, kind), "carriedBy": carried_by, "error": None,
                   "status": "would" if self.read_only else "pending"}
         self.actions[action["id"]] = action
@@ -865,19 +870,97 @@ def make_handler(board: Board, token: str):
     return Handler
 
 
+# Set for the process a `--reload` board replaces itself with: the listening socket's fd, the
+# token and the next action id, as JSON.
+HANDOFF = "MILESTONES_BOARD_HANDOFF"
+SOURCE = Path(__file__).resolve().parents[1]
+
+
+def listen(port: int, handler, fd: int | None = None) -> ThreadingHTTPServer:
+    """The board's server: on a new socket, or on the one a reloaded board handed over. Taking
+    it over rather than binding the port again means a request made while the new process is
+    still reading the repo waits in the socket's backlog instead of being refused."""
+    if fd is None:
+        server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    else:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler, bind_and_activate=False)
+        server.socket.close()
+        server.socket = socket.socket(fileno=fd)
+        server.server_address = server.socket.getsockname()
+    server.daemon_threads = True
+    return server
+
+
+def source_stamp(root: Path = SOURCE) -> dict[str, int]:
+    return {str(p): p.stat().st_mtime_ns for p in root.rglob("*.py")}
+
+
+def importable() -> str | None:
+    """None if the package as it now stands on disk imports and can still reload, else what
+    went wrong: a board must not replace itself with code that dies at its first line, nor
+    with code from before `--reload` (a branch lower in a stack, checked out to restack it),
+    which would refuse the flag on its own command line and stop."""
+    found = subprocess.run([sys.executable, "-c",
+                            "import inspect, milestones.cli, milestones.board.client\n"
+                            "from milestones.board import server\n"
+                            "assert 'reload' in inspect.signature(server.run).parameters, "
+                            "'this code has no --reload'"], capture_output=True, text=True)
+    return None if found.returncode == 0 else (found.stderr.strip() or "import failed")
+
+
+def watch_sources(server: ThreadingHTTPServer, board: "Board", reloading: threading.Event,
+                  last: dict[str, int], interval: float = 1.0) -> None:
+    """`--reload`: once the package's Python has changed and then stayed put for a moment (a
+    checkout or a rebase writes many files), and no write is queued, stop serving so that `run`
+    can replace the process. A change that doesn't import is reported and waited out.
+
+    `last` is the source as it was when this process imported it. Taken here instead, after the
+    repo has been read (a minute, on Babel), it took in whatever was saved during that minute,
+    and the board ran the older code it had imported without ever reloading."""
+    while True:
+        time.sleep(interval)
+        now = source_stamp()
+        if now == last:
+            continue
+        while True:
+            time.sleep(interval * 2)
+            settled = source_stamp()
+            if settled == now:
+                break
+            now = settled
+        last = now
+        problem = importable()
+        if problem:
+            print(f"\nThe board's source changed but doesn't import, so it is not reloading:\n"
+                  f"{problem.splitlines()[-1]}", file=sys.stderr, flush=True)
+            continue
+        while any(a["status"] == "pending" for a in board.unsettled()):
+            time.sleep(0.2)
+        print("\nThe board's source changed: reloading …", file=sys.stderr, flush=True)
+        reloading.set()
+        server.shutdown()
+        return
+
+
 def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
         shown: list[str] | None = None, by: str | None = None,
-        group: str | None = None, aliases: dict[str, str] | None = None) -> None:
+        group: str | None = None, aliases: dict[str, str] | None = None,
+        reload: bool = False) -> None:
     # Imported here, as client imports this module.
     from .client import running_session, write_session
+    handoff = json.loads(os.environ.pop(HANDOFF, "null"))
+    # Before the repo is read: the code running is what was on disk about now. See watch_sources.
+    imported = source_stamp() if reload else {}
     other = running_session(repo)
-    if other:
+    # After a reload the session file names this very process, which is still the same pid.
+    if other and not (handoff and int(other["pid"]) == os.getpid()):
         # Two boards on one repo would each hold their own idea of the cards, overwrite each
         # other's saved suggestions, and leave `milestones suggest` reaching only the newer.
         raise SystemExit(f"A board is already running for {repo}: {other['url']}\n"
                          f"Stop it first (Ctrl-C there, or kill {other['pid']}).")
     board = Board(repo, buckets, sort_key, state_file=state_path(repo),
-                  plan_file=plan_path(repo), aliases=aliases)
+                  plan_file=plan_path(repo), aliases=aliases,
+                  first_id=handoff["next_id"] if handoff else 1)
 
     def progress(what: str, seen: int, total: int) -> None:
         label = "issues" if what == "issues" else "pull requests"
@@ -895,21 +978,30 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     elif not board.read_only and board.plan_info()["count"]:
         print(f"A read-only run left a plan of {board.plan_info()['count']} changes "
               f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
-    token = secrets.token_urlsafe(24)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(board, token))
-    server.daemon_threads = True
+    token = handoff["token"] if handoff else secrets.token_urlsafe(24)
+    server = listen(port, make_handler(board, token), handoff and handoff["fd"])
     threading.Thread(target=board.work, daemon=True).start()
     url = page_url(server.server_address[1], token, shown, by, group)
     # Where `milestones suggest` finds this board.
     session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
     mode = "  (read-only: nothing will be written)" if board.read_only else ""
     print(f"{board.repo}: {len(board.cards)} open issues and pull requests{mode}\n{url}\n"
-          "Ctrl-C to stop.", file=sys.stderr)
-    if open_browser:
+          "Ctrl-C to stop." + ("  Reloads when its Python changes." if reload else ""),
+          file=sys.stderr)
+    if open_browser and not handoff:
         webbrowser.open(url)
+    reloading = threading.Event()
+    if reload:
+        threading.Thread(target=watch_sources, args=(server, board, reloading, imported),
+                         daemon=True).start()
     # A plain `kill` should end the board as Ctrl-C does, so that the session file goes and
-    # the closing lines are printed.
-    signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
+    # the closing lines are printed. The first one also ignores the rest: `pkill -f` reaches
+    # both `uv run` and this process, and uv passes its own on, so two arrive together and the
+    # second used to land before the clean-up below could ignore it.
+    def stop(*_):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -918,13 +1010,26 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         # `uv run` passes a SIGTERM on to its child, so a `kill` aimed at both arrives
         # twice; the second must not cut the clean-up short.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        session.unlink(missing_ok=True)
+        if not reloading.is_set():
+            session.unlink(missing_ok=True)
         # A write already handed to gh finishes or fails within its own timeout; give the
         # queue a moment, then say what never reached GitHub.
         deadline = time.time() + 10
         while time.time() < deadline and any(a["status"] == "pending" for a in board.unsettled()):
             time.sleep(0.2)
-        print("\n".join(closing_lines(board.snapshot())), file=sys.stderr)
+        print("\n".join(closing_lines(board.snapshot())), file=sys.stderr, flush=True)
+    if reloading.is_set():
+        # The same process, pid and all, on the same socket: the page's URL and token, and
+        # the session file `milestones suggest` reads, stay good. What this run kept only in
+        # memory goes: the undo history, and the record of any write that failed.
+        fd = server.socket.fileno()
+        os.set_inheritable(fd, True)
+        os.environ[HANDOFF] = json.dumps({"fd": fd, "token": token,
+                                          "next_id": board.first_id + len(board.actions)})
+        # An ignored signal stays ignored across exec, which would leave the new process
+        # unkillable until it has read the repo and set its own handler.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.execv(sys.executable, sys.orig_argv)
 
 
 def page_url(port: int, token: str, shown: list[str] | None = None,
