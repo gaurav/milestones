@@ -34,6 +34,11 @@ export interface Card {
   /** Pull requests only: lines added and removed. */
   additions?: number;
   deletions?: number;
+  /** Pull requests only: its head branch (`owner:branch` from a fork), the branch it targets,
+   * and the open pull request whose head is that branch — the one below it in a stack. */
+  branch?: string;
+  base?: string;
+  basePr?: PrRef | null;
   /** Set once this session closes the card: the reason. A refresh drops closed cards. */
   closed?: string | null;
 }
