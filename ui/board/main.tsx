@@ -312,8 +312,8 @@ function Detail() {
         {(card.projects ?? 0) > 0 && <><dt>Projects</dt><dd>in {card.projects} project{card.projects === 1 ? '' : 's'}</dd></>}
         {(card.closingPrs?.length ?? 0) > 0 && <><dt>Closed by</dt><dd>{card.closingPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
         {(card.mentionedPrs?.length ?? 0) > 0 && <><dt>Mentioned in</dt><dd>{card.mentionedPrs!.map((p) => <PrLink pr={p} />)}</dd></>}
-        {card.branch && <><dt>Branch</dt><dd><code>{card.branch}</code></dd></>}
-        {card.base && <><dt>Targets</dt><dd><code>{card.base}</code>{card.basePr && <PrLink pr={card.basePr} onBoard />}</dd></>}
+        {card.branch && <><dt>Branch</dt><dd><CopyText text={card.branch} /></dd></>}
+        {card.base && <><dt>Targets</dt><dd><CopyText text={card.base} />{card.basePr && <PrLink pr={card.basePr} onBoard />}</dd></>}
         {(card.closes?.length ?? 0) > 0 && <><dt>Closes</dt><dd>{card.closes!.map((c) => <div>#{c.number} {c.title} <small>({c.state.toLowerCase()})</small></div>)}</dd></>}
       </dl>
       <div class="detail-actions">
@@ -531,6 +531,19 @@ function PrNumbers({ prs }: { prs: PrRef[] }) {
       ))}
     </>
   );
+}
+
+/** A branch name, which a click copies: there is nothing else anyone does with one. */
+function CopyText({ text }: { text: string }) {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify(`Copied ${text}`);
+    } catch {
+      notify('Could not reach the clipboard; select the text and copy it by hand.');
+    }
+  };
+  return <button class="copy" title="Copy" onClick={copy}><code>{text}</code></button>;
 }
 
 /** A pull request, linked to GitHub. With `onBoard`, a plain click on one that has a card here

@@ -65,6 +65,7 @@ const note = (what, value) => console.log(`     ${what}: ${JSON.stringify(value)
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 const shot = async (name, clip) => {
@@ -205,6 +206,10 @@ try {
         return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
       });
       check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
+      const branch = (await page.textContent('.detail button.copy >> nth=0')).trim();
+      await page.click('.detail button.copy >> nth=0'); await settle();
+      const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`);
+      check('a click on the branch copies it', copied === branch, [branch, copied]);
       if (below.length) {
         const target = below[0].match(/\/pull\/(\d+)$/)[1];
         await page.click('.detail dd:has(code) a >> nth=-1'); await settle();
