@@ -908,8 +908,13 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     if open_browser:
         webbrowser.open(url)
     # A plain `kill` should end the board as Ctrl-C does, so that the session file goes and
-    # the closing lines are printed.
-    signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
+    # the closing lines are printed. The first one also ignores the rest: `pkill -f` reaches
+    # both `uv run` and this process, and uv passes its own on, so two arrive together and the
+    # second used to land before the clean-up below could ignore it.
+    def stop(*_):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

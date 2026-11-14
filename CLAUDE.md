@@ -288,7 +288,7 @@ far more than `_norm_issue` keeps.
   suggestions (source `plan`) and deletes the file — the suggestions persist in the state file
   from then on. Keep it that way; a plan is hours old and was made looking at a different board.
 - `uv run` forwards SIGTERM to its child, so `pkill -f` on a board's command line delivers it
-  twice; `server.run` ignores the second during clean-up.
+  twice, near enough at once; the first SIGTERM's handler ignores the rest.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`.
