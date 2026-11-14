@@ -210,8 +210,9 @@ far more than `_norm_issue` keeps.
   the change. It refetches the repo on every reload (about a minute for Babel), and a request in
   the meantime waits in the socket's backlog rather than failing. It keeps only the undo history
   and failed writes' log in memory, so those go; action ids carry on, so a stale page's undo
-  finds nothing rather than the wrong action. Code that doesn't import is reported and not
-  loaded. Without `--reload`, a Python change needs a restart, which gives a new port and URL.
+  finds nothing rather than the wrong action. Code that doesn't import, or that has no
+  `--reload` (a branch below the one that added it, checked out to restack), is reported and
+  not loaded, so the board stays on the code it had until you are back. Without `--reload`, a Python change needs a restart, which gives a new port and URL.
 - An action's kind decides how its value is read off a card and put on one: `card_value` and
   `set_card_value` in `server.py`, mirrored by `cardValue` and `withValue` in `ui/shared/logic.ts`.
   A new kind needs all four, a branch in `Board.normalise` and `Board._write`, a row in

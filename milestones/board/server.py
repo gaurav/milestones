@@ -896,10 +896,15 @@ def source_stamp(root: Path = SOURCE) -> dict[str, int]:
 
 
 def importable() -> str | None:
-    """None if the package as it now stands on disk imports, else what went wrong: a board
-    must not replace itself with code that dies at its first line."""
-    found = subprocess.run([sys.executable, "-c", "import milestones.cli, milestones.board.server, "
-                            "milestones.board.client"], capture_output=True, text=True)
+    """None if the package as it now stands on disk imports and can still reload, else what
+    went wrong: a board must not replace itself with code that dies at its first line, nor
+    with code from before `--reload` (a branch lower in a stack, checked out to restack it),
+    which would refuse the flag on its own command line and stop."""
+    found = subprocess.run([sys.executable, "-c",
+                            "import inspect, milestones.cli, milestones.board.client\n"
+                            "from milestones.board import server\n"
+                            "assert 'reload' in inspect.signature(server.run).parameters, "
+                            "'this code has no --reload'"], capture_output=True, text=True)
     return None if found.returncode == 0 else (found.stderr.strip() or "import failed")
 
 
