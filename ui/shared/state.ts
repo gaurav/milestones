@@ -171,6 +171,36 @@ export async function start() {
   });
 }
 
+/** The cards being read again on their own, which the panel shows as busy. */
+export const refreshing = signal<Set<number>>(new Set());
+
+/** Read some cards again from GitHub, not the whole repo: for a change made elsewhere, or a
+ *  pull request that has merged and should leave the board. If the focused card leaves, the
+ *  focus goes to the one below it, as when a move takes it out of its column. */
+export async function refreshCards(numbers: number[]) {
+  if (!numbers.length) return;
+  refreshing.value = new Set([...refreshing.value, ...numbers]);
+  const here = focused.value === null ? undefined : cards.value.get(focused.value);
+  const before = here ? currentColumn(here) : NONE;
+  const list = here ? grouped.value.get(before) ?? [] : [];
+  try {
+    const data = await api.refresh(numbers);
+    take(data, false);
+    const gone = data.gone ?? [];
+    if (here && gone.includes(here.number)) focused.value = nextFocus(list, new Set(gone), here.number) ?? focused.value;
+    const named = (ns: number[]) => ns.map((n) => `#${n}`).join(', ');
+    say(gone.length
+      ? `${named(gone)} ${gone.length === 1 ? 'is' : 'are'} closed or merged, and off the board now.`
+      : `Read ${named(numbers)} from GitHub again.`);
+  } catch (error) {
+    say((error as Error).message);
+  } finally {
+    const still = new Set(refreshing.value);
+    numbers.forEach((n) => still.delete(n));
+    refreshing.value = still;
+  }
+}
+
 export async function refresh() {
   loading.value = true;
   try { take(await api.refresh(), false); } catch (error) { say((error as Error).message); }

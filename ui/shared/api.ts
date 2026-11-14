@@ -71,6 +71,8 @@ export interface Action {
 }
 
 export interface BoardData {
+  /** From a refresh only: the cards it found closed, merged or gone, and took off the board. */
+  gone?: number[];
   repo: string;
   permissions: 'read' | 'write';
   buckets: string[];
@@ -146,7 +148,8 @@ export class Api {
   }
 
   board(): Promise<BoardData> { return this.call('GET', '/board'); }
-  refresh(): Promise<BoardData> { return this.call('POST', '/refresh'); }
+  /** Read everything again, or with `issues`, only those cards (and the milestones). */
+  refresh(issues?: number[]): Promise<BoardData> { return this.call('POST', '/refresh', issues ? { issues } : undefined); }
   async act(moves: Move[]): Promise<Action[]> {
     return (await this.call<{ actions: Action[] }>('POST', '/actions', { actions: moves })).actions;
   }
