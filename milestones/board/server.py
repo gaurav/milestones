@@ -909,11 +909,14 @@ def importable() -> str | None:
 
 
 def watch_sources(server: ThreadingHTTPServer, board: "Board", reloading: threading.Event,
-                  interval: float = 1.0) -> None:
+                  last: dict[str, int], interval: float = 1.0) -> None:
     """`--reload`: once the package's Python has changed and then stayed put for a moment (a
     checkout or a rebase writes many files), and no write is queued, stop serving so that `run`
-    can replace the process. A change that doesn't import is reported and waited out."""
-    last = source_stamp()
+    can replace the process. A change that doesn't import is reported and waited out.
+
+    `last` is the source as it was when this process imported it. Taken here instead, after the
+    repo has been read (a minute, on Babel), it took in whatever was saved during that minute,
+    and the board ran the older code it had imported without ever reloading."""
     while True:
         time.sleep(interval)
         now = source_stamp()
@@ -946,6 +949,8 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
     # Imported here, as client imports this module.
     from .client import running_session, write_session
     handoff = json.loads(os.environ.pop(HANDOFF, "null"))
+    # Before the repo is read: the code running is what was on disk about now. See watch_sources.
+    imported = source_stamp() if reload else {}
     other = running_session(repo)
     # After a reload the session file names this very process, which is still the same pid.
     if other and not (handoff and int(other["pid"]) == os.getpid()):
@@ -987,7 +992,8 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         webbrowser.open(url)
     reloading = threading.Event()
     if reload:
-        threading.Thread(target=watch_sources, args=(server, board, reloading), daemon=True).start()
+        threading.Thread(target=watch_sources, args=(server, board, reloading, imported),
+                         daemon=True).start()
     # A plain `kill` should end the board as Ctrl-C does, so that the session file goes and
     # the closing lines are printed. The first one also ignores the rest: `pkill -f` reaches
     # both `uv run` and this process, and uv passes its own on, so two arrive together and the
