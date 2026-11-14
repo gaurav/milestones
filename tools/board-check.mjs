@@ -192,6 +192,25 @@ try {
     note('closed by / mentioned in', 'none in view or not in this build; skipped');
   }
 
+  // --- A pull request's panel: its branch, and the branch and the pull request it targets.
+  if (prCards) {
+    if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
+    await page.click('.card:has(.tag.kind.pr) .card-title >> nth=0'); await settle();
+    const facts = await page.$$eval('.detail dt', (e) => e.map((x) => x.textContent));
+    if (facts.includes('Branch')) {
+      check("a pull request's panel names its branch and the branch it targets",
+        facts.includes('Targets') && (await page.locator('.detail dd code').count()) === 2, facts);
+      const below = await page.$$eval('.detail dt', (e) => {
+        const dd = e.find((x) => x.textContent === 'Targets')?.nextElementSibling;
+        return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
+      });
+      check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
+      note('target pull request shown', below.length ? 'yes' : 'none for this one');
+    } else {
+      note('pull request branches', 'not in this build; skipped');
+    }
+  }
+
   // --- The card panel's buttons, where this build has them.
   if (await page.locator('.places .place').count()) {
     const places = () => page.$$eval('.places .place, .detail-strip .place', (e) => e.map((x) => x.textContent));
