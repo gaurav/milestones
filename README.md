@@ -161,7 +161,8 @@ There are three ways to move a card, and they are the same write:
 
 - **Keys**: `j`/`k` and `h`/`l` move the focus; `1`–`9` send the focused card to that column and
   `0` takes it off its milestone; `space` selects, and then a key moves the whole selection; `z`
-  undoes; `o` opens the card on GitHub; `/` searches.
+  undoes; `o` opens the card on GitHub; `r` (or ↻ in the pane) reads it from GitHub again,
+  without the rest of the repo, and takes it off the board if it has closed or merged; `/` searches.
 - **Drag** a card, or a selection, onto a column.
 - **`m`** opens a picker over every milestone in the repo, open or closed, for when there are more
   than nine or you want a new one. It asks before reopening a closed milestone or creating one.

@@ -105,7 +105,7 @@ loses neither and a rejected suggestion is not made again.
 | `POST /api/v1/view` | Body `{by, group, shown, detail?}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, the milestone numbers ticked (`0` for none), and whether the card panel is open (`detail`, default `true`). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
 | `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
-| `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. |
+| `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. With body `{issues: [number, …]}`, read only those cards, and the milestones; one that has closed, merged or gone leaves the board, and the returned board's `gone` lists them. |
 | `GET /api/v1/events` | Server-sent events, below. |
 
 Milestone writes are made before the response and fail with `502` and GitHub's message; in a

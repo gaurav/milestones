@@ -236,6 +236,16 @@ try {
     }
   }
 
+  // --- The panel's ↻ reads its card again on its own: a read, so safe on a read-only board.
+  if (await page.locator('.detail .reread').count()) {
+    const head = (await page.textContent('.detail h2 a')).trim();
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.click()));
+    await page.click('.detail .reread');
+    const toast = await page.waitForSelector('.toast', { timeout: 20000 }).then((t) => t.textContent()).catch(() => null);
+    check('the panel\'s ↻ reads its card again, and says so', toast === `Read ${head} from GitHub again.`, toast);
+    check('and the card stays focused', (await page.textContent('.detail h2 a')).trim() === head);
+  }
+
   // --- The card panel's buttons, where this build has them.
   if (await page.locator('.places .place').count()) {
     const places = () => page.$$eval('.places .place, .detail-strip .place', (e) => e.map((x) => x.textContent));

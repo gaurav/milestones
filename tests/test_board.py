@@ -88,6 +88,25 @@ def test_norm_pr_names_a_forks_owner_and_survives_a_deleted_base_or_fork():
     assert card["branch"] == "(deleted fork):fix" and card["basePr"] is None
 
 
+def test_a_card_read_alone_is_none_once_it_is_closed_merged_or_gone():
+    assert data.norm_card(None, "o/r") is None
+    assert data.norm_card({**issue_node(7), "__typename": "Issue", "state": "CLOSED"}, "o/r") is None
+    assert data.norm_card({**pr_node(headRefName="b", baseRefName="main", baseRef=None),
+                           "__typename": "PullRequest", "state": "MERGED"}, "o/r") is None
+    assert data.norm_card({**issue_node(7), "__typename": "Issue", "state": "OPEN"},
+                          "o/r")["kind"] == "issue"
+    card = data.norm_card({**pr_node(headRefName="b", baseRefName="main", baseRef=None),
+                           "__typename": "PullRequest", "state": "OPEN"}, "o/r")
+    assert card["kind"] == "pr" and card["branch"] == "b"
+
+
+def test_the_cards_query_asks_for_each_number_under_its_own_alias():
+    query = data.cards_query("o", "r", [5, 12])
+    assert 'repository(owner: "o", name: "r")' in query
+    assert "n5: issueOrPullRequest(number: 5)" in query and "n12: issueOrPullRequest(number: 12)" in query
+    assert query.count("closingIssuesReferences") == 2 and query.count("issueFieldValues") == 2
+
+
 def test_milestone_dates_go_out_at_midday_and_come_back_as_days():
     m = data.norm_milestone({"number": 1, "title": "v1", "state": "open", "html_url": "u",
                              "due_on": "2026-12-24T12:00:00Z", "description": None})
@@ -185,6 +204,26 @@ def test_a_reloaded_board_numbers_its_actions_on_from_the_last(monkeypatch):
     assert action["id"] == 8 and list(reloaded.actions) == [8]
     with pytest.raises(server.Refused):
         reloaded.revert(1)
+
+
+def test_refreshing_a_card_reads_it_alone_and_drops_one_that_has_closed(monkeypatch):
+    board = make_board(monkeypatch, [card(5), card(6), card(7, title="Old title")])
+    board.submit([{"issue": 5, "kind": "milestone", "value": 1}])   # queued, not yet written
+    asked = []
+
+    def fetch_cards(repo, numbers):
+        asked.append((repo, numbers))
+        return {"cards": {5: card(5), 6: None, 7: card(7, title="New title")},
+                "milestones": [{"number": 1, "title": "Soon", "state": "open", "due": None},
+                               {"number": 9, "title": "Made on GitHub", "state": "open", "due": None}]}
+
+    board.fetch_cards = fetch_cards
+    assert board.refresh_cards([5, 6, 7]) == [6]
+    assert asked == [("o/r", [5, 6, 7])]
+    assert sorted(board.cards) == [5, 7] and board.cards[7]["title"] == "New title"
+    # GitHub hasn't seen the queued move yet; the card still shows it.
+    assert board.cards[5]["milestone"] == 1
+    assert 9 in board.milestones
 
 
 def test_a_bad_request_refuses_the_whole_batch(monkeypatch):

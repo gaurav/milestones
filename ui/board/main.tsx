@@ -13,7 +13,7 @@ import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
   actions, board, cards, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
-  planInfo, readOnly, reviewPlan, refresh, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
+  planInfo, readOnly, reviewPlan, refresh, refreshCards, refreshing, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
 } from '../shared/state.ts';
 
@@ -293,6 +293,11 @@ function Detail() {
     <aside class="detail">
       <div class="detail-head">
         <h2><a href={card.url} target="_blank" rel="noreferrer">#{card.number}</a> {card.title}</h2>
+        <button class="reread" disabled={refreshing.value.has(card.number)}
+          title="Read this card from GitHub again, without the rest of the repo; it leaves the board if it has closed or merged (r)"
+          aria-label="Read this card from GitHub again" onClick={() => refreshCards([card.number])}>
+          {refreshing.value.has(card.number) ? '…' : '↻'}
+        </button>
         <CollapseButton />
       </div>
       <div class="places"><Places card={card} /></div>
@@ -783,7 +788,7 @@ function Toolbar() {
             <div>priority: <kbd>1</kbd>–<kbd>4</kbd> urgent, high, medium, low; effort: <kbd>1</kbd>–<kbd>5</kbd> XL to XS</div>
             <div><kbd>t</kbd> retitle <kbd>c</kbd> comment <kbd>x</kbd> close or reopen</div>
             <div><kbd>a</kbd> ask a coding agent <kbd>s</kbd> suggestions</div><div><kbd>i</kbd> show or collapse the card panel</div>
-            <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
+            <div><kbd>z</kbd> undo</div><div><kbd>o</kbd> open on GitHub</div><div><kbd>r</kbd> read the card again from GitHub</div><div><kbd>/</kbd> search</div><div><kbd>esc</kbd> clear selection</div>
             <div>Drag a card, or a selection, onto a column.</div>
           </div>
         </Menu>
@@ -835,6 +840,7 @@ function onKey(e: KeyboardEvent) {
   else if (key in MODAL_KEYS) { if (targets().length) modal.value = MODAL_KEYS[key]!; }
   else if (key === 's') trayOpen.value = !trayOpen.value;
   else if (key === 'i') detailOpen.value = !detailOpen.value;
+  else if (key === 'r') refreshCards(targets());
   else if (key === 'z') undo();
   else if (key === 'o') { const c = focused.value === null ? undefined : cards.value.get(focused.value); if (c) window.open(c.url, '_blank', 'noreferrer'); }
   else if (key === '/') document.getElementById('search')?.focus();

@@ -7,16 +7,11 @@ from .. import gh
 
 PAGE = 50
 
-# One page of open issues. `issueFieldValues` is a union, hence the per-type fragments;
-# CROSS_REFERENCED_EVENT is how a pull request that mentions an issue without closing it
-# shows up, which `closedByPullRequestsReferences` alone would miss.
-ISSUES_QUERY = """
-query { repository(owner: "%(owner)s", name: "%(name)s") {
-  nameWithOwner
-  issues(first: %(page)d, states: OPEN, after: %(after)s,
-         orderBy: {field: UPDATED_AT, direction: DESC}) {
-    totalCount pageInfo { hasNextPage endCursor }
-    nodes {
+# What a card needs of an issue, for a page of them and for one read alone.
+# `issueFieldValues` is a union, hence the per-type fragments; CROSS_REFERENCED_EVENT is how a
+# pull request that mentions an issue without closing it shows up, which
+# `closedByPullRequestsReferences` alone would miss.
+ISSUE_FIELDS = """
       id number title url bodyHTML createdAt updatedAt
       author { login } comments { totalCount }
       assignees(first: 10) { nodes { login } }
@@ -37,15 +32,19 @@ query { repository(owner: "%(owner)s", name: "%(name)s") {
           ... on PullRequest { number title state isDraft url
                                repository { nameWithOwner } } } } } }
       projectItems(first: 1) { totalCount }
-    } } } }
 """
 
-PRS_QUERY = """
+# One page of open issues.
+ISSUES_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
-  pullRequests(first: %(page)d, states: OPEN, after: %(after)s,
-               orderBy: {field: UPDATED_AT, direction: DESC}) {
+  nameWithOwner
+  issues(first: %(page)d, states: OPEN, after: %(after)s,
+         orderBy: {field: UPDATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
-    nodes {
+    nodes {""" + ISSUE_FIELDS + """} } } }
+"""
+
+PR_FIELDS = """
       id number title url bodyHTML createdAt updatedAt isDraft additions deletions
       author { login } comments { totalCount }
       assignees(first: 10) { nodes { login } }
@@ -56,7 +55,14 @@ query { repository(owner: "%(owner)s", name: "%(name)s") {
       headRefName isCrossRepository headRepositoryOwner { login } baseRefName
       baseRef { associatedPullRequests(states: OPEN, first: 1) {
         nodes { number title state isDraft url } } }
-    } } } }
+"""
+
+PRS_QUERY = """
+query { repository(owner: "%(owner)s", name: "%(name)s") {
+  pullRequests(first: %(page)d, states: OPEN, after: %(after)s,
+               orderBy: {field: UPDATED_AT, direction: DESC}) {
+    totalCount pageInfo { hasNextPage endCursor }
+    nodes {""" + PR_FIELDS + """} } } }
 """
 
 
@@ -191,6 +197,39 @@ def _pages(query: str, owner: str, name: str, connection: str, progress):
         after = '"%s"' % page["pageInfo"]["endCursor"]
 
 
+def cards_query(owner: str, name: str, numbers: list[int]) -> str:
+    """One query for some issues and pull requests by number, each under its own alias. A
+    number that has gone (deleted, or transferred away) comes back null with a partial
+    error, which `gh.graphql` keeps."""
+    items = " ".join(
+        f"n{n}: issueOrPullRequest(number: {int(n)}) {{ __typename "
+        f"... on Issue {{ state {ISSUE_FIELDS} }} ... on PullRequest {{ state {PR_FIELDS} }} }}"
+        for n in numbers)
+    return f'query {{ repository(owner: "{owner}", name: "{name}") {{ {items} }} }}'
+
+
+def norm_card(node: dict | None, repo: str) -> dict | None:
+    """A card for an issue or pull request read by number, or None for one that is no
+    longer on the board: closed, merged, or gone."""
+    if not node or node.get("state") != "OPEN":
+        return None
+    return norm_pr(node, repo) if node["__typename"] == "PullRequest" else norm_issue(node, repo)
+
+
+def fetch_milestones(repo: str) -> list[dict]:
+    return [norm_milestone(m) for m in
+            gh.api(f"repos/{repo}/milestones?state=all&per_page=100", paginate=True)]
+
+
+def fetch_cards(repo: str, numbers: list[int]) -> dict:
+    """Some cards read again, `{number: card or None}`, and the repo's milestones with them,
+    since a card may have been put on one made since the board read them."""
+    owner, name = repo.split("/")
+    found = gh.graphql(cards_query(owner, name, numbers), owner).get("repository") or {}
+    return {"cards": {n: norm_card(found.get(f"n{n}"), repo) for n in numbers},
+            "milestones": fetch_milestones(repo)}
+
+
 def fetch_board(repo: str, progress=lambda *a: None) -> dict:
     """Everything `GET /api/v1/board` returns but the session's own state."""
     owner, name = repo.split("/")
@@ -202,8 +241,7 @@ def fetch_board(repo: str, progress=lambda *a: None) -> dict:
         cards += [norm_issue(n, canonical) for n in nodes if n]
     for _, nodes in _pages(PRS_QUERY, owner, name, "pullRequests", progress):
         cards += [norm_pr(n, canonical) for n in nodes if n]
-    milestones = [norm_milestone(m) for m in
-                  gh.api(f"repos/{canonical}/milestones?state=all&per_page=100", paginate=True)]
+    milestones = fetch_milestones(canonical)
     labels = [{"name": l["name"], "color": l["color"]} for l in
               gh.api(f"repos/{canonical}/labels?per_page=100", paginate=True)]
     return {"repo": canonical, "milestones": milestones, "cards": cards, "labels": labels,
