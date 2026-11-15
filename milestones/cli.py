@@ -1130,10 +1130,15 @@ def cmd_triage(config, args):
                         # Swap in the real milestone, so the next issue here sees it as one. A
                         # closed one of that name is reopened rather than duplicated.
                         existing = _milestones_by_title(repo)
+                        before = existing.get(chosen["title"])
                         choices[int(choice) - 1] = chosen = _ensure_bucket(
                             repo, chosen["title"], existing)
-                        done["reopened" if chosen["title"] in existing else "created"].append(
-                            (repo, chosen["title"]))
+                        # Logged by what _ensure_bucket found: one made open since the menu
+                        # was built (another session, say) took no write, so it isn't logged.
+                        if before is None:
+                            done["created"].append((repo, chosen["title"]))
+                        elif before["state"] != "open":
+                            done["reopened"].append((repo, chosen["title"]))
                 if chosen is not None:
                     gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
                            milestone=chosen["number"])
