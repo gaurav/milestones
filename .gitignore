@@ -1,3 +1,8 @@
+# Scratch directory: kept in the repo, its contents not. `/data/` alone would stop git
+# looking inside, so the .gitkeep could only be added with -f.
+/data/*
+!/data/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
