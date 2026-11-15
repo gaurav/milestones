@@ -40,17 +40,21 @@ def api(path: str, method: str = "GET", paginate: bool = False, **fields):
     return data
 
 
-def graphql(query: str) -> dict:
+def graphql(query: str, strict: bool = False) -> dict:
     """Run a GraphQL query and return its `data` dict.
 
     A query aliasing many repos at once resolves the ones it can and returns a
     null for the rest — a configured repo that has been deleted, made private, or
     mistyped by hand. Warn about those and hand back everything that did resolve;
     one bad name in the config shouldn't cost you every other repo.
+
+    `strict` is for a mutation, which has no "partly worked": a failed one comes back
+    as `{"data": {"theMutation": null}, "errors": [...]}`, so `data` alone being
+    non-null proves nothing, and any error at all raises.
     """
     body = json.loads(_run(["api", "graphql", "-f", f"query={query}"], partial_ok=True))
     errors = body.get("errors") or []
-    if body.get("data") is None:
+    if body.get("data") is None or (strict and errors):
         raise SystemExit("gh api graphql failed:\n" +
                          "\n".join(e.get("message", str(e)) for e in errors))
     for error in errors:

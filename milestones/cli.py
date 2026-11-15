@@ -765,9 +765,14 @@ def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
 
 
 def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
-    gh.graphql(f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
-               f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
-               f"{{ clientMutationId }} }}")
+    """Raises SystemExit on any failure, as every other write here does — strict, since a
+    failed mutation still answers with a non-null `data`."""
+    data = gh.graphql(
+        f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
+        f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
+        f"{{ clientMutationId }} }}", strict=True)
+    if data.get("setIssueFieldValue") is None:
+        raise SystemExit("setIssueFieldValue returned nothing; the priority was not set")
 
 
 def item_marker(item: dict) -> str:

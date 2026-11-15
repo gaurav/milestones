@@ -28,7 +28,9 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - `gh api graphql` exits **nonzero on any GraphQL error**, including a partial one, but still
   prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
-  `gh.graphql`'s `partial_ok`.
+  `gh.graphql`'s `partial_ok`. The flip side: a failed **mutation** also comes back with a
+  non-null `data` (`{"setIssueFieldValue": null}`), so a mutation must pass `strict=True`,
+  which raises on any error, and check its payload isn't null.
 - A PR's `closingIssuesReferences` is GraphQL-only, so the PR walk fetches it in one aliased
   query per fifty PRs, `pN: issueOrPullRequest(number: N)` under each repo alias — that field
   rather than `pullRequest`, so `assign` can ask about a ref it can't tell is a PR; a number
