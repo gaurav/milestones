@@ -772,7 +772,11 @@ def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
     data = gh.graphql(
         f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
         f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}")
-    return priority_options(data["organization"]["issueFields"]["nodes"])
+    # Either level can come back null beside a partial error that gh.graphql has already
+    # warned about — a token without read:org, the feature off, SSO not authorised — and
+    # that means no Priority field to offer, not the end of the walk.
+    fields = ((data.get("organization") or {}).get("issueFields") or {}).get("nodes") or []
+    return priority_options(fields)
 
 
 def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
