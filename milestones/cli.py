@@ -1228,30 +1228,60 @@ def cmd_assign(config, args):
     # never closes or deletes anything.
     if sys.stdin.isatty() and ask("Proceed? [y/N] ").strip().lower() != "y":
         sys.exit("Aborted.")
+    failed: list[str] = []  # what didn't land, for the line the run ends on
+
+    def attempt(what: str, write) -> bool:
+        """One write. A failure is printed and recorded and the rest still go ahead: each is
+        its own field on its own issue, so one failing says nothing about the next, and
+        stopping would leave the rest of what the prompt promised silently undone."""
+        try:
+            write()
+            return True
+        except SystemExit as exit:
+            print(f"  {what} failed: {exit}")
+            failed.append(what)
+            return False
+
+    landed: set[tuple[str, int]] = set()  # refs whose milestone was written
     for repo, number in todo:
-        issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        issue: dict = {}
+        if not attempt(f"{repo}#{number} → {args.milestone}", lambda: issue.update(gh.api(
+                f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo]))):
+            continue
+        landed.add((repo, number))
+        print(f"  {repo}#{number} → {args.milestone}")
         owner = repo.split("/")[0]
         field = priority.get(owner)
-        # After the milestone, so a failed field write can't lose the assignment.
-        if field and "pull_request" not in issue:
-            set_priority(issue["node_id"], *field)
-            print(f"  {repo}#{number} → {args.milestone}, priority {PRIORITY_KEYS[key]}")
+        if not field:
             continue
-        print(f"  {repo}#{number} → {args.milestone}")
-        if field:
-            # A PR has no fields: its priority goes onto the open issues it closes.
-            prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
-                           and c["repo"].split("/")[0].lower() == owner.lower()]
-            for c in prioritised:
-                set_priority(c["id"], *field)
+        # After the milestone, so a failed field write can't lose the assignment.
+        if "pull_request" not in issue:
+            if attempt(f"{repo}#{number} priority",
+                       lambda: set_priority(issue["node_id"], *field)):
+                print(f"    priority {PRIORITY_KEYS[key]}")
+            continue
+        # A PR has no fields: its priority goes onto the open issues it closes.
+        prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
+                       and c["repo"].split("/")[0].lower() == owner.lower()]
+        for c in prioritised:
+            if attempt(f"{c['repo']}#{c['number']} priority",
+                       lambda: set_priority(c["id"], *field)):
                 print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
                       f"(closed by #{number})")
-            if not prioritised:
-                print(f"    (a PR has no fields, and #{number} closes no open issue of "
-                      f"{owner}'s; priority not set)")
+        if not prioritised:
+            print(f"    (a PR has no fields, and #{number} closes no open issue of "
+                  f"{owner}'s; priority not set)")
     for (repo, number), pr in carry.items():
-        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
-        print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
+        if (repo, pr) not in landed:
+            # It goes where its PR goes, and its PR went nowhere.
+            print(f"  {repo}#{number} left alone: #{pr}, which closes it, failed")
+            continue
+        if attempt(f"{repo}#{number} → {args.milestone}", lambda: gh.api(
+                f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])):
+            print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
+    if failed:
+        sys.exit(f"{plural(len(failed), 'write')} failed, and the rest went through: "
+                 + "; ".join(failed))
 
 
 def cmd_prs(config, args):
