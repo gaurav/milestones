@@ -14,11 +14,17 @@ import re
 # and meanings; the label prefixes that have carried it; and what each spelling found under
 # those prefixes, or in the organisation field named `field`, means as an option. LABELS.md
 # repeats the options, colours and meanings, and a test holds the two together.
+#
+# Both kinds take their colours from one scale by place, so Urgent and XL are the same red and
+# "High · S" can be told from "High · XL" by eye: red, orange, amber, green, and teal for the
+# fifth, which only effort has. They are the light-theme colours of the board's group headings,
+# dark enough for GitHub to put white text on them.
+SCALE = ["da2935", "ce5906", "ad7700", "249243", "1d8d96"]
+
 KINDS = {
     "priority": {
         "field": "Priority", "prefix": "priority",
         "options": ["Urgent", "High", "Medium", "Low"],
-        "colors": {"Urgent": "d2042d", "High": "b60205", "Medium": "fbca04", "Low": "009800"},
         "meanings": {"Urgent": "Drop other work for this.",
                      "High": "Do it before ordinary work.",
                      "Medium": "Ordinary work, in its turn.",
@@ -29,13 +35,14 @@ KINDS = {
         "field": "Effort", "prefix": "(?:size|effort)",
         # Largest first, as priority runs from Urgent down: the two read the same way.
         "options": ["XL", "L", "M", "S", "XS"],
-        "colors": {"XS": "00ff00", "S": "0e8a16", "M": "fbca04", "L": "b60205", "XL": "ff0000"},
         "meanings": {"XS": "Under an hour.", "S": "About half a day.", "M": "A day or two.",
                      "L": "About a week.",
                      "XL": "More than a week, or needs splitting up first."},
         "values": {"xs": "XS", "s": "S", "small": "S", "low": "S", "m": "M", "medium": "M",
                    "l": "L", "large": "L", "high": "L", "xl": "XL"}},
 }
+for _spec in KINDS.values():
+    _spec["colors"] = dict(zip(_spec["options"], SCALE))
 
 
 def standard_label(kind: str, value: str) -> str:

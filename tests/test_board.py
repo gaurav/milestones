@@ -378,12 +378,12 @@ def test_a_standard_label_the_repo_lacks_is_made_in_its_colour(monkeypatch):
 
     def api(path, method="GET", body=None, **fields):
         calls.append((method, path, body))
-        return [{"name": n, "color": "d2042d"} for n in body["labels"]] if method == "PUT" else {}
+        return [{"name": n, "color": "da2935"} for n in body["labels"]] if method == "PUT" else {}
     monkeypatch.setattr(gh, "api", api)
     board = make_board(monkeypatch, [card(5)])
     board._write({"kind": "labels", "value": ["bug", "Priority: Urgent"], "issue": 5})
     assert calls[0] == ("POST", "repos/o/r/labels", {
-        "name": "Priority: Urgent", "color": "d2042d", "description": "Drop other work for this."})
+        "name": "Priority: Urgent", "color": "da2935", "description": "Drop other work for this."})
     assert calls[1][:2] == ("PUT", "repos/o/r/issues/5/labels") and len(calls) == 2
     assert reconcile.missing_standard(["priority: urgent", "bug"], ["Priority: Urgent"]) == []
 

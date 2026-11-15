@@ -17,10 +17,10 @@ How much it matters, whatever the work involved.
 
 | Label              | Colour    | Means                               |
 |--------------------|-----------|-------------------------------------|
-| `Priority: Urgent` | `#d2042d` | Drop other work for this.           |
-| `Priority: High`   | `#b60205` | Do it before ordinary work.         |
-| `Priority: Medium` | `#fbca04` | Ordinary work, in its turn.         |
-| `Priority: Low`    | `#009800` | Worth doing once the rest is done.  |
+| `Priority: Urgent` | `#da2935` | Drop other work for this.           |
+| `Priority: High`   | `#ce5906` | Do it before ordinary work.         |
+| `Priority: Medium` | `#ad7700` | Ordinary work, in its turn.         |
+| `Priority: Low`    | `#249243` | Worth doing once the rest is done.  |
 
 ## Effort
 
@@ -29,11 +29,22 @@ not from the length of the issue. For a pull request it is the work left: mostly
 
 | Label        | Colour    | Means                                           |
 |--------------|-----------|-------------------------------------------------|
-| `Effort: XL` | `#ff0000` | More than a week, or needs splitting up first.  |
-| `Effort: L`  | `#b60205` | About a week.                                   |
-| `Effort: M`  | `#fbca04` | A day or two.                                   |
-| `Effort: S`  | `#0e8a16` | About half a day.                               |
-| `Effort: XS` | `#00ff00` | Under an hour.                                  |
+| `Effort: XL` | `#da2935` | More than a week, or needs splitting up first.  |
+| `Effort: L`  | `#ce5906` | About a week.                                   |
+| `Effort: M`  | `#ad7700` | A day or two.                                   |
+| `Effort: S`  | `#249243` | About half a day.                               |
+| `Effort: XS` | `#1d8d96` | Under an hour.                                  |
+
+## Colours
+
+The two kinds share one scale of colours, by place in their tables: the first row of each is red,
+then orange, amber and green, and teal for the fifth, which only effort has. So `Priority: Urgent`
+and `Effort: XL` are the same red, and an issue that is high priority but small reads as orange
+and green at a glance. Each colour is dark enough for GitHub to write the label's name in white.
+
+Use these colours wherever the labels are made, in any repository or by any tool, so that a
+label looks the same everywhere. A tool that draws the values itself, on a dark background say,
+may lighten them, but should keep each value's hue.
 
 ## Using them
 
