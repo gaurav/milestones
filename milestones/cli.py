@@ -31,8 +31,9 @@ DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Ups
 
 # Buckets that exist only once something needs them: `setup` doesn't create one, `triage`
 # offers it anyway and creates it when it's picked, and `status` hides one with nothing
-# open on it, so that a quiet "Critical" doesn't say "all is well" at the top of the table.
-OPTIONAL_BUCKETS = {"Critical"}
+# open on it — so that a quiet "Critical" doesn't say "all is well" at the top of the table,
+# and so that parking an issue stands out rather than adding to an empty row in every repo.
+OPTIONAL_BUCKETS = {"Critical", TRIAGE_BUCKET}
 
 
 def triage_bucket(config: dict) -> str | None:

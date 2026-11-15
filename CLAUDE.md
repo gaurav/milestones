@@ -116,8 +116,9 @@ it hands the program an EOF before the answer, so `ask()` aborts whatever you se
 Buckets are per repo, and a repo may use any subset of them: nothing here treats a missing
 bucket as a problem. `free_buckets` is the configured buckets a repo hasn't got, and nothing at all
 for a repo that has none of them. It is only the walk's rename targets — the buckets a repo already
-has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, just
-"Critical") is one `status` hides while nothing is open on it.
+has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, "Critical"
+and "Needs triage") is one `setup` leaves for the walk to create when it is first picked, and
+one `status` hides while nothing is open on it.
 
 A closed standing bucket is invisible to `status` and to the `triage` menu, so nothing here may
 close or delete one. That invariant is enforced in four places (`setup` reopens, `rollover` refuses

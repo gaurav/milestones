@@ -71,7 +71,8 @@ Every command is described below; this is the order they are useful in.
    `milestones ignore OWNER/NAME` (or a bare `OWNER`) hides what is not yours to triage, so the
    next `discover` only shows what is new.
 2. **Give each repo its buckets.** `milestones setup OWNER/NAME` creates the standing buckets in
-   a repo, and is safe to run again. Skip it for a repo that doesn't need that much triage: the
+   a repo (all but `Critical` and `Needs triage`, which `triage` makes the first time one is
+   picked), and is safe to run again. Skip it for a repo that doesn't need that much triage: the
    rest of the tool treats a repo without buckets, or with only some, as fine.
 3. **Triage.** `milestones triage` walks every open issue with no milestone, then everything
    parked on `Needs triage`, one keypress each; `milestones triage --prs` does the pull requests.
@@ -133,8 +134,9 @@ milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets in a repo (idempotent)
-                                         # except Critical, which triage offers anyway and
-                                         # creates the first time you pick it
+                                         # except Critical and Needs triage, which triage
+                                         # offers anyway and creates the first time you
+                                         # pick one
 milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # the repos you track, then repos owned by your
                                          # configured owners that have issues/milestones
@@ -301,8 +303,10 @@ due date runs red (overdue), orange (this week), yellow (this month) or grey (fu
 A bucket with work on it is coloured too: the urgency levels run down the same ramp, `Critical`
 bold red, `Needed soon` orange, `Needed later` light green and `Not urgent` grey, and the two that
 are states rather than levels sit off it, `Upstream` teal and `Needs triage` magenta. An empty
-bucket stays plain, so a quiet `Needed soon` reads as quiet. `Critical` is optional — `setup` leaves it to `triage` to create, and
-`status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
+bucket stays plain, so a quiet `Needed soon` reads as quiet. `Critical` and `Needs triage` are
+optional — `setup` leaves them to `triage` to create, and `status` leaves each out while nothing is
+open on it, so `Critical` only shows up when something is on fire and `Needs triage` only when
+something is parked.
 
 A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
 The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses

@@ -43,8 +43,8 @@ then nothing can be triaged into it.
 Buckets are per repository, and a repository can use any of them or none. None of them is
 required. What matters is that a bucket means the same thing wherever it exists, so its name alone
 says how urgent an issue on it is. `Critical` usually doesn't exist until something is critical, and
-is created then. A repository run by someone else may use the same names a little more loosely, and
-that is still close enough to read them by.
+is created then; `Needs triage` likewise until something is parked. A repository run by someone
+else may use the same names a little more loosely, and that is still close enough to read them by.
 
 ## Release and deadline milestones
 
