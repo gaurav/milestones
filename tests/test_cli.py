@@ -77,6 +77,11 @@ def test_build_search_queries_ask_for_one_milestone_instead_of_none():
         build_search_queries(repos, milestone="x" * 200)
 
 
+def test_build_search_queries_names_a_repo_once_whatever_its_spellings():
+    (query,) = build_search_queries(["gaurav/Milestones", "gaurav/milestones", "a/b"])
+    assert query.lower().count("repo:gaurav/milestones") == 1
+
+
 def test_build_search_queries_split_to_stay_under_the_cap():
     repos = [f"owner{i}/some-repository-name" for i in range(20)]
     queries = build_search_queries(repos)
@@ -634,7 +639,7 @@ def test_triage_scope_counts_each_source_even_an_empty_one():
 
 
 def _done(**entries):
-    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+    done = {key: [] for key in ("assigned", "carried", "priority", "unprioritised",
                                 "failed", "skipped", "created", "reopened", "unordered")}
     return done | entries
 

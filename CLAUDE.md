@@ -28,7 +28,9 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - `gh api graphql` exits **nonzero on any GraphQL error**, including a partial one, but still
   prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
-  `gh.graphql`'s `partial_ok`.
+  `gh.graphql`'s `partial_ok`. The flip side: a failed **mutation** also comes back with a
+  non-null `data` (`{"setIssueFieldValue": null}`), so a mutation must pass `strict=True`,
+  which raises on any error, and check its payload isn't null.
 - A PR's `closingIssuesReferences` is GraphQL-only, so the PR walk fetches it in one aliased
   query per fifty PRs, `pN: issueOrPullRequest(number: N)` under each repo alias — that field
   rather than `pullRequest`, so `assign` can ask about a ref it can't tell is a PR; a number
@@ -153,6 +155,9 @@ symlink `~/.config/gh` into it too, since `gh` reads its auth from the same vari
 optional when piping answers into `check -i` or `triage`: findings and items are ordered across
 every tracked repo, so a keypress meant for a scratch milestone in `gaurav/milestones` lands on
 whichever repo sorts first. One such run reopened a closed Babel milestone and rolled 27 issues.
+
+`data/` is the scratch directory for local runs — a scratch `XDG_CONFIG_HOME`, a page saved from
+a browser, output to compare. Git ignores everything in it but its `.gitkeep`.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
 the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its

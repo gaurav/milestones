@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import re
+import select
 import shlex
 import sys
 import termios
@@ -345,7 +346,8 @@ def build_search_queries(repos: list[str], cap: int = 256, kind: str | None = "i
         raise ValueError(f"milestone title too long to search for in {too_long[0]}: GitHub "
                          f"caps a search at {cap} characters")
     queries, batch = [], []
-    for repo in sorted(set(repos)):
+    # `repo:` ignores case, so two spellings of one repo would match its items twice.
+    for repo in sorted({r.lower(): r for r in repos}.values()):
         if batch and len(query(batch + [repo])) > cap:
             queries.append(query(batch))
             batch = []
@@ -539,8 +541,10 @@ def fetch_milestones(repos: list[str],
     of nobody being near a full page costs exactly one query.
     """
     names: dict[str, str] = {}
+    claimed: dict[str, str] = {}  # GitHub's name, folded -> the config entry that got it first
     milestones = []
-    pages: dict[str, str | None] = {r: None for r in repos}  # repo -> next page's cursor
+    # Folded case: two spellings of one name are one repo.
+    pages: dict[str, str | None] = {r: None for r in {r.lower(): r for r in repos}.values()}
     states = "[OPEN, CLOSED]" if closed else "OPEN"
     while pages:
         alias_of = {f"r{i}": repo for i, repo in enumerate(pages)}
@@ -561,6 +565,10 @@ def fetch_milestones(repos: list[str],
         for alias, repo in alias_of.items():
             node = data[alias]
             if node is None:  # deleted, private, or a typo; gh.graphql has warned
+                continue
+            # A renamed or transferred repo's old name resolves to the new one, so a config
+            # holding both would otherwise list every milestone there twice.
+            if claimed.setdefault(node["nameWithOwner"].lower(), repo) != repo:
                 continue
             names[repo] = node["nameWithOwner"]
             milestones += [(node["nameWithOwner"], m) for m in node["milestones"]["nodes"]]
@@ -763,6 +771,10 @@ def cmd_rollover(config, args):
             sys.exit(f"No milestone '{title}' in {args.repo}. "
                      f"Milestones: {', '.join(sorted(by_title))}")
     src, dst = by_title[args.src], by_title[args.dst]
+    if src["number"] == dst["number"]:
+        # Every item would be PATCHed onto where it already is, and --close would then
+        # close the one milestone all the work sits on, stranding it.
+        sys.exit(f"'{args.src}' is both FROM and TO; nothing to roll over.")
     if dst["state"] != "open":
         sys.exit(f"'{args.dst}' is closed; issues moved onto it would disappear from both "
                  f"status and triage. Reopen it first.")
@@ -830,13 +842,22 @@ def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
     data = gh.graphql(
         f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
         f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}")
-    return priority_options(data["organization"]["issueFields"]["nodes"])
+    # Either level can come back null beside a partial error that gh.graphql has already
+    # warned about — a token without read:org, the feature off, SSO not authorised — and
+    # that means no Priority field to offer, not the end of the walk.
+    fields = ((data.get("organization") or {}).get("issueFields") or {}).get("nodes") or []
+    return priority_options(fields)
 
 
 def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
-    gh.graphql(f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
-               f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
-               f"{{ clientMutationId }} }}")
+    """Raises SystemExit on any failure, as every other write here does — strict, since a
+    failed mutation still answers with a non-null `data`."""
+    data = gh.graphql(
+        f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
+        f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
+        f"{{ clientMutationId }} }}", strict=True)
+    if data.get("setIssueFieldValue") is None:
+        raise SystemExit("setIssueFieldValue returned nothing; the priority was not set")
 
 
 def item_marker(item: dict) -> str:
@@ -881,7 +902,6 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue",
     issues = []
     by_title = _milestones_by_title(repo) if repo and any(sources) else {}
     for source in sources:
-        items = []
         if repo:
             # A title the repo hasn't got is nothing to walk from it, and the walk's opening
             # line says so; it is not an error, since the other sources may still have items.
@@ -900,9 +920,14 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue",
                 queries = build_search_queries(config["repos"], kind=kind, milestone=source)
             except ValueError as e:
                 sys.exit(f"{e}. --repo reads one repo's milestone without searching.")
+            # Keyed by GitHub's name for the repo: a config holding a renamed repo's old and
+            # new names can still bring one item back from two queries.
+            seen: dict[tuple[str, int], dict] = {}
             for query in queries:
                 for item in gh.search_issues(query):
-                    items.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
+                    repo_name = "/".join(item["repository_url"].split("/")[-2:])
+                    seen[repo_name.lower(), item["number"]] = _norm_issue(item, repo_name)
+            items = list(seen.values())
         for item in items:
             item["source"] = source
         issues += triage_order(items, config["focus"])
@@ -1027,9 +1052,6 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
     if done["carried"]:
         lines.append(f"Also assigned {plural(len(done['carried']), 'issue')} they close"
                      f"{by_title(done['carried'])}")
-    if done["passed"]:
-        lines.append(f"Passed over {len(done['passed'])} already assigned with the PR "
-                     "that closes them")
     if done["priority"]:
         counts = Counter(name for _, name in done["priority"])
         lines.append(f"Set priority on {len(done['priority'])}: " + ", ".join(
@@ -1041,7 +1063,7 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
         refs = done["skipped"]
         lines.append(f"Skipped {len(refs)}: " + ", ".join(refs[:shown])
                      + (f" and {len(refs) - shown} more" if len(refs) > shown else ""))
-    decided = len(assigned) + len(done["skipped"]) + len(done["passed"])
+    decided = len(assigned) + len(done["skipped"])
     if decided < total:
         lines.append(f"Stopped at {decided + 1} of {total}, "
                      f"with {total - decided} left undecided")
@@ -1056,7 +1078,7 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
                      f"that (gaurav/milestones#25), so drag {'it' if count == 1 else 'them'} "
                      f"at {url}")
     lines += [f"Priority failed on {ref}: {message}" for ref, message in done["failed"]]
-    left = total - len(assigned) - len(done["passed"])
+    left = total - len(assigned)
     if left:
         # Listings lag writes by up to ~10s, so a rerun straight away can offer again
         # what this one just assigned.
@@ -1100,18 +1122,15 @@ def cmd_triage(config, args):
     # there means nobody could place it, which the PR now does.
     parked = triage_bucket(config)
     # Everything the walk does, for the summary it ends on: (ref, milestone title) for
-    # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
+    # "assigned" and "carried", (ref, priority name) for "priority", (ref, why)
     # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
     # (title, url, "top" or "bottom") for "unordered"; "skipped" is bare refs.
     done: dict[str, list] = {key: [] for key in (
-        "assigned", "carried", "passed", "priority", "unprioritised", "failed", "skipped",
+        "assigned", "carried", "priority", "unprioritised", "failed", "skipped",
         "created", "reopened", "unordered")}
     menus: dict[str, list[dict]] = {}
     known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
     priorities: dict[str, dict | None] = {}  # owner -> the priority keys it can take, if any
-    # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
-    # run: the issue walk fetched its list before those writes, so it would offer them again.
-    carried: dict[tuple[str, int], tuple[str, int]] = {}
 
     def set_priorities(owner: str, priority: dict | None, issue: dict, key: str) -> None:
         """Priority is an organisation issue field, and pull requests haven't got fields:
@@ -1184,12 +1203,6 @@ def cmd_triage(config, args):
     try:
         for n, issue in enumerate(issues, 1):
             repo = issue["repo"]
-            if (repo, issue["number"]) in carried:
-                title, pr = carried[repo, issue["number"]]
-                print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  already on {title}, "
-                      f"with PR #{pr} that closes it")
-                done["passed"].append((f"{repo}#{issue['number']}", title))
-                continue
             if repo not in menus:
                 menus[repo] = sorted(
                     _milestones_by_title(repo, state="open").values(),
@@ -1258,10 +1271,15 @@ def cmd_triage(config, args):
                         # Swap in the real milestone, so the next issue here sees it as one. A
                         # closed one of that name is reopened rather than duplicated.
                         existing = _milestones_by_title(repo)
+                        before = existing.get(chosen["title"])
                         choices[int(choice) - 1] = chosen = _ensure_bucket(
                             repo, chosen["title"], existing)
-                        done["reopened" if chosen["title"] in existing else "created"].append(
-                            (repo, chosen["title"]))
+                        # Logged by what _ensure_bucket found: one made open since the menu
+                        # was built (another session, say) took no write, so it isn't logged.
+                        if before is None:
+                            done["created"].append((repo, chosen["title"]))
+                        elif before["state"] != "open":
+                            done["reopened"].append((repo, chosen["title"]))
                 if chosen is not None:
                     if chosen["title"] == issue["milestone"]:
                         # Where it already is: no milestone to write, and it is still to
@@ -1286,6 +1304,8 @@ def cmd_triage(config, args):
                         set_priorities(owner, priority, issue, suffix)
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
+                    # A walk is all PRs or all issues, so a carried issue never comes up
+                    # later in it; a walk mixing the two would have to skip those (#23).
                     for c in issue.get("closes") or []:
                         if carries(c, repo, chosen["title"], parked):
                             gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
@@ -1293,7 +1313,6 @@ def cmd_triage(config, args):
                             print(f"  → also #{c['number']} → {chosen['title']} "
                                   "(closed by this PR)")
                             c["milestone"] = chosen["title"]
-                            carried[repo, c["number"]] = (chosen["title"], issue["number"])
                             done["carried"].append((f"{repo}#{c['number']}", chosen["title"]))
                     break
                 print(f"  Not one of: {assign}c, s, o, q.")
@@ -1377,30 +1396,60 @@ def cmd_assign(config, args):
     # never closes or deletes anything. What a pipe can't confirm, it leaves (`held`).
     if confirming and ask("Proceed? [y/N] ").strip().lower() != "y":
         sys.exit("Aborted.")
+    failed: list[str] = []  # what didn't land, for the line the run ends on
+
+    def attempt(what: str, write) -> bool:
+        """One write. A failure is printed and recorded and the rest still go ahead: each is
+        its own field on its own issue, so one failing says nothing about the next, and
+        stopping would leave the rest of what the prompt promised silently undone."""
+        try:
+            write()
+            return True
+        except SystemExit as exit:
+            print(f"  {what} failed: {exit}")
+            failed.append(what)
+            return False
+
+    landed: set[tuple[str, int]] = set()  # refs whose milestone was written
     for repo, number in todo:
-        issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
+        issue: dict = {}
+        if not attempt(f"{repo}#{number} → {args.milestone}", lambda: issue.update(gh.api(
+                f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo]))):
+            continue
+        landed.add((repo, number))
+        print(f"  {repo}#{number} → {args.milestone}")
         owner = repo.split("/")[0]
         field = priority.get(owner)
-        # After the milestone, so a failed field write can't lose the assignment.
-        if field and "pull_request" not in issue:
-            set_priority(issue["node_id"], *field)
-            print(f"  {repo}#{number} → {args.milestone}, priority {PRIORITY_KEYS[key]}")
+        if not field:
             continue
-        print(f"  {repo}#{number} → {args.milestone}")
-        if field:
-            # A PR has no fields: its priority goes onto the open issues it closes.
-            prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
-                           and c["repo"].split("/")[0].lower() == owner.lower()]
-            for c in prioritised:
-                set_priority(c["id"], *field)
+        # After the milestone, so a failed field write can't lose the assignment.
+        if "pull_request" not in issue:
+            if attempt(f"{repo}#{number} priority",
+                       lambda: set_priority(issue["node_id"], *field)):
+                print(f"    priority {PRIORITY_KEYS[key]}")
+            continue
+        # A PR has no fields: its priority goes onto the open issues it closes.
+        prioritised = [c for c in closes[repo, number] if c["state"] == "OPEN"
+                       and c["repo"].split("/")[0].lower() == owner.lower()]
+        for c in prioritised:
+            if attempt(f"{c['repo']}#{c['number']} priority",
+                       lambda: set_priority(c["id"], *field)):
                 print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
                       f"(closed by #{number})")
-            if not prioritised:
-                print(f"    (a PR has no fields, and #{number} closes no open issue of "
-                      f"{owner}'s; priority not set)")
+        if not prioritised:
+            print(f"    (a PR has no fields, and #{number} closes no open issue of "
+                  f"{owner}'s; priority not set)")
     for (repo, number), pr in carry.items():
-        gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
-        print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
+        if (repo, pr) not in landed:
+            # It goes where its PR goes, and its PR went nowhere.
+            print(f"  {repo}#{number} left alone: #{pr}, which closes it, failed")
+            continue
+        if attempt(f"{repo}#{number} → {args.milestone}", lambda: gh.api(
+                f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])):
+            print(f"  {repo}#{number} → {args.milestone} (closed by #{pr})")
+    if failed:
+        sys.exit(f"{plural(len(failed), 'write')} failed, and the rest went through: "
+                 + "; ".join(failed))
 
 
 def cmd_prs(config, args):
@@ -1565,7 +1614,19 @@ def read_key(prompt: str) -> str:
     saved = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        key = sys.stdin.read(1)
+        # One byte off the descriptor, not sys.stdin.read(1): that fills Python's own buffer
+        # with whatever else is waiting, where the next input() — which reads the descriptor
+        # — never sees it, so a title typed ahead after `r` went missing.
+        byte = os.read(fd, 1)
+        # Nothing at all is the terminal gone, which ends the walk as Ctrl-D does.
+        key = "\x04" if not byte else byte.decode() if byte < b"\x80" else ""
+        if key in ("\x1b", ""):
+            # An arrow or function key, or any non-ASCII character, is several bytes sent
+            # at once and no key on offer; take them all, or the next prompts answer
+            # themselves with "[" and "A". "" is then "Not one of those".
+            while select.select([fd], [], [], 0.05)[0]:
+                os.read(fd, 16)
+            key = ""
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
     if key in ("\x03", "\x04"):  # Ctrl-C, Ctrl-D: raw mode swallows the usual signal
@@ -1606,10 +1667,16 @@ def walk_findings(config, findings: list[dict]) -> None:
                     other["title"] = new
             if new in config["buckets"]:
                 gone.add((repo, number))
+            # The repo's findings share one free_buckets list, so this takes the bucket off
+            # every later rename here, where offering it again would be a duplicate-title 422.
+            if new in f["free_buckets"]:
+                f["free_buckets"].remove(new)
 
         # Anything needing more than a keypress asks a second question; blank skips.
         def rename_typed():
-            title = ask("  new title (blank to skip): ").strip()
+            # Completes over every free bucket, which is how one past the ninth is reached.
+            title = ask_completing("  new title (Tab completes a bucket, blank to skip): ",
+                                   f["free_buckets"]).strip()
             if title:
                 rename(title)
 
@@ -1664,9 +1731,10 @@ def walk_findings(config, findings: list[dict]) -> None:
         if kind == "rename":
             # The repo's own missing buckets, not every configured one: renaming onto a
             # title it already has is a duplicate-title 422, and a repo using none of
-            # them has opted out, so it is offered a typed title and nothing else.
+            # them has opted out, so it is offered a typed title and nothing else. Keys
+            # stop at 9: read_key takes one keypress, so "10" would arrive as 1 then 0.
             options += [(str(i), f"→ {b}", lambda b=b: rename(b))
-                        for i, b in enumerate(f["free_buckets"], 1)]
+                        for i, b in enumerate(f["free_buckets"][:9], 1)]
             options.append(("r", "rename to…", rename_typed))
         if kind in ("undated", "overdue"):
             options += [(key, f"{label} {date.isoformat()}", lambda d=date: set_due(repo, number, d))
@@ -1710,8 +1778,11 @@ def walk_findings(config, findings: list[dict]) -> None:
 def cmd_add(config, args):
     # The API answer normalises case and follows renames, and 404s on a typo.
     repo = gh.api(f"repos/{parse_repo(args.repo)}")["full_name"]
-    if repo in config["repos"]:
-        print(f"already tracked: {repo}")
+    # Folded case, as remove, focus and ignore compare: the config may hold a hand-typed
+    # spelling, and a second entry for one repo would double every row it shows.
+    same = [r for r in config["repos"] if r.lower() == repo.lower()]
+    if same:
+        print(f"already tracked: {repo}" + (f" (as {same[0]})" if same[0] != repo else ""))
         return
     write_repo_list(config_path(), "repos", config["repos"] + [repo])
     print(f"tracking {repo} — `milestones setup {repo}` creates the standing buckets "

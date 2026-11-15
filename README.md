@@ -181,7 +181,8 @@ you type a date of your own, the fourth date slot offers that date back for the 
 (the one you have typed most often, most recent winning ties), since a run of milestones usually
 wants the same day — "after the project meeting" is one keypress each after the first. A single
 keypress acts immediately; the fixes that need more (a new title, a typed date, a milestone to roll
-onto) then ask, and take blank as "skip". A milestone is well-formed if it is one of the repo's
+onto) then ask, and take blank as "skip". The buckets to rename onto are keyed 1 to 9; a typed
+title Tab-completes over all of them, which is how a tenth is reached. A milestone is well-formed if it is one of the repo's
 standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
 to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
@@ -239,9 +240,11 @@ clearer where each belongs. Given
 refs on the command line at a terminal it asks first; fed from a pipe it doesn't, since the pipe
 is the answer. `--priority urgent|high|low` does for a pipeline what the walk's `!` `+` `-` do for
 one item: the organisation's Priority field is set on each issue after its milestone, skipped with
-a line where the owner has no such field or the ref is a PR. The listing GitHub returns lags
-writes by a few seconds, so a `--list` straight after an `assign` can still show what was just
-moved — re-running is harmless.
+a line where the owner has no such field, and set on the open issues a PR closes for a PR ref. A
+write that fails is reported and the rest still go ahead; the run then ends on a line naming what
+failed and exits nonzero, so a script can tell. The listing GitHub returns lags writes by a few
+seconds, so a `--list` straight after an `assign` can still show what was just moved — re-running
+is harmless.
 
 ### Parking, and re-triaging a milestone
 
