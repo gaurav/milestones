@@ -502,16 +502,22 @@ def test_closes_line_says_where_each_linked_issue_is():
 def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
     def issue(state="OPEN", milestone=None, repo="A/one"):
         return {"state": state, "milestone": milestone, "repo": repo}
-    assert carries(issue(), "A/one")
-    assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
-    assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    assert carries(issue(), "A/one", "v1.3")
+    # GitHub's spelling needn't match the config's.
+    assert carries(issue(repo="a/One"), "A/one", "v1.3")
+    assert not carries(issue(milestone="v1.2"), "A/one", "v1.3")  # somebody already placed it
     # Parked on Needs triage is not placed: the PR that closes it places it.
-    assert carries(issue(milestone="Needs triage"), "A/one", parked="Needs triage")
-    assert not carries(issue(milestone="Needs triage"), "A/one")
-    assert not carries(issue(milestone="v1.2"), "A/one", parked="Needs triage")
-    assert not carries(issue(state="CLOSED"), "A/one")
+    assert carries(issue(milestone="Needs triage"), "A/one", "v1.3", parked="Needs triage")
+    assert not carries(issue(milestone="Needs triage"), "A/one", "v1.3")
+    assert not carries(issue(milestone="v1.2"), "A/one", "v1.3", parked="Needs triage")
+    # Already where the PR is going: nothing to write, so nothing carried — a PR parked on
+    # Needs triage leaves the parked issues it closes as they are.
+    assert not carries(issue(milestone="Needs triage"), "A/one", "Needs triage",
+                       parked="Needs triage")
+    assert carries(issue(), "A/one", "Needs triage", parked="Needs triage")
+    assert not carries(issue(state="CLOSED"), "A/one", "v1.3")
     # Its milestone number here would name some other milestone there, or none.
-    assert not carries(issue(repo="B/two"), "A/one")
+    assert not carries(issue(repo="B/two"), "A/one", "v1.3")
 
 
 def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():

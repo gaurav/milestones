@@ -248,7 +248,8 @@ for everyone, as [MILESTONES.md](MILESTONES.md) describes. A walk covers both st
 order: every issue with no milestone, then everything parked, so a parked issue is offered again
 each run but only after the new arrivals, and a `q` before then leaves it parked. Its header
 says where it is (`on Needs triage, updated …`), that milestone is marked `(current)` in the
-menu, and picking it again writes nothing.
+menu, and picking it again leaves it where it is — though a priority given with it (`3!`) is
+still set, and a PR kept there still takes the issues it closes that have no milestone.
 
 `--from MILESTONE` walks the open items on any milestone instead, and can be given more than
 once for several in that order. `--from none` is the no-milestone set on its own, the walk as it

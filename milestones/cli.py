@@ -918,13 +918,15 @@ def fetch_closing_issues(items: list[dict]) -> None:
                     for c in refs["nodes"]] if refs else []
 
 
-def carries(closed: dict, repo: str, parked: str | None = None) -> bool:
-    """Whether a PR in `repo` takes this issue it closes onto its own milestone: open, on no
-    milestone yet — or on `parked`, the bucket that means nobody could place it — and in the
-    same repo, since milestone numbers are per repo, so one elsewhere is shown but left
-    alone."""
+def carries(closed: dict, repo: str, onto: str, parked: str | None = None) -> bool:
+    """Whether a PR in `repo` takes this issue it closes onto its own milestone, `onto`: open,
+    on no milestone yet — or on `parked`, the bucket that means nobody could place it — and in
+    the same repo, since milestone numbers are per repo, so one elsewhere is shown but left
+    alone. An issue already on `onto` stays out, so a PR parked on Needs triage doesn't
+    re-write (and bump the `updated_at` of) the parked issues it closes."""
     return (closed["state"] == "OPEN"
             and (not closed["milestone"] or closed["milestone"] == parked)
+            and closed["milestone"] != onto
             and closed["repo"].lower() == repo.lower())
 
 
@@ -1227,16 +1229,18 @@ def cmd_triage(config, args):
                             repo, chosen["title"], existing)
                         done["reopened" if chosen["title"] in existing else "created"].append(
                             (repo, chosen["title"]))
-                if chosen is not None and chosen["title"] == issue["milestone"]:
-                    # Where it already is: nothing to write, and it is still to triage.
-                    print(f"  (already on {chosen['title']}; skipped)")
-                    done["skipped"].append(f"{repo}#{issue['number']}")
-                    break
                 if chosen is not None:
-                    gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
-                           milestone=chosen["number"])
-                    print(f"  → {chosen['title']}")
-                    done["assigned"].append((f"{repo}#{issue['number']}", chosen["title"]))
+                    if chosen["title"] == issue["milestone"]:
+                        # Where it already is: no milestone to write, and it is still to
+                        # triage — but the rest of the answer (a priority, the issues a PR
+                        # closes) still applies.
+                        print(f"  (already on {chosen['title']}; not moved)")
+                        done["skipped"].append(f"{repo}#{issue['number']}")
+                    else:
+                        gh.api(f"repos/{repo}/issues/{issue['number']}", method="PATCH",
+                               milestone=chosen["number"])
+                        print(f"  → {chosen['title']}")
+                        done["assigned"].append((f"{repo}#{issue['number']}", chosen["title"]))
                     if suffix in ORDER_KEYS:
                         # Parsed on purpose, so the grammar is settled before the API exists.
                         print(f"  (not moved to the {ORDER_KEYS[suffix]}: GitHub has no API for "
@@ -1250,7 +1254,7 @@ def cmd_triage(config, args):
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
                     for c in issue.get("closes") or []:
-                        if carries(c, repo, parked):
+                        if carries(c, repo, chosen["title"], parked):
                             gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
                                    milestone=chosen["number"])
                             print(f"  → also #{c['number']} → {chosen['title']} "
@@ -1311,7 +1315,8 @@ def cmd_assign(config, args):
     parked = triage_bucket(config)
     for (repo, number), linked in closes.items():
         for c in linked:
-            if carries(c, repo, parked) and (repo, c["number"]) not in closes:
+            if (carries(c, repo, args.milestone, parked)
+                    and (repo, c["number"]) not in closes):
                 carry.setdefault((repo, c["number"]), number)
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
           f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"

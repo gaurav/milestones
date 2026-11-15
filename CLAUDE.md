@@ -67,10 +67,13 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 `TRIAGE_BUCKET` ("Needs triage") is the one bucket the walk reads from as well as writes to: by
 default `triage` walks the no-milestone items and then the parked ones, `--from` (argparse
 `dest="sources"`, since `from` is a keyword) replaces that set, and every item carries `milestone`
-and `source`. Picking an item's current milestone is logged as a skip, no PATCH. A PR carries an
-issue parked there onto its own milestone as it does an unplaced one (`carries`'s `parked`), in
-the walk and in `assign` alike — but only while the config lists the bucket, so a config that
-names its buckets by hand and hasn't added it treats "Needs triage" as any other milestone.
+and `source`. Picking an item's current milestone is logged as a skip, with no PATCH of its own,
+but the rest of the answer — a priority suffix, a PR's carry — still runs. A PR carries an issue
+parked there onto its own milestone as it does an unplaced one (`carries`'s `parked`), in the walk
+and in `assign` alike, and never one already on the PR's milestone (`onto`), which would be a
+write that changes nothing but `updated_at`. All of this holds only while the config lists the
+bucket (`triage_bucket`), so a config that names its buckets by hand and hasn't added it treats
+"Needs triage" as any other milestone.
 
 `triage`'s `c` prompt completes milestone titles with `readline`, which on macOS is libedit under
 the same module name: `parse_and_bind("tab: complete")` does nothing there, so `ask_completing`
