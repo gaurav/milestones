@@ -58,6 +58,11 @@ def test_build_search_queries_scope_to_configured_repos_only():
                for q in build_search_queries(repos, kind=None))
 
 
+def test_build_search_queries_names_a_repo_once_whatever_its_spellings():
+    (query,) = build_search_queries(["gaurav/Milestones", "gaurav/milestones", "a/b"])
+    assert query.lower().count("repo:gaurav/milestones") == 1
+
+
 def test_build_search_queries_split_to_stay_under_the_cap():
     repos = [f"owner{i}/some-repository-name" for i in range(20)]
     queries = build_search_queries(repos)

@@ -316,7 +316,8 @@ def build_search_queries(repos: list[str], cap: int = 256,
             f"is:{kind} " if kind else "", " OR ".join("repo:" + r for r in batch))
 
     queries, batch = [], []
-    for repo in sorted(set(repos)):
+    # `repo:` ignores case, so two spellings of one repo would match its items twice.
+    for repo in sorted({r.lower(): r for r in repos}.values()):
         if batch and len(query(batch + [repo])) > cap:
             queries.append(query(batch))
             batch = []
@@ -505,8 +506,10 @@ def fetch_milestones(repos: list[str],
     of nobody being near a full page costs exactly one query.
     """
     names: dict[str, str] = {}
+    claimed: dict[str, str] = {}  # GitHub's name, folded -> the config entry that got it first
     milestones = []
-    pages: dict[str, str | None] = {r: None for r in repos}  # repo -> next page's cursor
+    # Folded case: two spellings of one name are one repo.
+    pages: dict[str, str | None] = {r: None for r in {r.lower(): r for r in repos}.values()}
     states = "[OPEN, CLOSED]" if closed else "OPEN"
     while pages:
         alias_of = {f"r{i}": repo for i, repo in enumerate(pages)}
@@ -527,6 +530,10 @@ def fetch_milestones(repos: list[str],
         for alias, repo in alias_of.items():
             node = data[alias]
             if node is None:  # deleted, private, or a typo; gh.graphql has warned
+                continue
+            # A renamed or transferred repo's old name resolves to the new one, so a config
+            # holding both would otherwise list every milestone there twice.
+            if claimed.setdefault(node["nameWithOwner"].lower(), repo) != repo:
                 continue
             names[repo] = node["nameWithOwner"]
             milestones += [(node["nameWithOwner"], m) for m in node["milestones"]["nodes"]]
@@ -797,10 +804,14 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue") -> lis
         issues = [_norm_issue(i, repo) for i in raw
                   if kind is None or ("pull_request" in i) == (kind == "pr")]
     else:
-        issues = []
+        # Keyed by GitHub's name for the repo: a config holding a renamed repo's old and new
+        # names can still bring one item back from two queries.
+        found: dict[tuple[str, int], dict] = {}
         for query in build_search_queries(config["repos"], kind=kind):
             for item in gh.search_issues(query):
-                issues.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
+                repo_name = "/".join(item["repository_url"].split("/")[-2:])
+                found[repo_name.lower(), item["number"]] = _norm_issue(item, repo_name)
+        issues = list(found.values())
     return triage_order(issues, config["focus"])
 
 
@@ -1550,8 +1561,11 @@ def walk_findings(config, findings: list[dict]) -> None:
 def cmd_add(config, args):
     # The API answer normalises case and follows renames, and 404s on a typo.
     repo = gh.api(f"repos/{parse_repo(args.repo)}")["full_name"]
-    if repo in config["repos"]:
-        print(f"already tracked: {repo}")
+    # Folded case, as remove, focus and ignore compare: the config may hold a hand-typed
+    # spelling, and a second entry for one repo would double every row it shows.
+    same = [r for r in config["repos"] if r.lower() == repo.lower()]
+    if same:
+        print(f"already tracked: {repo}" + (f" (as {same[0]})" if same[0] != repo else ""))
         return
     write_repo_list(config_path(), "repos", config["repos"] + [repo])
     print(f"tracking {repo} — `milestones setup {repo}` creates the standing buckets "
