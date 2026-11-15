@@ -129,6 +129,9 @@ optional when piping answers into `check -i` or `triage`: findings and items are
 every tracked repo, so a keypress meant for a scratch milestone in `gaurav/milestones` lands on
 whichever repo sorts first. One such run reopened a closed Babel milestone and rolled 27 issues.
 
+`data/` is the scratch directory for local runs — a scratch `XDG_CONFIG_HOME`, a page saved from
+a browser, output to compare. Git ignores everything in it but its `.gitkeep`.
+
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
 the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its
 only milestones are the four buckets, and a bucket raises nothing but `overdue`. To exercise the
