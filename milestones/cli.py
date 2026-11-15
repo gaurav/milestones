@@ -697,6 +697,10 @@ def cmd_rollover(config, args):
             sys.exit(f"No milestone '{title}' in {args.repo}. "
                      f"Milestones: {', '.join(sorted(by_title))}")
     src, dst = by_title[args.src], by_title[args.dst]
+    if src["number"] == dst["number"]:
+        # Every item would be PATCHed onto where it already is, and --close would then
+        # close the one milestone all the work sits on, stranding it.
+        sys.exit(f"'{args.src}' is both FROM and TO; nothing to roll over.")
     if dst["state"] != "open":
         sys.exit(f"'{args.dst}' is closed; issues moved onto it would disappear from both "
                  f"status and triage. Reopen it first.")
