@@ -34,6 +34,13 @@ DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Ups
 # open on it, so that a quiet "Critical" doesn't say "all is well" at the top of the table.
 OPTIONAL_BUCKETS = {"Critical"}
 
+
+def triage_bucket(config: dict) -> str | None:
+    """TRIAGE_BUCKET, where the config lists it; None where it doesn't. A config that names
+    its buckets by hand and hasn't added it treats "Needs triage" as any other milestone:
+    the walk doesn't read from it, status doesn't count it, and a PR doesn't carry off it."""
+    return TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
+
 EXAMPLE_CONFIG = """\
 buckets = [%s]
 repos = [
@@ -601,8 +608,7 @@ def cmd_status(config, args):
     # milestone like any other, and `triage` wouldn't walk it.
     parked = {repo: m["open"]["totalCount"] + m["openPrs"]["totalCount"]
               for repo, m in entries
-              if m["title"] == TRIAGE_BUCKET and m["state"] == "OPEN"
-              and TRIAGE_BUCKET in config["buckets"]}
+              if m["title"] == triage_bucket(config) and m["state"] == "OPEN"}
     untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None), parked)
     for row in untriaged:
         row["focus"] = is_focused(row["repo"], config["focus"])
@@ -830,7 +836,7 @@ def triage_sources(config: dict, given: list[str] | None) -> list[str | None]:
     config has the bucket, the ones parked on Needs triage. `--from` replaces the default
     with exactly what was asked for; its literal `none` is the no-milestone source."""
     if given is None:
-        return [None] + ([TRIAGE_BUCKET] if TRIAGE_BUCKET in config["buckets"] else [])
+        return [None] + ([TRIAGE_BUCKET] if triage_bucket(config) else [])
     sources = list(dict.fromkeys(None if t.lower() == "none" else t for t in given))
     quoted = [t for t in sources if t and '"' in t]
     if quoted:
@@ -1057,7 +1063,7 @@ def cmd_triage(config, args):
         if args.sources is not None else "")
     # The one milestone an issue a PR closes may be moved off along with the PR: parked
     # there means nobody could place it, which the PR now does.
-    parked = TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
+    parked = triage_bucket(config)
     # Everything the walk does, for the summary it ends on: (ref, milestone title) for
     # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
     # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
@@ -1302,7 +1308,7 @@ def cmd_assign(config, args):
     fetch_closing_issues(items)
     closes = {(i["repo"], i["number"]): i["closes"] for i in items}
     carry: dict[tuple[str, int], int] = {}  # (repo, issue) -> the PR that closes it
-    parked = TRIAGE_BUCKET if TRIAGE_BUCKET in config["buckets"] else None
+    parked = triage_bucket(config)
     for (repo, number), linked in closes.items():
         for c in linked:
             if carries(c, repo, parked) and (repo, c["number"]) not in closes:

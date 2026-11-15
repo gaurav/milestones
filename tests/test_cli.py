@@ -16,7 +16,8 @@ from milestones.cli import (
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, triage_scope, triage_sources,
+    print_findings, print_table, read_key, sort_key, triage_bucket, triage_scope,
+    triage_sources,
     triage_summary,
     untriaged_counts, visible,
     write_repo_list,
@@ -568,6 +569,8 @@ def test_triage_sources_default_to_none_then_the_triage_bucket_where_configured(
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, None) == [None, TRIAGE_BUCKET]
     # A config that lists its buckets by hand and hasn't added the new one walks as before.
     assert triage_sources({"buckets": ["Needed soon"]}, None) == [None]
+    assert triage_bucket({"buckets": DEFAULT_BUCKETS}) == TRIAGE_BUCKET
+    assert triage_bucket({"buckets": ["Needed soon"]}) is None
     # --from replaces the default outright, keeps its order, and folds duplicates.
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", "None", "v1.2"]) == ["v1.2", None]
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["none"]) == [None]
