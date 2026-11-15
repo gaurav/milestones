@@ -17,7 +17,7 @@ from milestones.cli import (
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
     print_findings, print_table, read_key, sort_key, triage_bucket, triage_scope,
-    triage_sources,
+    triage_hint, triage_sources,
     triage_summary,
     untriaged_counts, visible,
     write_repo_list,
@@ -487,6 +487,13 @@ def test_untriaged_counts_splits_issues_from_prs_per_repo():
         {"repo": "A/one", "issues": 1, "prs": 0, "needs_triage": 0},
         {"repo": "b/two", "issues": 0, "prs": 1, "needs_triage": 3},
         {"repo": "c/three", "issues": 0, "prs": 0, "needs_triage": 1}]
+
+
+def test_triage_hint_names_each_walk_that_has_something_to_offer():
+    assert triage_hint(3, 0) == "run: milestones triage"
+    assert triage_hint(0, 2) == "run: milestones triage --prs"
+    # PRs first: one carries the issues it closes, so the issue walk after it is shorter.
+    assert triage_hint(3, 2) == "run: milestones triage --prs  (then: milestones triage)"
 
 
 def test_closes_line_says_where_each_linked_issue_is():

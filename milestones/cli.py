@@ -579,6 +579,13 @@ def untriaged_counts(items: list[dict], parked: dict[str, int] | None = None) ->
     return [counts[repo] for repo in sorted(counts, key=str.lower)]
 
 
+def triage_hint(issues: int, prs: int) -> str:
+    """The walks to run, PRs first since a PR carries the issues it closes: `issues` and `prs`
+    count everything those walks would offer, parked on Needs triage as well as unplaced."""
+    walks = (["milestones triage --prs"] if prs else []) + (["milestones triage"] if issues else [])
+    return "run: " + walks[0] + (f"  (then: {walks[1]})" if len(walks) > 1 else "")
+
+
 def cmd_status(config, args):
     today = datetime.date.today().isoformat()
     milestones = []
@@ -606,9 +613,12 @@ def cmd_status(config, args):
     # triage, read off the rows above rather than searched for, so it can't disagree with
     # the bucket's own row. Only where the config has the bucket: elsewhere it is a
     # milestone like any other, and `triage` wouldn't walk it.
+    on_bucket = [(repo, m) for repo, m in entries
+                 if m["title"] == triage_bucket(config) and m["state"] == "OPEN"]
     parked = {repo: m["open"]["totalCount"] + m["openPrs"]["totalCount"]
-              for repo, m in entries
-              if m["title"] == triage_bucket(config) and m["state"] == "OPEN"}
+              for repo, m in on_bucket}
+    # The column counts both; the hint needs them apart, since each walk has its own kind.
+    parked_prs = sum(m["openPrs"]["totalCount"] for _, m in on_bucket)
     untriaged = untriaged_counts(fetch_untriaged(config, None, kind=None), parked)
     for row in untriaged:
         row["focus"] = is_focused(row["repo"], config["focus"])
@@ -703,8 +713,7 @@ def cmd_status(config, args):
                   r["needs_triage"] or "") for r in untriaged],
                 ("", "REPO", "ISSUES", "PRS", "NEEDS TRIAGE"),
                 right=("ISSUES", "PRS", "NEEDS TRIAGE"))
-    print("run: milestones triage --prs" + ("  (then: milestones triage)" if issues else "")
-          if prs else "run: milestones triage")
+    print(triage_hint(issues + waiting - parked_prs, prs + parked_prs))
 
 
 def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
