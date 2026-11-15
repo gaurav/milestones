@@ -73,9 +73,9 @@ milestone rather than staying on a closed one.
 
 Eventually every issue should be on a milestone. An issue gets one when it is filed only if the
 right one is clear: it is plainly critical, or it is needed for a particular release. Otherwise it
-is fine to leave it without one. Triage (`milestones triage`) works through the issues that have
-no milestone, and then the ones on `Needs triage`, so either will be picked up in time. A guessed
-milestone is harder to spot than a missing one.
+is fine to leave it without one. Triage works through the issues that have no milestone, and then
+the ones on `Needs triage`, so either will be picked up in time. A guessed milestone is harder to
+spot than a missing one.
 
 A pull request is work already under way, so it always belongs on a milestone, and it stands in for
 the issues it closes: an open issue a pull request closes goes on the same milestone as the pull

@@ -89,7 +89,7 @@ Every command is described below; this is the order they are useful in.
 
 [MILESTONES.md](MILESTONES.md) is the other half: what the buckets mean and how a release is
 put together. It is written for the people and coding agents working in the repos themselves,
-so it says nothing about this tool.
+so it names this tool only to say that nothing depends on it.
 
 ## Commands
 
