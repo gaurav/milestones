@@ -99,7 +99,10 @@ detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
 `assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
 coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
 pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
-only write that never closes or deletes anything, which is what makes that safe. A PR ref is
+only write that never closes or deletes anything, which is what makes that safe. What a
+pipe can't confirm it leaves undone: a PR ref carries the issues it closes, but from a pipe not
+one parked on Needs triage (`held`), since MILESTONES.md tells coding agents — the usual pipe —
+never to move one off it. A PR ref is
 accepted on purpose — the issues endpoint sets a PR's milestone too — and `triage --prs --list`
 lists them; like the walk, it carries the issues a PR closes, counted before the prompt. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
 "Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —

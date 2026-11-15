@@ -125,8 +125,10 @@ milestones assign MILESTONE [REF ...] [--priority urgent|high|low]
                                          # `triage --list` line works as-is. Confirms on a
                                          # terminal; a repo without that milestone is
                                          # skipped, not fatal. A PR takes the issues it
-                                         # closes along, as in the walk. --priority also sets
-                                         # the organisation's Priority field, where there is one
+                                         # closes along, as in the walk, but from a pipe it
+                                         # leaves the parked ones on Needs triage. --priority
+                                         # also sets the organisation's Priority field, where
+                                         # there is one
 milestones rollover OWNER/NAME FROM TO [--close]
                                          # move all open issues from milestone FROM to TO
                                          # (by title); --close closes FROM once empty
@@ -268,7 +270,9 @@ Each is marked `(PR)` or `(PR, draft)`, and shows the issues it closes and where
 `closes #12 (no milestone), #7 (v1.2)`. Putting the PR on a milestone puts each open issue it
 closes that has no milestone, or is parked on Needs triage, on the same one, since the PR stands
 in for them and a PR is as good a way of placing an issue as any; an issue already placed anywhere
-else is left where it is, and so is one in another repo. `assign` does the same for a PR ref. For a PR that needs a closer look, `o` opens it in the browser and `s`
+else is left where it is, and so is one in another repo. `assign` does the same for a PR ref,
+except that from a pipe it leaves a parked issue where it is and names it: a pipe asks nobody, and
+the issue was parked by a person. For a PR that needs a closer look, `o` opens it in the browser and `s`
 leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
 one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
 open one is used as it is, a closed one is reopened and a new one created, each after asking. A

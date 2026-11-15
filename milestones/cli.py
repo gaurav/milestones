@@ -1312,20 +1312,37 @@ def cmd_assign(config, args):
     fetch_closing_issues(items)
     closes = {(i["repo"], i["number"]): i["closes"] for i in items}
     carry: dict[tuple[str, int], int] = {}  # (repo, issue) -> the PR that closes it
+    held: dict[tuple[str, int], int] = {}  # the same, for parked issues a pipe leaves alone
     parked = triage_bucket(config)
+    # A parked issue goes with its PR only on a person's say-so. From a pipe nobody is
+    # asked, and the usual pipe is a coding agent, which MILESTONES.md tells never to move
+    # an issue off Needs triage; a parked issue named by its own ref is still moved, since
+    # that is no side effect.
+    confirming = sys.stdin.isatty()
+    unparked = set()  # the carried ones that come off Needs triage, for the prompt to say so
     for (repo, number), linked in closes.items():
         for c in linked:
             if (carries(c, repo, args.milestone, parked)
                     and (repo, c["number"]) not in closes):
-                carry.setdefault((repo, c["number"]), number)
+                on_bucket = c["milestone"] == parked
+                (held if on_bucket and not confirming else carry).setdefault(
+                    (repo, c["number"]), number)
+                if on_bucket and confirming:
+                    unparked.add((repo, c["number"]))
     print(f"{len(todo)} issue{'s' if len(todo) != 1 else ''} across {len(targets)} "
           f"repo{'s' if len(targets) != 1 else ''} → '{args.milestone}'"
           + (f", and {plural(len(carry), 'issue')} their PRs close" if carry else "")
+          + (f" ({len(unparked)} off {parked})" if unparked else "")
           + (f", priority {PRIORITY_KEYS[key]}" if args.priority else ""))
+    if held:
+        print(f"leaving {plural(len(held), 'issue')} their PRs close on {parked}, where a "
+              f"person parked {'it' if len(held) == 1 else 'them'}: "
+              + ", ".join(f"{r}#{n}" for r, n in held)
+              + " (name them, or run assign from a terminal, to move them)")
     # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
     # script, there is no tty to answer from, and a milestone is a reversible field that
-    # never closes or deletes anything.
-    if sys.stdin.isatty() and ask("Proceed? [y/N] ").strip().lower() != "y":
+    # never closes or deletes anything. What a pipe can't confirm, it leaves (`held`).
+    if confirming and ask("Proceed? [y/N] ").strip().lower() != "y":
         sys.exit("Aborted.")
     for repo, number in todo:
         issue = gh.api(f"repos/{repo}/issues/{number}", method="PATCH", milestone=targets[repo])
