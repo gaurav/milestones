@@ -536,7 +536,7 @@ def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
 
 
 def _done(**entries):
-    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+    done = {key: [] for key in ("assigned", "carried", "priority", "unprioritised",
                                 "failed", "skipped", "created", "reopened", "unordered")}
     return done | entries
 

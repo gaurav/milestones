@@ -921,9 +921,6 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
     if done["carried"]:
         lines.append(f"Also assigned {plural(len(done['carried']), 'issue')} they close"
                      f"{by_title(done['carried'])}")
-    if done["passed"]:
-        lines.append(f"Passed over {len(done['passed'])} already assigned with the PR "
-                     "that closes them")
     if done["priority"]:
         counts = Counter(name for _, name in done["priority"])
         lines.append(f"Set priority on {len(done['priority'])}: " + ", ".join(
@@ -935,7 +932,7 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
         refs = done["skipped"]
         lines.append(f"Skipped {len(refs)}: " + ", ".join(refs[:shown])
                      + (f" and {len(refs) - shown} more" if len(refs) > shown else ""))
-    decided = len(assigned) + len(done["skipped"]) + len(done["passed"])
+    decided = len(assigned) + len(done["skipped"])
     if decided < total:
         lines.append(f"Stopped at {decided + 1} of {total}, "
                      f"with {total - decided} left undecided")
@@ -950,7 +947,7 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
                      f"that (gaurav/milestones#25), so drag {'it' if count == 1 else 'them'} "
                      f"at {url}")
     lines += [f"Priority failed on {ref}: {message}" for ref, message in done["failed"]]
-    left = total - len(assigned) - len(done["passed"])
+    left = total - len(assigned)
     if left:
         # Listings lag writes by up to ~10s, so a rerun straight away can offer again
         # what this one just assigned.
@@ -985,18 +982,15 @@ def cmd_triage(config, args):
     rerun = "milestones triage" + (" --prs" if args.prs else "") + (
         f" --repo {args.repo}" if args.repo else "")
     # Everything the walk does, for the summary it ends on: (ref, milestone title) for
-    # "assigned", "carried" and "passed", (ref, priority name) for "priority", (ref, why)
+    # "assigned" and "carried", (ref, priority name) for "priority", (ref, why)
     # for "unprioritised" and "failed", (repo, title) for "created" and "reopened", and
     # (title, url, "top" or "bottom") for "unordered"; "skipped" is bare refs.
     done: dict[str, list] = {key: [] for key in (
-        "assigned", "carried", "passed", "priority", "unprioritised", "failed", "skipped",
+        "assigned", "carried", "priority", "unprioritised", "failed", "skipped",
         "created", "reopened", "unordered")}
     menus: dict[str, list[dict]] = {}
     known: dict[str, dict[str, dict]] = {}  # repo -> every milestone by title, open or closed
     priorities: dict[str, dict | None] = {}  # owner -> the priority keys it can take, if any
-    # (repo, number) -> (milestone title, PR number) for issues a PR carried with it this
-    # run: the issue walk fetched its list before those writes, so it would offer them again.
-    carried: dict[tuple[str, int], tuple[str, int]] = {}
 
     def set_priorities(owner: str, priority: dict | None, issue: dict, key: str) -> None:
         """Priority is an organisation issue field, and pull requests haven't got fields:
@@ -1069,12 +1063,6 @@ def cmd_triage(config, args):
     try:
         for n, issue in enumerate(issues, 1):
             repo = issue["repo"]
-            if (repo, issue["number"]) in carried:
-                title, pr = carried[repo, issue["number"]]
-                print(f"\n[{n}/{len(issues)}] {repo}#{issue['number']}  already on {title}, "
-                      f"with PR #{pr} that closes it")
-                done["passed"].append((f"{repo}#{issue['number']}", title))
-                continue
             if repo not in menus:
                 menus[repo] = sorted(
                     _milestones_by_title(repo, state="open").values(),
@@ -1162,6 +1150,8 @@ def cmd_triage(config, args):
                         set_priorities(owner, priority, issue, suffix)
                     # A PR is triaged for the issues it closes too: an open one with no
                     # milestone goes where the PR goes, and one already placed is left alone.
+                    # A walk is all PRs or all issues, so a carried issue never comes up
+                    # later in it; a walk mixing the two would have to skip those (#23).
                     for c in issue.get("closes") or []:
                         if carries(c, repo):
                             gh.api(f"repos/{repo}/issues/{c['number']}", method="PATCH",
@@ -1169,7 +1159,6 @@ def cmd_triage(config, args):
                             print(f"  → also #{c['number']} → {chosen['title']} "
                                   "(closed by this PR)")
                             c["milestone"] = chosen["title"]
-                            carried[repo, c["number"]] = (chosen["title"], issue["number"])
                             done["carried"].append((f"{repo}#{c['number']}", chosen["title"]))
                     break
                 print(f"  Not one of: {assign}c, s, o, q.")
