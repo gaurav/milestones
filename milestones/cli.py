@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import re
+import select
 import sys
 import termios
 import textwrap
@@ -1439,7 +1440,19 @@ def read_key(prompt: str) -> str:
     saved = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        key = sys.stdin.read(1)
+        # One byte off the descriptor, not sys.stdin.read(1): that fills Python's own buffer
+        # with whatever else is waiting, where the next input() — which reads the descriptor
+        # — never sees it, so a title typed ahead after `r` went missing.
+        byte = os.read(fd, 1)
+        # Nothing at all is the terminal gone, which ends the walk as Ctrl-D does.
+        key = "\x04" if not byte else byte.decode() if byte < b"\x80" else ""
+        if key in ("\x1b", ""):
+            # An arrow or function key, or any non-ASCII character, is several bytes sent
+            # at once and no key on offer; take them all, or the next prompts answer
+            # themselves with "[" and "A". "" is then "Not one of those".
+            while select.select([fd], [], [], 0.05)[0]:
+                os.read(fd, 16)
+            key = ""
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
     if key in ("\x03", "\x04"):  # Ctrl-C, Ctrl-D: raw mode swallows the usual signal
