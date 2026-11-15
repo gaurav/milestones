@@ -1487,6 +1487,10 @@ def walk_findings(config, findings: list[dict]) -> None:
                     other["title"] = new
             if new in config["buckets"]:
                 gone.add((repo, number))
+            # The repo's findings share one free_buckets list, so this takes the bucket off
+            # every later rename here, where offering it again would be a duplicate-title 422.
+            if new in f["free_buckets"]:
+                f["free_buckets"].remove(new)
 
         # Anything needing more than a keypress asks a second question; blank skips.
         def rename_typed():
