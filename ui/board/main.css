@@ -199,7 +199,8 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .group-head.level-0 { box-shadow: inset 0.25rem 0 0 #54aeff; }
 .group-head .sep, .group-head small { color: var(--muted); }
 /* A little brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
-   bold and is there to be spotted. Light and dark, in that order. */
+   bold and is there to be spotted. Light and dark, in that order. The light ones are the labels' own
+   colours (`reconcile.SCALE`, LABELS.md), which a test holds them to. */
 .group-head .level-0 { color: light-dark(#157aed, #4e9dfc); }
 .group-head.level-1, .group-head .level-1 { color: light-dark(#da2935, #fc5e56); }
 .group-head.level-2, .group-head .level-2 { color: light-dark(#ce5906, #d66a1f); }

@@ -229,8 +229,8 @@ backlog can be triaged in passes:
 4. Back in **Milestone**, each column is cut into groups by priority and then effort — "Urgent ·
    L", "High · M" — judged cards first, the largest effort first within a priority, so a milestone
    reads from what matters most and costs most down. Each part of a heading is coloured by its place in its own scale,
-   red for Urgent or XL down through orange, amber and green, and blue for one nobody has set, so
-   "High · XS" can be picked out by eye. That grouping is the default; *No grouping* in the toolbar
+   red for Urgent or XL down through orange, amber, green and teal (the labels' own colours), and
+   blue for one nobody has set, so "High · XS" can be picked out by eye. That grouping is the default; *No grouping* in the toolbar
    turns it off. Click a group's heading to select it, and one key sends the whole
    group to a milestone.
 
