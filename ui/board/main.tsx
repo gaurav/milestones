@@ -551,17 +551,49 @@ function PrNumbers({ prs }: { prs: PrRef[] }) {
   );
 }
 
-/** A branch name, which a click copies: there is nothing else anyone does with one. */
+/** A branch name, as a read-only field with a copy button at its end. The whole name used to be
+ * the button, but Firefox draws `cursor: copy` as a plus, which read as "add to this". A click in
+ * the field selects all of it, for copying by hand; Escape gives the keyboard back to the board,
+ * whose shortcuts stand down while an input has focus. */
 function CopyText({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
       notify(`Copied ${text}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
     } catch {
       notify('Could not reach the clipboard; select the text and copy it by hand.');
     }
   };
-  return <button class="copy" title="Copy" onClick={copy}><code>{text}</code></button>;
+  return (
+    <span class="copy-field">
+      <input readOnly value={text} aria-label={text} onFocus={(e) => (e.target as HTMLInputElement).select()}
+        onKeyDown={(e) => { if (e.key === 'Escape') (e.target as HTMLInputElement).blur(); }} />
+      <button class="copy" title={copied ? 'Copied' : 'Copy'} aria-label={`Copy ${text}`} onClick={copy}>
+        {copied ? <CheckIcon /> : <CopyIcon />}
+      </button>
+    </span>
+  );
+}
+
+/** Two overlapping sheets, drawn in the text colour so it follows the theme. */
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 3V3.5M3 10.5H3.5M10.5 3A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3V9A1.5 1.5 0 0 0 3 10.5" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 8.5L6.5 12L13 4.5" />
+    </svg>
+  );
 }
 
 /** A pull request, linked to GitHub. A plain click on one that has a card here (an open one)

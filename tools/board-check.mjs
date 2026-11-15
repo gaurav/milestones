@@ -226,19 +226,22 @@ try {
     const facts = await page.$$eval('.detail dt', (e) => e.map((x) => x.textContent));
     if (facts.includes('Branch')) {
       check("a pull request's panel names its branch and the branch it targets",
-        facts.includes('Targets') && (await page.locator('.detail dd code').count()) === 2, facts);
+        facts.includes('Targets') && (await page.locator('.detail .copy-field input').count()) === 2, facts);
       const below = await page.$$eval('.detail dt', (e) => {
         const dd = e.find((x) => x.textContent === 'Targets')?.nextElementSibling;
         return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
       });
       check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
-      const branch = (await page.textContent('.detail button.copy >> nth=0')).trim();
-      await page.click('.detail button.copy >> nth=0'); await settle();
+      const branch = await page.inputValue('.detail .copy-field input >> nth=0');
+      const field = await page.$eval('.detail .copy-field input', (i) => [i.readOnly, i.getBoundingClientRect().width, i.closest('dd').getBoundingClientRect().width]);
+      check('the branch is a read-only field nearly as wide as its row', field[0] && field[1] > field[2] * 0.75, field);
+      await page.click('.detail .copy-field button.copy >> nth=0'); await settle();
       const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`);
-      check('a click on the branch copies it', copied === branch, [branch, copied]);
+      check("the branch's copy button copies it", copied === branch, [branch, copied]);
+      check('the copy button is an icon, not text', await page.locator('.detail .copy-field button.copy svg >> nth=0').count() === 1);
       if (below.length) {
         const target = below[0].match(/\/pull\/(\d+)$/)[1];
-        await page.click('.detail dd:has(code) a >> nth=-1'); await settle();
+        await page.click('.detail dd:has(.copy-field) a >> nth=-1'); await settle();
         const head = (await page.textContent('.detail h2 a')).trim();
         check("a click on the target pull request focuses its card", head === `#${target}`, [target, head]);
       } else {
