@@ -337,6 +337,12 @@ def build_search_queries(repos: list[str], cap: int = 256, kind: str | None = "i
         return "%sis:open %s archived:false (%s)" % (
             f"is:{kind} " if kind else "", where, " OR ".join("repo:" + r for r in batch))
 
+    # The splitter can only split between repos, so a title long enough to overflow one
+    # repo's query on its own can't be searched for at all; say so rather than send it.
+    too_long = [r for r in repos if len(query([r])) > cap]
+    if too_long:
+        raise ValueError(f"milestone title too long to search for in {too_long[0]}: GitHub "
+                         f"caps a search at {cap} characters")
     queries, batch = [], []
     for repo in sorted(set(repos)):
         if batch and len(query(batch + [repo])) > cap:
@@ -846,7 +852,16 @@ def triage_sources(config: dict, given: list[str] | None) -> list[str | None]:
     with exactly what was asked for; its literal `none` is the no-milestone source."""
     if given is None:
         return [None] + ([TRIAGE_BUCKET] if triage_bucket(config) else [])
-    sources = list(dict.fromkeys(None if t.lower() == "none" else t for t in given))
+    if any(not t.strip() for t in given):
+        # Falsy, an empty title would be read as "no milestone" by half the code and as a
+        # title by the other half.
+        sys.exit("--from needs a milestone title, or `none` for the items without one.")
+    # Search matches a title whatever its case (verified live), so two spellings of one
+    # title are one source; the first spelling given is the one the walk says.
+    folded: dict[str, str | None] = {}
+    for t in given:
+        folded.setdefault(t.lower(), None if t.lower() == "none" else t)
+    sources = list(folded.values())
     quoted = [t for t in sources if t and '"' in t]
     if quoted:
         # The search qualifier is milestone:"title", and nothing escapes a quote inside it.
@@ -869,14 +884,22 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue",
         if repo:
             # A title the repo hasn't got is nothing to walk from it, and the walk's opening
             # line says so; it is not an error, since the other sources may still have items.
-            number = "none" if source is None else (
-                by_title[source]["number"] if source in by_title else None)
+            # Matched as search matches it, whatever the case, so --repo walks what the
+            # same --from finds without it; an exact match wins should two titles differ
+            # only in case.
+            found = None if source is None else by_title.get(source) or next(
+                (m for t, m in by_title.items() if t.lower() == source.lower()), None)
+            number = "none" if source is None else found and found["number"]
             raw = gh.api(f"repos/{repo}/issues?milestone={number}&state=open&per_page=100",
                          paginate=True) if number is not None else []
             items = [_norm_issue(i, repo) for i in raw
                      if kind is None or ("pull_request" in i) == (kind == "pr")]
         else:
-            for query in build_search_queries(config["repos"], kind=kind, milestone=source):
+            try:
+                queries = build_search_queries(config["repos"], kind=kind, milestone=source)
+            except ValueError as e:
+                sys.exit(f"{e}. --repo reads one repo's milestone without searching.")
+            for query in queries:
                 for item in gh.search_issues(query):
                     items.append(_norm_issue(item, "/".join(item["repository_url"].split("/")[-2:])))
         for item in items:

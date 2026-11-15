@@ -49,13 +49,17 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   same node ids. `fetch_priority_field` asks `users/{owner}` for the account type first, so a user
   owner never triggers the NOT_FOUND warning the organisation query would print.
 - Advanced search takes `milestone:"Some title"` (quoted, spaces and all) alongside OR'd repos,
-  and matches by **title alone, whatever the milestone's state** — so `triage --from X` where X
+  and matches by **title alone, whatever the milestone's state or the title's case** (verified
+  live, Nov 2026 — so `--repo`'s REST lookup matches case-blind too, and `--from` folds titles
+  that differ only in case) — so `triage --from X` where X
   is closed in one repo walks that repo's stranded items, with no `(current)` entry in the menu.
   `(no:milestone OR milestone:"X")` in one query is accepted too and returns exactly the sum
   (verified live), but `fetch_untriaged` runs one query set per source on purpose: the walk
   wants its sources in order, `--repo` goes through REST `issues?milestone=<number>` and is
   per source anyway, and each query keeps its own 1000-result headroom. Nothing escapes a `"`
-  inside the qualifier, so `triage_sources` refuses such a title.
+  inside the qualifier, so `triage_sources` refuses such a title, and an empty one, which is
+  falsy and would read as "no milestone". `build_search_queries` raises on a title too long
+  for even one repo's query, since its splitter only splits between repos.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it

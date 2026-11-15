@@ -71,6 +71,10 @@ def test_build_search_queries_ask_for_one_milestone_instead_of_none():
     assert all(len(q) <= 256 for q in queries)
     assert all("repo:" + r in " ".join(queries) for r in repos)
     assert len(queries) > len(build_search_queries(repos))
+    # Splitting is between repos, so a title that overflows one repo's query on its own
+    # can't be searched for at all.
+    with pytest.raises(ValueError, match="too long"):
+        build_search_queries(repos, milestone="x" * 200)
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -589,6 +593,14 @@ def test_triage_sources_default_to_none_then_the_triage_bucket_where_configured(
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["none"]) == [None]
     with pytest.raises(SystemExit, match="quote"):
         triage_sources({"buckets": DEFAULT_BUCKETS}, ['Say "when"'])
+    # Search ignores case in a title, so two spellings are one source, said the first way.
+    assert triage_sources({"buckets": DEFAULT_BUCKETS},
+                          ["Needs triage", "NONE", "needs triage", "none"]) == [
+        "Needs triage", None]
+    # An empty title is falsy, and would be walked as "no milestone" under another name.
+    for empty in ("", "  "):
+        with pytest.raises(SystemExit, match="none"):
+            triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", empty])
 
 
 def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():

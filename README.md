@@ -260,7 +260,8 @@ was before Needs triage existed; `--from "Needed later"` re-triages a bucket tha
 didn't make it. `--list` and `--json` take `--from` too, and a listed item that has a milestone
 says so after its title (`(on Needs triage)`), while a no-milestone line reads exactly as before,
 so a pipeline into `assign` is not disturbed. GitHub matches the title whatever the milestone's
-state, so `--from` on a title that is closed in some repo walks that repo's stranded items too.
+state, so `--from` on a title that is closed in some repo walks that repo's stranded items too;
+it ignores case as well, and so does `--from` with `--repo`.
 
 ### Triaging pull requests
 
