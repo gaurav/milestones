@@ -704,11 +704,14 @@ def test_env_parse_reads_assignments_and_skips_the_rest():
     export MILESTONES_GH_TOKEN="abc def"
     MILESTONES_PERMISSIONS = read   # trailing comment
     QUOTED='x # not a comment'
+    NOTED="github_pat_abc"  # work token
+    HALF="unclosed
     not an assignment
     EMPTY=
     """
     assert env.parse(text) == {"MILESTONES_GH_TOKEN": "abc def", "MILESTONES_PERMISSIONS": "read",
-                               "QUOTED": "x # not a comment", "EMPTY": ""}
+                               "QUOTED": "x # not a comment", "NOTED": "github_pat_abc",
+                               "HALF": '"unclosed', "EMPTY": ""}
 
 
 def test_env_load_prefers_the_environment_then_dot_env_then_the_config_dir(tmp_path):
