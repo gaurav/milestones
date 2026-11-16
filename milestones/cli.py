@@ -129,10 +129,16 @@ def milestone_problems(title: str, due: str | None, open_issues: int, closed_iss
     problems = []
     if due and due < today and open_work:
         problems.append(("overdue", f"due {due}, {open_work} still open"))
-    if title in buckets:
+    if title in buckets or title in DEFAULT_BUCKETS:
         # A standing bucket is meant to be undated, named for itself, and empty
         # between triage rounds — and closing one would hide it from status and
         # triage. Running late is the only thing that can be wrong with one.
+        #
+        # One of the tool's own bucket names counts even where the config's `buckets`
+        # leaves it out: a config that lists four of the six still has repos with a
+        # "Critical" that `triage` or a person made, and telling its owner to rename,
+        # date, close or delete that is telling them to break a convention, not keep one.
+        # Only this is widened. What the walk reads from and offers stays the config's.
         return problems
     if not (VERSION_RE.search(title) or DATE_RE.search(title)):
         problems.append(("rename", ""))

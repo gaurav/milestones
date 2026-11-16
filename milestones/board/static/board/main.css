@@ -1,0 +1,187 @@
+/* The board's own styles, over ui/shared/base.css, which has the colours and the root size
+   (14px). The description's iframe in main.tsx can't inherit that size, so it repeats the
+   number. */
+html, body, #app { height: 100%; }
+#app { display: flex; flex-direction: column; }
+.toolbar .home { color: var(--muted); white-space: nowrap; }
+
+.toolbar { display: flex; align-items: center; gap: 0.625rem; padding: 0.625rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.toolbar > select { max-width: 10em; }
+.toolbar label { white-space: nowrap; }
+.toolbar .scope { max-width: 16em; overflow: hidden; text-overflow: ellipsis; }
+/* As wide as its longer label, so "Reading…" doesn't move where the bar wraps. */
+.toolbar .refresh { min-width: 5.75em; }
+/* The search and the filters, a row of their own under the top bar. A filter that is on is in
+   the accent colour, its control's border too, in place of a count of them. */
+.filterbar { display: flex; align-items: center; gap: 0.5rem 1rem; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+/* Laid out at 10em and grown to 20em, so it gives up its room before anything wraps. */
+.filterbar input[type="search"] { flex: 1 1 10em; min-width: 8em; max-width: 20em; }
+.filterbar label { display: inline-flex; align-items: center; gap: 0.375rem; white-space: nowrap; color: var(--muted); }
+.filterbar select { max-width: 14em; }
+.filterbar .clear { margin-left: auto; }
+.filterbar .secondary { font-size: 0.8125rem; }
+.filterbar .secondary select { font-size: 0.8125rem; max-width: 10em; }
+.filtering { color: var(--accent); }
+.filterbar .filtering select, .filterbar input.filtering { border-color: var(--accent); }
+/* The right-hand group. Its auto margin takes the row's spare room, and when the bar wraps it
+   takes the whole of the new row's, so the group stays at the right edge — where its menus,
+   which hang from their buttons' right edges, have the page to open into. */
+.toolbar-end { display: flex; align-items: center; gap: 0.625rem; margin-left: auto; }
+
+main { flex: 1; display: flex; min-height: 0; }
+.columns { flex: 1; display: flex; gap: 0.75rem; padding: 0.75rem; overflow-x: auto; min-width: 0; }
+.column { flex: 0 0 20rem; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-height: 0; }
+.column.over { outline: 2px solid var(--accent); }
+.column.closed { opacity: 0.85; border-style: dashed; }
+.column > header { padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--line); }
+.column-title { font-weight: 600; font-size: 1.0625rem; display: flex; gap: 0.375rem; align-items: center; }
+.column-title a { color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.column-sub { display: flex; gap: 0.625rem; align-items: center; color: var(--muted); font-size: 0.875rem; margin-top: 0.125rem; }
+.column-title .hide { flex: none; margin-left: auto; border: none; background: none; color: var(--muted); font-weight: 400; font-size: 1.25rem; line-height: 1; padding: 0 0.25rem; }
+.column-title .hide:hover { color: var(--ink); }
+.due { border: none; background: none; padding: 0; color: var(--muted); text-decoration: underline dotted; }
+.due.overdue { color: var(--bad); }
+.due-input { padding: 0 0.25rem; }
+.cards { flex: 1; overflow-y: auto; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+/* A card is read top to bottom at a glance: the title alone, in the regular weight (semibold
+   read as shouting at any size that was easy to read); a muted line of facts; what it is and
+   where it stands; its labels last and smallest. The title's size and weight are here to tune. */
+.card { --card-title-size: 1.0625rem; --card-title-weight: 400;
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.625rem 0.75rem; background: var(--bg); cursor: grab;
+  display: flex; flex-direction: column; gap: 0.375rem; }
+.card.selected { background: var(--select); }
+.card.focused { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.card-title { font-size: var(--card-title-size); font-weight: var(--card-title-weight); line-height: 1.4; overflow-wrap: anywhere; }
+.card-facts { display: flex; flex-wrap: wrap; gap: 0.25rem 0.625rem; align-items: center; color: var(--muted); font-size: 0.8125rem; }
+.card-facts a { color: var(--muted); }
+/* What it is on the left, where it stands on the right; each group wraps whole. */
+.card-tags { display: flex; flex-wrap: wrap; gap: 0.375rem; align-items: center; }
+.card-tags .tags, .card-places { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; margin: 0; }
+.card-places { margin-left: auto; justify-content: flex-end; min-width: 0; }
+.tag { border: 1px solid var(--line); border-radius: 0.375rem; padding: 0 0.375rem; font-size: 0.75rem; line-height: 1.25rem; color: var(--muted); white-space: nowrap; }
+.tag.kind.pr { color: #8250df; border-color: #8250df; }
+.card .place { font-size: 0.75rem; line-height: 1.375rem; padding: 0 0.5rem; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; }
+.card .place.from-label { font-style: italic; }
+/* A pull request's effort estimated from its size, where none is recorded: `~M`. */
+.card .place.estimate, .tag.estimate { font-style: italic; }
+.card-facts .diff ins { color: var(--good); text-decoration: none; }
+.card-facts .diff del { color: var(--bad); text-decoration: none; }
+.card-labels { display: flex; flex-wrap: wrap; gap: 0.125rem 0.625rem; color: var(--muted); font-size: 0.75rem; }
+.card-labels span { display: inline-flex; align-items: center; gap: 0.25rem; white-space: nowrap; }
+.card-labels i { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex: none; }
+/* What a card is tied to: who is assigned, the issues it closes; one row, a dot between. */
+.card-ties { display: flex; flex-wrap: wrap; gap: 0.125rem 0.375rem; color: var(--ink); opacity: 0.75; font-size: 0.75rem; }
+.card-ties > span + span::before { content: "·"; color: var(--muted); margin-right: 0.375rem; }
+.card-ties .profile { color: var(--muted); margin-left: 0.125rem; text-decoration: none; }
+.card-ties .profile:hover { color: var(--accent); }
+.card-ties a:not(.profile) { color: inherit; }
+
+.chip.closed { background: var(--chip); color: var(--muted); }
+.chip.priority { font-weight: 600; }
+.chip.p-urgent, .chip.p-critical { background: var(--bad); color: #fff; }
+.chip.p-high { background: #bc4c00; color: #fff; }
+.chip.p-medium { background: #bf8700; color: #fff; }
+.chip.would, .status.would { color: var(--warn); }
+.chip.saving, .status.saving { color: var(--muted); font-style: italic; }
+.chip.failed { background: var(--bad); color: #fff; }
+.status { margin-left: auto; }
+.status.failed { color: var(--bad); font-weight: 600; display: inline-flex; gap: 0.25rem; align-items: center; }
+.status button { padding: 0 0.375rem; font-size: 0.8125rem; }
+
+.detail { flex: 0 0 26rem; border-left: 1px solid var(--line); background: var(--panel); padding: 1rem; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.detail h2 { font-size: 1.25rem; line-height: 1.3; margin: 0 0 0.625rem; overflow-wrap: anywhere; }
+.detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; margin: 0 0 0.75rem; }
+.detail dt { color: var(--muted); }
+.detail dd { margin: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; overflow-wrap: anywhere; }
+.detail dd > div { width: 100%; }
+.detail dd code { font: 0.875em ui-monospace, monospace; overflow-wrap: anywhere; }
+/* A read-only field the width of the row, its copy button joined to its right end. */
+.copy-field { display: flex; width: 100%; min-width: 0; }
+.copy-field input { flex: 1; min-width: 0; font: 0.875em ui-monospace, monospace; background: var(--chip); border: 1px solid var(--line); border-right: none; border-radius: 4px 0 0 4px; padding: 0.125rem 0.375rem; text-overflow: ellipsis; }
+.copy-field input:focus { outline: none; border-color: var(--accent); }
+.copy-field button.copy { display: flex; align-items: center; padding: 0 0.4rem; border-radius: 0 4px 4px 0; color: var(--muted); }
+.copy-field button.copy:hover { color: var(--ink); }
+.copy-field input:focus + button.copy { border-color: var(--accent); }
+.detail .body { flex: 1; min-height: 300px; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+
+.menu { position: relative; }
+.menu > button.on { border-color: var(--accent); }
+.menu-body { position: absolute; left: 0; top: calc(100% + 0.25rem); z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.625rem; width: max-content; max-width: calc(100vw - 2rem); max-height: 70vh; overflow-y: auto; box-shadow: 0 8px 24px #0003; }
+.menu-open iframe { pointer-events: none; }
+.menu-body.right { left: auto; right: 0; }
+.menu-body.wide { min-width: 18rem; }
+.menu-body label { display: flex; gap: 0.375rem; align-items: center; padding: 0.125rem 0; }
+.menu-body label small { margin-left: auto; }
+.menu-actions { display: flex; gap: 0.375rem; margin-bottom: 0.375rem; }
+.menu-body .keys div { padding: 0.125rem 0; white-space: nowrap; }
+
+.picker ul { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.picker li { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.375rem 0.625rem; border-radius: 6px; cursor: pointer; }
+.picker li.at { background: var(--select); }
+
+.empty { color: var(--muted); padding: 0.5rem; }
+
+.card.is-closed { opacity: 0.55; }
+.suggested { color: var(--accent); font-weight: 600; }
+.has-suggestions { border-color: var(--accent); color: var(--accent); }
+.suggestions { border: 1px solid var(--accent); border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; }
+.suggestions h3 { margin: 0 0 0.25rem; font-size: 1rem; display: flex; gap: 0.375rem; align-items: center; flex-wrap: wrap; }
+.suggestions h3 button { font-size: 0.8125rem; padding: 0 0.375rem; }
+.suggestions h3 small { margin-right: auto; }
+.suggestions ul { list-style: none; margin: 0; padding: 0; }
+.suggestion { padding: 0.375rem 0; border-top: 1px solid var(--line); }
+.suggestion:first-child { border-top: none; }
+.suggestion-what { overflow-wrap: anywhere; }
+.suggestion-why { color: var(--muted); margin: 0.125rem 0; }
+.suggestion-foot { display: flex; gap: 0.375rem; align-items: center; }
+.suggestion-foot small { margin-right: auto; }
+.suggestion-foot button { font-size: 0.875rem; padding: 0.0625rem 0.625rem; }
+.tray h2 { display: flex; justify-content: space-between; }
+.tray .close { border: none; background: none; font-size: 1.375rem; }
+.picker.wide { width: 42rem; }
+.picker textarea { width: 100%; font: 0.9375rem ui-monospace, monospace; padding: 0.375rem 0.625rem; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.detail-actions { margin-bottom: 0.75rem; }
+.prompt { max-height: 30vh; overflow: auto; white-space: pre-wrap; font: 0.875rem ui-monospace, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 0.625rem; margin: 0.625rem 0 0; }
+.column.inbox { border-style: dashed; }
+.group-head { text-align: left; border: none; border-bottom: 1px solid var(--line); border-radius: 0; background: none; padding: 0.1875rem 0.125rem; margin-top: 0.3125rem; font-weight: 600; color: var(--muted); position: sticky; top: -0.5rem; background: var(--panel); z-index: 1; }
+/* The space above a heading is margin, not padding, so that the bar down its left is no taller
+   than the text needs and the text sits in the middle of it. */
+.group-head:hover { text-decoration: underline; }
+/* Each part of a heading takes the colour of its place in its own scale, most pressing or
+   largest (Urgent, XL) warmest, so "High · S" can be picked out by eye; the bar down the left is
+   the first part's. What nobody has judged is blue, so that it is as easy to find: the text
+   darker than the bar, to stay readable. */
+/* An inset shadow rather than a border, which would meet the line below at a slant. */
+.group-head:not(.level--1) { box-shadow: inset 0.25rem 0 0 currentColor; padding-left: 0.625rem; }
+.group-head.level-0 { box-shadow: inset 0.25rem 0 0 #54aeff; }
+.group-head .sep, .group-head small { color: var(--muted); }
+/* A little brighter than the board's --bad, --warn and --good, which are tuned for small text: a heading is
+   bold and is there to be spotted. Light and dark, in that order. The light ones are the labels' own
+   colours (`reconcile.SCALE`, LABELS.md), which a test holds them to. */
+.group-head .level-0 { color: light-dark(#157aed, #4e9dfc); }
+.group-head.level-1, .group-head .level-1 { color: light-dark(#da2935, #fc5e56); }
+.group-head.level-2, .group-head .level-2 { color: light-dark(#ce5906, #d66a1f); }
+.group-head.level-3, .group-head .level-3 { color: light-dark(#ad7700, #dba632); }
+.group-head.level-4, .group-head .level-4 { color: light-dark(#249243, #4bc65a); }
+.group-head.level-5, .group-head .level-5 { color: light-dark(#1d8d96, #48cdd6); }
+.chip.milestone { border: 1px solid var(--line); background: none; }
+.banner { display: flex; gap: 0.625rem; align-items: center; flex-wrap: wrap; padding: 0.5rem 1rem; border-bottom: 1px solid var(--line); }
+.banner.rehearsal { background: color-mix(in srgb, var(--warn) 18%, var(--panel)); }
+.banner.waiting { background: var(--select); }
+.banner code { font: 0.8125rem ui-monospace, monospace; color: var(--muted); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+.detail-head { display: flex; gap: 0.5rem; align-items: flex-start; }
+.detail-head > :first-child { flex: 1; min-width: 0; }
+.detail-head .collapse, .detail-head .reread, .detail-strip button.open { border: none; background: none; color: var(--muted); font-size: 1.375rem; line-height: 1; padding: 0.125rem 0.375rem; }
+.detail-head .collapse:hover, .detail-head .reread:hover:not(:disabled), .detail-strip button.open:hover { color: var(--accent); }
+.detail-strip { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; padding: 0.75rem 0.25rem; border-left: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 0.8125rem; }
+.detail-strip span, .detail-strip .place { writing-mode: vertical-rl; }
+/* A long milestone title is cut short down the strip; the button's tooltip has all of it. */
+.detail-strip .place { padding: 0.5rem 0.125rem; max-height: 16rem; overflow: hidden; text-overflow: ellipsis; }
+/* Where a card stands, as buttons: in the panel's head and down the collapsed strip. */
+.places { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-bottom: 0.75rem; }
+button.place { border: 1px solid var(--line); border-radius: 0.75rem; background: var(--chip); color: var(--ink); padding: 0 0.625rem; font-size: 0.875rem; line-height: 1.625rem; white-space: nowrap; }
+button.place:hover { border-color: var(--accent); }
+button.place.unset { background: none; color: var(--muted); border-style: dashed; }
+button.place.chip.priority { border-color: transparent; }
+button.place.suggested { color: var(--accent); border-color: var(--accent); background: none; }

@@ -126,7 +126,11 @@ A closed standing bucket is invisible to `status` and to the `triage` menu, so n
 close or delete one. That invariant is enforced in four places (`setup` reopens, `rollover` refuses
 both a closed destination and `--close` on a bucket, and `milestone_problems` returns early for a
 bucket, so `check` never raises a `done`, `empty`, `rename` or `undated` finding against one); add
-the guard when you add a path that could close a milestone. A closed milestone of any kind with
+the guard when you add a path that could close a milestone. `milestone_problems` counts a title in
+`DEFAULT_BUCKETS` as a bucket even when the config's `buckets` omits it, and is the only place
+that does: a config naming four of the six got told to rename, date, close or delete every
+"Critical" and "Needs triage". `rollover --close`, the triage menu and the walk's sources still go
+by the config alone. A closed milestone of any kind with
 work still on it is `check`'s `stranded` finding — the only one raised against a closed milestone,
 buckets included — and `check -i`'s `[p]` reopens it, as `setup` would for a bucket. `status`
 fetches closed milestones too, purely to count what is stranded in one closing line.
