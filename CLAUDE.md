@@ -28,7 +28,9 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 - `gh api graphql` exits **nonzero on any GraphQL error**, including a partial one, but still
   prints the whole response — resolved data and all — on stdout. An aliased multi-repo query
   where one repo is gone therefore looks like total failure unless you keep that stdout; see
-  `gh.graphql`'s `partial_ok`.
+  `gh.graphql`'s `partial_ok`. The flip side: a failed **mutation** also comes back with a
+  non-null `data` (`{"setIssueFieldValue": null}`), so `gh.mutate` runs it `strict=True`,
+  which raises on any error, and its caller must check the payload isn't null.
 - A PR's `closingIssuesReferences` is GraphQL-only, so the PR walk fetches it in one aliased
   query per fifty PRs, `pN: issueOrPullRequest(number: N)` under each repo alias — that field
   rather than `pullRequest`, so `assign` can ask about a ref it can't tell is a PR; a number
@@ -49,13 +51,17 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   same node ids. `fetch_priority_field` asks `users/{owner}` for the account type first, so a user
   owner never triggers the NOT_FOUND warning the organisation query would print.
 - Advanced search takes `milestone:"Some title"` (quoted, spaces and all) alongside OR'd repos,
-  and matches by **title alone, whatever the milestone's state** — so `triage --from X` where X
+  and matches by **title alone, whatever the milestone's state or the title's case** (verified
+  live, Nov 2026 — so `--repo`'s REST lookup matches case-blind too, and `--from` folds titles
+  that differ only in case) — so `triage --from X` where X
   is closed in one repo walks that repo's stranded items, with no `(current)` entry in the menu.
   `(no:milestone OR milestone:"X")` in one query is accepted too and returns exactly the sum
   (verified live), but `fetch_untriaged` runs one query set per source on purpose: the walk
   wants its sources in order, `--repo` goes through REST `issues?milestone=<number>` and is
   per source anyway, and each query keeps its own 1000-result headroom. Nothing escapes a `"`
-  inside the qualifier, so `triage_sources` refuses such a title.
+  inside the qualifier, so `triage_sources` refuses such a title, and an empty one, which is
+  falsy and would read as "no milestone". `build_search_queries` raises on a title too long
+  for even one repo's query, since its splitter only splits between repos.
 - `gh api --paginate --slurp` on `search/*` yields one **dict** per page (each wrapping
   `items`), not a list; `gh.api(paginate=True)` flattens both shapes.
 - Milestone `due_on` takes a full ISO 8601 instant; send midday UTC (`...T12:00:00Z`) so it
@@ -67,10 +73,13 @@ CLI. Hard-won API facts (verified live, Aug 2026):
 `TRIAGE_BUCKET` ("Needs triage") is the one bucket the walk reads from as well as writes to: by
 default `triage` walks the no-milestone items and then the parked ones, `--from` (argparse
 `dest="sources"`, since `from` is a keyword) replaces that set, and every item carries `milestone`
-and `source`. Picking an item's current milestone is logged as a skip, no PATCH. A PR carries an
-issue parked there onto its own milestone as it does an unplaced one (`carries`'s `parked`), in
-the walk and in `assign` alike — but only while the config lists the bucket, so a config that
-names its buckets by hand and hasn't added it treats "Needs triage" as any other milestone.
+and `source`. Picking an item's current milestone is logged as a skip, with no PATCH of its own,
+but the rest of the answer — a priority suffix, a PR's carry — still runs. A PR carries an issue
+parked there onto its own milestone as it does an unplaced one (`carries`'s `parked`), in the walk
+and in `assign` alike, and never one already on the PR's milestone (`onto`), which would be a
+write that changes nothing but `updated_at`. All of this holds only while the config lists the
+bucket (`triage_bucket`), so a config that names its buckets by hand and hasn't added it treats
+"Needs triage" as any other milestone.
 
 `triage`'s `c` prompt completes milestone titles with `readline`, which on macOS is libedit under
 the same module name: `parse_and_bind("tab: complete")` does nothing there, so `ask_completing`
@@ -96,7 +105,10 @@ detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
 `assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
 coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
 pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
-only write that never closes or deletes anything, which is what makes that safe. A PR ref is
+only write that never closes or deletes anything, which is what makes that safe. What a
+pipe can't confirm it leaves undone: a PR ref carries the issues it closes, but from a pipe not
+one parked on Needs triage (`held`), since MILESTONES.md tells coding agents — the usual pipe —
+never to move one off it. A PR ref is
 accepted on purpose — the issues endpoint sets a PR's milestone too — and `triage --prs --list`
 lists them; like the walk, it carries the issues a PR closes, counted before the prompt. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
 "Proceed?"; send "y\r"; expect eof'` works; `script -q /dev/null` with a piped answer does not —
@@ -106,8 +118,9 @@ it hands the program an EOF before the answer, so `ask()` aborts whatever you se
 Buckets are per repo, and a repo may use any subset of them: nothing here treats a missing
 bucket as a problem. `free_buckets` is the configured buckets a repo hasn't got, and nothing at all
 for a repo that has none of them. It is only the walk's rename targets — the buckets a repo already
-has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, just
-"Critical") is one `status` hides while nothing is open on it.
+has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, "Critical"
+and "Needs triage") is one `setup` leaves for the walk to create when it is first picked, and
+one `status` hides while nothing is open on it.
 
 A closed standing bucket is invisible to `status` and to the `triage` menu, so nothing here may
 close or delete one. That invariant is enforced in four places (`setup` reopens, `rollover` refuses
@@ -142,6 +155,9 @@ symlink `~/.config/gh` into it too, since `gh` reads its auth from the same vari
 optional when piping answers into `check -i` or `triage`: findings and items are ordered across
 every tracked repo, so a keypress meant for a scratch milestone in `gaurav/milestones` lands on
 whichever repo sorts first. One such run reopened a closed Babel milestone and rolled 27 issues.
+
+`data/` is the scratch directory for local runs — a scratch `XDG_CONFIG_HOME`, a page saved from
+a browser, output to compare. Git ignores everything in it but its `.gitkeep`.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
 the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its

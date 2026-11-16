@@ -16,7 +16,8 @@ from milestones.cli import (
     is_ignored, item_marker, load_config, triage_order,
     free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
     pct_color,
-    print_findings, print_table, read_key, sort_key, triage_scope, triage_sources,
+    print_findings, print_table, read_key, sort_key, triage_bucket, triage_scope,
+    triage_hint, triage_sources,
     triage_summary,
     untriaged_counts, visible,
     write_repo_list,
@@ -70,6 +71,15 @@ def test_build_search_queries_ask_for_one_milestone_instead_of_none():
     assert all(len(q) <= 256 for q in queries)
     assert all("repo:" + r in " ".join(queries) for r in repos)
     assert len(queries) > len(build_search_queries(repos))
+    # Splitting is between repos, so a title that overflows one repo's query on its own
+    # can't be searched for at all.
+    with pytest.raises(ValueError, match="too long"):
+        build_search_queries(repos, milestone="x" * 200)
+
+
+def test_build_search_queries_names_a_repo_once_whatever_its_spellings():
+    (query,) = build_search_queries(["gaurav/Milestones", "gaurav/milestones", "a/b"])
+    assert query.lower().count("repo:gaurav/milestones") == 1
 
 
 def test_build_search_queries_split_to_stay_under_the_cap():
@@ -488,6 +498,13 @@ def test_untriaged_counts_splits_issues_from_prs_per_repo():
         {"repo": "c/three", "issues": 0, "prs": 0, "needs_triage": 1}]
 
 
+def test_triage_hint_names_each_walk_that_has_something_to_offer():
+    assert triage_hint(3, 0) == "run: milestones triage"
+    assert triage_hint(0, 2) == "run: milestones triage --prs"
+    # PRs first: one carries the issues it closes, so the issue walk after it is shorter.
+    assert triage_hint(3, 2) == "run: milestones triage --prs  (then: milestones triage)"
+
+
 def test_closes_line_says_where_each_linked_issue_is():
     assert closes_line([], "A/one") == ""
     assert closes_line([{"number": 12, "state": "OPEN", "milestone": None, "repo": "A/one"},
@@ -501,16 +518,22 @@ def test_closes_line_says_where_each_linked_issue_is():
 def test_a_pr_carries_only_open_unplaced_issues_in_its_own_repo():
     def issue(state="OPEN", milestone=None, repo="A/one"):
         return {"state": state, "milestone": milestone, "repo": repo}
-    assert carries(issue(), "A/one")
-    assert carries(issue(repo="a/One"), "A/one")  # GitHub's spelling needn't match the config's
-    assert not carries(issue(milestone="v1.2"), "A/one")  # somebody already placed it
+    assert carries(issue(), "A/one", "v1.3")
+    # GitHub's spelling needn't match the config's.
+    assert carries(issue(repo="a/One"), "A/one", "v1.3")
+    assert not carries(issue(milestone="v1.2"), "A/one", "v1.3")  # somebody already placed it
     # Parked on Needs triage is not placed: the PR that closes it places it.
-    assert carries(issue(milestone="Needs triage"), "A/one", parked="Needs triage")
-    assert not carries(issue(milestone="Needs triage"), "A/one")
-    assert not carries(issue(milestone="v1.2"), "A/one", parked="Needs triage")
-    assert not carries(issue(state="CLOSED"), "A/one")
+    assert carries(issue(milestone="Needs triage"), "A/one", "v1.3", parked="Needs triage")
+    assert not carries(issue(milestone="Needs triage"), "A/one", "v1.3")
+    assert not carries(issue(milestone="v1.2"), "A/one", "v1.3", parked="Needs triage")
+    # Already where the PR is going: nothing to write, so nothing carried — a PR parked on
+    # Needs triage leaves the parked issues it closes as they are.
+    assert not carries(issue(milestone="Needs triage"), "A/one", "Needs triage",
+                       parked="Needs triage")
+    assert carries(issue(), "A/one", "Needs triage", parked="Needs triage")
+    assert not carries(issue(state="CLOSED"), "A/one", "v1.3")
     # Its milestone number here would name some other milestone there, or none.
-    assert not carries(issue(repo="B/two"), "A/one")
+    assert not carries(issue(repo="B/two"), "A/one", "v1.3")
 
 
 def test_complete_titles_matches_a_prefix_of_the_whole_title_ignoring_case():
@@ -568,11 +591,21 @@ def test_triage_sources_default_to_none_then_the_triage_bucket_where_configured(
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, None) == [None, TRIAGE_BUCKET]
     # A config that lists its buckets by hand and hasn't added the new one walks as before.
     assert triage_sources({"buckets": ["Needed soon"]}, None) == [None]
+    assert triage_bucket({"buckets": DEFAULT_BUCKETS}) == TRIAGE_BUCKET
+    assert triage_bucket({"buckets": ["Needed soon"]}) is None
     # --from replaces the default outright, keeps its order, and folds duplicates.
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", "None", "v1.2"]) == ["v1.2", None]
     assert triage_sources({"buckets": DEFAULT_BUCKETS}, ["none"]) == [None]
     with pytest.raises(SystemExit, match="quote"):
         triage_sources({"buckets": DEFAULT_BUCKETS}, ['Say "when"'])
+    # Search ignores case in a title, so two spellings are one source, said the first way.
+    assert triage_sources({"buckets": DEFAULT_BUCKETS},
+                          ["Needs triage", "NONE", "needs triage", "none"]) == [
+        "Needs triage", None]
+    # An empty title is falsy, and would be walked as "no milestone" under another name.
+    for empty in ("", "  "):
+        with pytest.raises(SystemExit, match="none"):
+            triage_sources({"buckets": DEFAULT_BUCKETS}, ["v1.2", empty])
 
 
 def test_triage_scope_names_one_repo_by_url_and_counts_several_in_walk_order():
@@ -606,7 +639,7 @@ def test_triage_scope_counts_each_source_even_an_empty_one():
 
 
 def _done(**entries):
-    done = {key: [] for key in ("assigned", "carried", "passed", "priority", "unprioritised",
+    done = {key: [] for key in ("assigned", "carried", "priority", "unprioritised",
                                 "failed", "skipped", "created", "reopened", "unordered")}
     return done | entries
 

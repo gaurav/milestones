@@ -1,5 +1,7 @@
-# Scratch directory
-/data/
+# Scratch directory: kept in the repo, its contents not. `/data/` alone would stop git
+# looking inside, so the .gitkeep could only be added with -f.
+/data/*
+!/data/.gitkeep
 
 # The board's front end: built by `npm run build`
 /milestones/board/static/

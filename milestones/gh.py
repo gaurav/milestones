@@ -92,7 +92,7 @@ def api(path: str, method: str = "GET", paginate: bool = False, body: dict | Non
     return data
 
 
-def graphql(query: str, owner: str | None = None) -> dict:
+def graphql(query: str, owner: str | None = None, strict: bool = False) -> dict:
     """Run a GraphQL query and return its `data` dict. `owner` picks that owner's token,
     for a query about one owner; a query across several goes out on the default one.
 
@@ -100,11 +100,15 @@ def graphql(query: str, owner: str | None = None) -> dict:
     null for the rest — a configured repo that has been deleted, made private, or
     mistyped by hand. Warn about those and hand back everything that did resolve;
     one bad name in the config shouldn't cost you every other repo.
+
+    `strict` is for a mutation, which has no "partly worked": a failed one comes back
+    as `{"data": {"theMutation": null}, "errors": [...]}`, so `data` alone being
+    non-null proves nothing, and any error at all raises.
     """
     body = json.loads(_run(["api", "graphql", "-f", f"query={query}"], partial_ok=True,
                            owner=owner))
     errors = body.get("errors") or []
-    if body.get("data") is None:
+    if body.get("data") is None or (strict and errors):
         raise SystemExit("gh api graphql failed:\n" +
                          "\n".join(e.get("message", str(e)) for e in errors))
     for error in errors:
@@ -115,9 +119,10 @@ def graphql(query: str, owner: str | None = None) -> dict:
 def mutate(what: str, query: str, owner: str | None = None) -> dict:
     """Run a GraphQL mutation. `what` is the write in a few words, for the message a
     read-only run gives instead of making it. Every mutation goes through here, never
-    through `graphql`, which has no way to tell a write from a read."""
+    through `graphql`, which has no way to tell a write from a read. Always `strict`: a
+    mutation has no "partly worked"."""
     _refuse_write(what)
-    return graphql(query, owner)
+    return graphql(query, owner, strict=True)
 
 
 def probe(query: str, owner: str | None = None) -> list[str]:
