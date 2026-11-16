@@ -305,3 +305,10 @@ def test_closing_lines_say_what_never_reached_github():
     lines = server.closing_lines(snapshot)
     assert "1 written to o/r." in lines
     assert "  #6 → Soon  — gh failed:" in lines and "  #7 → no milestone" in lines
+
+
+def test_an_action_without_a_value_is_refused_rather_than_read_as_none(monkeypatch):
+    board = make_board(monkeypatch, [card(5, milestone=1)])
+    with pytest.raises(server.Refused, match="needs a value") as refused:
+        board.submit([{"issue": 5, "kind": "milestone"}])
+    assert refused.value.status == 400 and board.cards[5]["milestone"] == 1

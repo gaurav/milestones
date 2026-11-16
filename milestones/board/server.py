@@ -161,6 +161,10 @@ class Board:
                     raise Refused(400, f"unknown action kind: {request.get('kind')!r}")
                 if request.get("issue") not in self.cards:
                     raise Refused(404, f"no open issue or pull request #{request.get('issue')}")
+                if "value" not in request:
+                    # Not None: a missing value would quietly take the card off its milestone.
+                    raise Refused(400, f"#{request['issue']} needs a value: a milestone "
+                                       "number, or null for none")
                 value = request.get("value")
                 if value is not None:
                     milestone = self.milestones.get(value)
