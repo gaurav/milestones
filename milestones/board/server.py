@@ -133,7 +133,8 @@ class Board:
                 made.append(self._new_action(card["number"], "milestone", request["value"]))
                 if card["kind"] == "pr" and request["value"] is not None:
                     # A pull request is triaged for the issues it closes too.
-                    for number in data.carried_by(card, self._issues(), self.parked()):
+                    for number in data.carried_by(card, self._issues(), self.parked(),
+                                                   request["value"]):
                         if number not in moving:
                             made.append(self._new_action(number, "milestone", request["value"],
                                                          carried_by=card["number"]))

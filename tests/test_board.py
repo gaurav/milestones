@@ -149,6 +149,13 @@ def test_a_pull_request_carries_unplaced_and_parked_issues_but_not_placed_ones(m
     assert board.cards[6]["milestone"] == 1 and board.cards[7]["milestone"] == 1
 
 
+def test_a_pull_request_parked_with_its_issue_makes_no_write_for_the_issue(monkeypatch):
+    closes = [{"number": 6, "title": "", "state": "OPEN"}]
+    board = make_board(monkeypatch, [card(6, milestone=2), card(20, "pr", closes=closes)])
+    made = board.submit([{"issue": 20, "kind": "milestone", "value": 2}])
+    assert [a["issue"] for a in made] == [20]
+
+
 def test_parked_issues_stay_put_when_the_config_has_no_needs_triage_bucket(monkeypatch):
     closes = [{"number": 6, "title": "", "state": "OPEN"}]
     board = make_board(monkeypatch, [card(6, milestone=2), card(20, "pr", closes=closes)],

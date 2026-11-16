@@ -148,14 +148,18 @@ def column_order(milestones: list[dict], buckets: list[str], sort_key) -> list[i
                                         key=lambda m: sort_key(m["title"], m["due"], buckets))]
 
 
-def carried_by(pr: dict, cards: dict[tuple[str, int], dict], parked: int | None) -> list[int]:
-    """The issues that move with a pull request: open ones it closes that have no
-    milestone, or sit on the Needs triage milestone (`parked`, its number, where the repo
-    has one). An issue someone already placed stays where they put it."""
+def carried_by(pr: dict, cards: dict[tuple[str, int], dict], parked: int | None,
+               onto: int) -> list[int]:
+    """The issues that move with a pull request onto milestone `onto`: open ones it closes
+    that have no milestone, or sit on the Needs triage milestone (`parked`, its number, where
+    the repo has one). An issue someone already placed stays where they put it, and one
+    already on `onto` is left out, as `cli.carries` leaves it: writing it would change
+    nothing but its `updated_at`."""
     numbers = []
     for issue in pr.get("closes") or []:
         card = cards.get(("issue", issue["number"]))
-        if card and (card["milestone"] is None or card["milestone"] == parked):
+        if (card and (card["milestone"] is None or card["milestone"] == parked)
+                and card["milestone"] != onto):
             numbers.append(issue["number"])
     return numbers
 
