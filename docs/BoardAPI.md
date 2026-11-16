@@ -108,6 +108,13 @@ and everything else is `503`.
 | | |
 | --- | --- |
 | `GET /api/v1/app` | `{permissions, repos, focus, config, boards}`: the mode, the tracked repos and the focused ones as the config spells them, where the config file is, and `[{repo, status}]` for each board opened so far (`loading`, `ready` or `failed`). |
+| `GET /api/v1/overview` | A **section**, below, whose `data` is what the home page shows: `{milestones, quiet_repos, stranded, untriaged, untriaged_fresh, findings, kinds, buckets, repos, focus, today}`. `milestones` is every open milestone of the tracked repos in due order, each `{repo, title, number, due, open, closed, open_prs, closed_prs, percent, flags, focus, bucket, url}`; `stranded` is the closed ones still holding open work; `untriaged` is per repo `{repo, issues, prs, needs_triage, focus}`, and comes from a slower search, so a read publishes once with the last counts known (`untriaged_fresh: false`) and again with new ones; `findings` is what is wrong with a milestone, each `{kind, repo, title, number, detail, due, bucket, url, issues, prs, free_buckets}`, and `kinds` says what each kind's fix is. |
+| `GET /api/v1/prs` | A section whose `data` is `{prs: [{repo, number, title, draft, updated, milestone, url, group}]}`: every open pull request you wrote, anywhere, `group` being `tracked`, `untracked` or `ignored`. `?assigned=1`, `?review_requested=1` and `?mentions=1` add the ones assigned to you, waiting on your review, or mentioning you; asking with different flags drops the kept answer and reads again. |
+| `POST /api/v1/refresh` | Read sections again: body `{sections: ["overview", "prs"]}`, or no body for both. Returns each one's section as it stands, `refreshing`. |
+| `PATCH /api/v1/milestones/OWNER/NAME/{number}` | Body any of `{title, due: "YYYY-MM-DD" \| null, state: "open" \| "closed"}`. The milestone is read from GitHub first, never taken from a kept answer. Closing a standing bucket is `409`. Returns `{milestone}`. Needs no board for the repo; one that is open is told to read its milestones again. |
+| `DELETE /api/v1/milestones/OWNER/NAME/{number}` | Delete a milestone nothing was ever filed on. `409` for a standing bucket, and for one with any issue or pull request on it, open or closed. |
+| `POST /api/v1/milestones/OWNER/NAME/{number}/rollover` | Body `{to, close?, dry?}`: move its open issues and pull requests onto the open milestone titled `to`, and close it after if `close`. Returns `{from, to, items: [{number, title, pr}], moved, closed}`; with `dry`, only says what would move. `409` for a title the repo hasn't got, a closed destination, or `close` on a standing bucket. |
+| `GET /api/v1/events` | Server-sent events for the pages that are not a board: `overview` and `prs`, each carrying its section whenever it changes. |
 | `GET …/board` | While the repo is being read: `{repo, permissions, loading: {what, seen, total}, error}`, where `loading` says how far it has got (empty before the first page) and `error` is why it stopped, if it did; ask again until `loading` is absent. `POST …/refresh` tries a failed read again. Then: `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is the priority and effort label scheme, as `{priority: {field, prefix, options, colors, meanings, values, aliases}, effort: {…}}` — `options` are the values in order, each written as the label `<field>: <option>`; `prefix` is a regular expression for the name, before its colon, of any label about the kind; `values` maps what follows the colon, or the organisation field's value, lower-cased, to an option; `aliases` maps a label of the repo's own, lower-cased, to the option it stands for; `view` is what was last saved with `POST …/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
 | `POST …/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST …/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
@@ -125,6 +132,18 @@ and everything else is `503`.
 Milestone writes are made before the response and fail with `502` and GitHub's message; in a
 read-only run they are `403` with what would have been done. Nothing in the API closes or deletes
 a milestone.
+
+**Section** — an answer that takes seconds to read, kept on disk
+(`$XDG_STATE_HOME/milestones/<name>.json`) so that a page has something to show at once:
+`{data, fetched_at, params, fresh, refreshing, error}`. `data` is the last answer, or `null` if
+there has never been one; `fetched_at` is when it was read. Asking for a section starts a read
+if this run has not made one, or made it more than five minutes ago, and the new answer arrives
+as an event. `fresh` is true only for an answer this run read to the end. The kept copy is for
+looking at: a page should offer no write that was decided from it until `fresh`, and the
+milestone endpoints read the milestone again themselves either way. `error` is why the last
+read failed; `data` is then still the answer before it.
+
+A read-only app refuses the three milestone writes with `403`, saying what it would have done.
 
 ## Events
 

@@ -404,9 +404,9 @@ def fetch_untriaged(config, repo: str | None, kind: str | None = "issue",
     return issues
 
 
-def collect_findings(config) -> list[dict]:
+def collect_findings(config, fetched=None) -> list[dict]:
     today = datetime.date.today().isoformat()
-    repos, milestones = fetch_milestones(config["repos"], closed=True)
+    repos, milestones = fetched or fetch_all_milestones(config)
     # Closed titles too: a title is unique across open and closed milestones, so a rename
     # onto a closed bucket's title would 422 just as onto an open one's.
     seen: dict[str, set] = {r: set() for r in repos}
@@ -426,6 +426,8 @@ def collect_findings(config) -> list[dict]:
                                                closed=m["state"] == "CLOSED"):
             findings.append({"kind": kind, "repo": repo, "title": m["title"], "detail": detail,
                              "url": m["url"], "number": m["number"],
+                             "due": m["dueOn"] and m["dueOn"][:10],
+                             "bucket": m["title"] in config["buckets"],
                              "free_buckets": free[repo],
                              "issues": m["open"]["totalCount"] + m["closed"]["totalCount"],
                              "prs": m["openPrs"]["totalCount"] + m["closedPrs"]["totalCount"]})
@@ -433,14 +435,23 @@ def collect_findings(config) -> list[dict]:
     return findings
 
 
-def status_data(config: dict) -> dict:
+def fetch_all_milestones(config: dict) -> tuple[list[str], list[tuple[str, dict]]]:
+    """Every milestone of every tracked repo, open and closed: what `status_data` and
+    `collect_findings` both read, for a caller that wants both from one round trip."""
+    return fetch_milestones(config["repos"], closed=True) if config["repos"] else ([], [])
+
+
+def status_data(config: dict, fetched=None, untriaged_items: list[dict] | None = None) -> dict:
     """Every open milestone in the tracked repos by due date, and what isn't a row: the
     tracked repos with none, the closed milestones still holding open work, and how much in
-    each repo is on no milestone. The shape `status --json` printed."""
+    each repo is on no milestone. The shape `status --json` printed.
+
+    `fetched` is `fetch_all_milestones`' answer and `untriaged_items` the search for what is
+    on no milestone, for a caller that has them already; each is read here otherwise."""
     today = datetime.date.today().isoformat()
     milestones = []
     stranded = []  # closed milestones with open work: not rows, but not silence either
-    tracked, entries = fetch_milestones(config["repos"], closed=True) if config["repos"] else ([], [])
+    tracked, entries = fetched or fetch_all_milestones(config)
     for repo, m in entries:
         due = m["dueOn"][:10] if m["dueOn"] else None
         count, prs = m["open"]["totalCount"], m["openPrs"]["totalCount"]
@@ -467,8 +478,9 @@ def status_data(config: dict) -> dict:
               for repo, m in entries
               if m["title"] == TRIAGE_BUCKET and m["state"] == "OPEN"
               and TRIAGE_BUCKET in config["buckets"]}
-    untriaged = untriaged_counts(
-        fetch_untriaged(config, None, kind=None) if config["repos"] else [], parked)
+    if untriaged_items is None:
+        untriaged_items = fetch_untriaged(config, None, kind=None) if config["repos"] else []
+    untriaged = untriaged_counts(untriaged_items, parked)
     for row in untriaged:
         row["focus"] = is_focused(row["repo"], config["focus"])
 

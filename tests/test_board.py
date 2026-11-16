@@ -158,7 +158,8 @@ class FakeApp(server.App):
         super().__init__({"buckets": DEFAULT_BUCKETS, "repos": [], "focus": [], "labels": {}},
                          make_board=lambda repo: server.Board(
                              repo, DEFAULT_BUCKETS, sort_key,
-                             fetch=lambda repo, progress: {"repo": repo, "milestones": [], "cards": []}))
+                             fetch=lambda repo, progress: {"repo": repo, "milestones": [], "cards": []}),
+                         state=None)
         self.renamed, self.asked = renamed or {}, []
 
     def canonical(self, repo):
@@ -786,3 +787,90 @@ def test_a_plan_can_be_discarded_and_a_bad_file_is_no_plan(monkeypatch, tmp_path
     board.discard_plan()
     assert not path.exists()
     assert server.plan_path("o/r", {"XDG_STATE_HOME": "/s"}) == Path("/s/milestones/board-o-r.plan.json")
+
+
+# --- the app's other pages ------------------------------------------------------------------
+
+from milestones.board import cache  # noqa: E402
+
+
+def wait(section):
+    for _ in range(500):
+        if not section.snapshot()["refreshing"]:
+            return section.snapshot()
+        __import__("time").sleep(0.01)
+    raise AssertionError("the section never finished reading")
+
+
+def test_a_section_shows_its_kept_copy_first_and_marks_only_a_new_read_fresh(tmp_path):
+    path, said = tmp_path / "state" / "overview.json", []
+    first = cache.Section("overview", path, lambda params: iter([{"n": 1}]),
+                          lambda name, payload: said.append((name, payload["data"], payload["fresh"])))
+    assert first.snapshot()["data"] is None
+    first.get()                          # nothing kept: a read starts
+    assert wait(first)["data"] == {"n": 1} and first.snapshot()["fresh"] is True
+    assert said[-1] == ("overview", {"n": 1}, True)
+
+    # The next run: the copy is there at once, and is not called fresh until read again.
+    def slow(params):
+        yield {"n": 2, "part": True}
+        yield {"n": 2}
+    second = cache.Section("overview", path, slow)
+    kept = second.snapshot()
+    assert kept["data"] == {"n": 1} and kept["fresh"] is False and kept["fetched_at"]
+    second.get()
+    assert wait(second)["data"] == {"n": 2} and second.snapshot()["fresh"] is True
+    second.fetch = lambda params: pytest.fail("a fresh copy is not read again so soon")
+    assert second.get()["data"] == {"n": 2}
+
+
+def test_a_section_asked_something_else_drops_its_copy_and_a_failed_read_says_why(tmp_path):
+    section = cache.Section("prs", tmp_path / "prs.json", lambda params: iter([{"for": dict(params)}]))
+    section.get({})
+    assert wait(section)["data"] == {"for": {}}
+    assert section.get({"assigned": True})["data"] in (None, {"for": {"assigned": True}})
+    assert wait(section)["data"] == {"for": {"assigned": True}}
+
+    def failing(params):
+        raise SystemExit("gh api ... failed:\nrate limited")
+        yield
+    section.fetch = failing
+    section.refresh()
+    after = wait(section)
+    assert "rate limited" in after["error"] and after["data"] == {"for": {"assigned": True}}
+
+
+def test_a_fix_from_the_home_page_never_closes_or_deletes_a_bucket():
+    release = {"title": "v1.2", "open_issues": 0, "closed_issues": 0}
+    bucket = {"title": "Needed soon", "open_issues": 0, "closed_issues": 0}
+    assert server.checked_fix(release, {"state": "closed"}, DEFAULT_BUCKETS) == {"state": "closed"}
+    assert server.checked_fix(bucket, {"state": "open"}, DEFAULT_BUCKETS) == {"state": "open"}
+    with pytest.raises(server.Refused, match="standing bucket"):
+        server.checked_fix(bucket, {"state": "closed"}, DEFAULT_BUCKETS)
+    with pytest.raises(server.Refused, match="standing bucket"):
+        server.checked_delete(bucket, DEFAULT_BUCKETS)
+    server.checked_delete(release, DEFAULT_BUCKETS)
+    with pytest.raises(server.Refused, match="only an empty milestone"):
+        server.checked_delete({**release, "closed_issues": 3}, DEFAULT_BUCKETS)
+
+
+def test_a_fix_is_a_title_a_date_or_a_state_and_nothing_else():
+    m = {"title": "Sprint", "open_issues": 1, "closed_issues": 0}
+    assert server.checked_fix(m, {"title": " Sprint v2 ", "due": "2026-12-01"}, []) == {
+        "title": "Sprint v2", "due_on": "2026-12-01T12:00:00Z"}
+    assert server.checked_fix(m, {"due": None}, []) == {"due_on": None}
+    for bad in ({}, {"description": "x"}, {"title": " "}, {"due": "tomorrow"}, {"state": "gone"}):
+        with pytest.raises(server.Refused):
+            server.checked_fix(m, bad, [])
+
+
+def test_a_read_only_app_refuses_a_fix_before_gh_is_asked_to_write(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: True)
+    app = FakeApp()
+    monkeypatch.setattr(gh, "api", lambda path, **k: (
+        pytest.fail("a write reached gh") if k.get("method", "GET") != "GET"
+        else {"title": "Sprint", "number": 4, "open_issues": 0, "closed_issues": 0}))
+    with pytest.raises(server.Refused, match="read-only: would delete milestone 'Sprint'"):
+        app.delete_milestone("o/r", 4)
+    with pytest.raises(server.Refused, match="read-only: would set milestone 'Sprint'"):
+        app.fix_milestone("o/r", 4, {"state": "closed"})

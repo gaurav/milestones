@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from .. import gh
 from ..core import TRIAGE_BUCKET
 from .. import core
-from . import data, plan, reconcile
+from . import cache, data, plan, reconcile
 
 STATIC = Path(__file__).parent / "static"
 TOKEN_HEADER = "X-Milestones-Token"
@@ -225,6 +225,12 @@ class Board:
             self.cards.update(fresh)
             self._rules(fresh)
         return gone
+
+    def refresh_milestones(self) -> None:
+        """Read the milestones again and nothing else: one was changed from another page."""
+        fetched = data.fetch_milestones(self.repo)
+        with self.lock:
+            self.milestones = {m["number"]: m for m in fetched}
 
     def _colours(self) -> dict[str, str]:
         return {l["name"]: l["color"] for l in self.labels}
@@ -765,6 +771,8 @@ def state_dir(environ=None) -> Path:
 
 
 REPO_PART = re.compile(r"[\w.-]+")
+# Whose pull requests the PRs page lists besides the ones you wrote.
+PR_FLAGS = ("assigned", "review_requested", "mentions")
 
 
 class App:
@@ -772,7 +780,10 @@ class App:
     something asks for it; after that it stays for as long as the app runs, so going back to
     a repo costs nothing."""
 
-    def __init__(self, config: dict, next_ids: dict[str, int] | None = None, make_board=None):
+    def __init__(self, config: dict, next_ids: dict[str, int] | None = None, make_board=None,
+                 state: Path | None | bool = True):
+        # Where the last answers are kept between runs; None keeps nothing (the tests).
+        state = state_dir() if state is True else state
         self.config = config
         self.read_only = gh.read_only()
         self.lock = threading.Lock()
@@ -784,6 +795,40 @@ class App:
         # Where each repo's action ids carry on from, after a `--reload`.
         self.next_ids = next_ids or {}
         self.make_board = make_board or self._make_board
+        self.listeners: list[queue.Queue] = []
+        # The pages that are not a board: each a slow read, shown from its last answer first.
+        self.sections = {
+            "overview": cache.Section("overview", state and state / "overview.json",
+                                      self._overview, self.publish),
+            "prs": cache.Section("prs", state and state / "prs.json", self._prs, self.publish),
+        }
+
+    def publish(self, event: str, payload: dict) -> None:
+        for listener in list(self.listeners):
+            listener.put((event, payload))
+
+    def _overview(self, params: dict):
+        """Every tracked repo's milestones and what is wrong with them, then — the slow half,
+        a search — how much in each repo is on no milestone."""
+        # The config as it is now: `milestones add` in another terminal shows up on a refresh.
+        self.config = core.load_config(needs_repos=False)
+        fetched = core.fetch_all_milestones(self.config)
+
+        def view(untriaged_items):
+            return {**core.status_data(self.config, fetched, untriaged_items),
+                    "findings": core.collect_findings(self.config, fetched),
+                    "kinds": core.KINDS, "buckets": self.config["buckets"],
+                    "repos": list(self.config["repos"]),
+                    "today": datetime.date.today().isoformat()}
+        kept = self.sections["overview"].data or {}
+        # Part-way: the milestones are new, the untriaged counts still the last ones known.
+        yield {**view([]), "untriaged": kept.get("untriaged", []), "untriaged_fresh": False}
+        items = core.fetch_untriaged(self.config, None, kind=None) if self.config["repos"] else []
+        yield {**view(items), "untriaged_fresh": True}
+
+    def _prs(self, params: dict):
+        self.config = core.load_config(needs_repos=False)
+        yield {"prs": core.prs_data(self.config, **{k: bool(params.get(k)) for k in PR_FLAGS})}
 
     def _make_board(self, repo: str) -> Board:
         return Board(repo, self.config["buckets"], core.sort_key, state_file=state_path(repo),
@@ -832,6 +877,80 @@ class App:
             print(f"  a read-only run left a plan of {board.plan_info()['count']} changes "
                   f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
 
+    # --- milestones, from the home page -----------------------------------------------------
+
+    def _milestone(self, repo: str, number: int) -> dict:
+        """GitHub's record of a milestone, read now: a fix is never decided from a kept copy."""
+        owner, _, name = repo.partition("/")
+        if not (REPO_PART.fullmatch(owner) and REPO_PART.fullmatch(name)):
+            raise Refused(404, f"not a repo: {repo!r}")
+        try:
+            return gh.api(f"repos/{repo}/milestones/{number}")
+        except SystemExit as exit:
+            raise Refused(404, f"can't read milestone {number} of {repo}: "
+                               f"{str(exit).splitlines()[-1]}")
+
+    def _fixed(self, repo: str, cards: bool = False) -> None:
+        """After a milestone changed: read the overview again, and tell that repo's board if
+        one is open — its milestones, and its cards too if they were moved."""
+        self.sections["overview"].refresh()
+        with self.lock:
+            board = self.boards.get(self.names.get(repo.lower(), ""))
+        if board is not None and board.status == "ready":
+            def read():
+                try:
+                    board.load() if cards else board.refresh_milestones()
+                except SystemExit:
+                    return  # the board's own Refresh will say what is wrong
+                board.publish("reload", {})
+            threading.Thread(target=read, daemon=True).start()
+
+    def _write(self, what: str, call):
+        if self.read_only:
+            raise Refused(403, f"read-only: would {what}")
+        try:
+            return call()
+        except SystemExit as exit:
+            raise Refused(502, str(exit))
+
+    def fix_milestone(self, repo: str, number: int, change: dict) -> dict:
+        milestone = self._milestone(repo, number)
+        body = checked_fix(milestone, change, self.config["buckets"])
+        said = ", ".join(f"{k} {v}" for k, v in change.items())
+        changed = self._write(f"set milestone '{milestone['title']}' in {repo}: {said}",
+                              lambda: gh.api(f"repos/{repo}/milestones/{number}",
+                                             method="PATCH", body=body))
+        self._fixed(repo)
+        return data.norm_milestone(changed)
+
+    def delete_milestone(self, repo: str, number: int) -> None:
+        milestone = self._milestone(repo, number)
+        checked_delete(milestone, self.config["buckets"])
+        self._write(f"delete milestone '{milestone['title']}' from {repo}",
+                    lambda: gh.api(f"repos/{repo}/milestones/{number}", method="DELETE"))
+        self._fixed(repo)
+
+    def rollover(self, repo: str, number: int, to: str, close: bool, dry: bool) -> dict:
+        """Move the open issues and pull requests on a milestone onto the open one called
+        `to`, and close the first if asked. `dry` only says what would move."""
+        milestone = self._milestone(repo, number)
+        if not isinstance(to, str) or not to.strip():
+            raise Refused(400, "send {to: <the title of an open milestone>}")
+        try:
+            src, dst, items = core.rollover_plan(repo, milestone["title"], to.strip(), close,
+                                                 self.config["buckets"])
+        except SystemExit as exit:
+            raise Refused(409, str(exit))
+        moving = [{"number": i["number"], "title": i["title"], "pr": "pull_request" in i}
+                  for i in items]
+        if not dry:
+            self._write(f"move {len(items)} from '{src['title']}' to '{dst['title']}' in {repo}"
+                        + (", and close the first" if close else ""),
+                        lambda: core.rollover_move(repo, src, dst, items, close))
+            self._fixed(repo, cards=True)
+        return {"from": src["title"], "to": dst["title"], "items": moving, "moved": not dry,
+                "closed": close and not dry}
+
     def info(self) -> dict:
         with self.lock:
             return {"permissions": "read" if self.read_only else "write",
@@ -843,6 +962,48 @@ class App:
         with self.lock:
             boards = list(self.boards.values())
         return any(a["status"] == "pending" for b in boards for a in b.unsettled())
+
+
+def checked_fix(milestone: dict, change: dict, buckets: list[str]) -> dict:
+    """The PATCH body for a change to a milestone made from the home page — `title`, `due`
+    (YYYY-MM-DD or null) and `state`, any of them — or Refused. `milestone` is GitHub's own
+    record of it, read just now. Closing a standing bucket is refused here as everywhere:
+    a closed bucket is invisible to the overview and to triage."""
+    unknown = set(change) - {"title", "due", "state"}
+    if unknown or not change:
+        raise Refused(400, "send any of {title, due: 'YYYY-MM-DD' | null, state: 'open' | 'closed'}")
+    body = {}
+    if "title" in change:
+        if not isinstance(change["title"], str) or not change["title"].strip():
+            raise Refused(400, "a milestone needs a title")
+        body["title"] = change["title"].strip()
+    if "due" in change:
+        if change["due"] is not None:
+            try:
+                time.strptime(change["due"], "%Y-%m-%d")
+            except (TypeError, ValueError):
+                raise Refused(400, f"due must be YYYY-MM-DD or null, not {change['due']!r}")
+        body["due_on"] = data.due_instant(change["due"])
+    if "state" in change:
+        if change["state"] not in ("open", "closed"):
+            raise Refused(400, "state is open or closed")
+        if change["state"] == "closed" and milestone["title"] in buckets:
+            raise Refused(409, f"'{milestone['title']}' is a standing bucket, so it outlives "
+                               "the issues on it; closing it would hide it")
+        body["state"] = change["state"]
+    return body
+
+
+def checked_delete(milestone: dict, buckets: list[str]) -> None:
+    """Refuse to delete a milestone that is a standing bucket, or that anything was ever
+    filed on: deleting is for the empty ones, and takes every issue off the rest."""
+    if milestone["title"] in buckets:
+        raise Refused(409, f"'{milestone['title']}' is a standing bucket; it is not deleted")
+    # GitHub's counts here take in pull requests, which is what is wanted.
+    filed = milestone["open_issues"] + milestone["closed_issues"]
+    if filed:
+        raise Refused(409, f"'{milestone['title']}' has {filed} issues and pull requests on "
+                           "it, open or closed; only an empty milestone is deleted")
 
 
 def allowed_host(host: str | None, port: int) -> bool:
@@ -921,6 +1082,34 @@ def make_handler(app: App, token: str):
                     return self._board(method, app.board(f"{rest[1]}/{rest[2]}"), rest[3:])
                 if method == "GET" and rest == ["app"]:
                     return self._json(200, app.info())
+                if method == "GET" and rest == ["events"]:
+                    return self._events(app.listeners)
+                if method == "GET" and rest == ["overview"]:
+                    return self._json(200, app.sections["overview"].get())
+                if method == "GET" and rest == ["prs"]:
+                    asked = parse_qs(url.query)
+                    return self._json(200, app.sections["prs"].get(
+                        {k: True for k in PR_FLAGS if asked.get(k, [""])[0] == "1"}))
+                if rest[:1] == ["milestones"] and len(rest) in (4, 5) and rest[3].isdigit():
+                    repo, number = f"{rest[1]}/{rest[2]}", int(rest[3])
+                    if method == "PATCH" and len(rest) == 4:
+                        return self._json(200, {"milestone": app.fix_milestone(
+                            repo, number, self._body())})
+                    if method == "DELETE" and len(rest) == 4:
+                        app.delete_milestone(repo, number)
+                        return self._json(200, {"deleted": number})
+                    if method == "POST" and rest[4:] == ["rollover"]:
+                        body = self._body()
+                        return self._json(200, app.rollover(
+                            repo, number, body.get("to"), bool(body.get("close")),
+                            bool(body.get("dry"))))
+                if method == "POST" and rest == ["refresh"]:
+                    names = self._body().get("sections") or list(app.sections)
+                    if not isinstance(names, list) or any(n not in app.sections for n in names):
+                        raise Refused(400, f"sections is a list of: {', '.join(app.sections)}")
+                    for name in names:
+                        app.sections[name].refresh()
+                    return self._json(200, {name: app.sections[name].snapshot() for name in names})
                 raise Refused(404, "not found")
             except Refused as refused:
                 self._json(refused.status, {"error": str(refused)})
@@ -1056,6 +1245,9 @@ def make_handler(app: App, token: str):
 
         def do_PATCH(self):
             self._route("PATCH")
+
+        def do_DELETE(self):
+            self._route("DELETE")
 
     return Handler
 
