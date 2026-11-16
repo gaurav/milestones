@@ -840,6 +840,25 @@ def test_a_section_asked_something_else_drops_its_copy_and_a_failed_read_says_wh
     assert "rate limited" in after["error"] and after["data"] == {"for": {"assigned": True}}
 
 
+def test_a_read_asked_for_while_one_is_under_way_is_followed_by_another():
+    import threading
+    started, go, reads = threading.Event(), threading.Event(), []
+
+    def fetch(params):
+        reads.append(len(reads) + 1)
+        started.set()
+        if len(reads) == 1:
+            go.wait(5)          # the first read is in flight when the write lands
+        yield {"read": reads[-1]}
+    section = cache.Section("overview", None, fetch)
+    section.refresh()
+    assert started.wait(5)
+    section.refresh()           # what a fix does: the read in flight may predate the write
+    go.set()
+    after = wait(section)
+    assert reads == [1, 2] and after["data"] == {"read": 2} and after["fresh"] is True
+
+
 def test_a_fix_from_the_home_page_never_closes_or_deletes_a_bucket():
     release = {"title": "v1.2", "open_issues": 0, "closed_issues": 0}
     bucket = {"title": "Needed soon", "open_issues": 0, "closed_issues": 0}

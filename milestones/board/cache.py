@@ -33,6 +33,9 @@ class Section:
         self.refreshing = False
         # Whether `data` was read from GitHub by this run, start to finish.
         self.fresh = False
+        # A read asked for while one was under way: that one may have looked before whatever
+        # prompted this, so it is followed by another rather than taken as the answer.
+        self.again = False
         self._read()
 
     def _read(self) -> None:
@@ -79,6 +82,7 @@ class Section:
     def refresh(self) -> None:
         with self.lock:
             if self.refreshing:
+                self.again = True
                 return
             self.refreshing, self.error = True, None
         threading.Thread(target=self._run, daemon=True).start()
@@ -94,7 +98,7 @@ class Section:
                     self.data = data
                 self.publish(self.name, self.snapshot())
             with self.lock:
-                if params == self.params and data is not None:
+                if params == self.params and data is not None and not self.again:
                     self.fresh, self.fetched_at = True, now().isoformat(timespec="seconds")
                     self._save()
         except SystemExit as exit:
@@ -103,8 +107,9 @@ class Section:
             self.error = f"{type(error).__name__}: {error}"
         finally:
             with self.lock:
-                self.refreshing = False
-                again = params != self.params
+                again, self.again = self.again or params != self.params, False
+                # Still reading, as far as a page is concerned, if another read follows.
+                self.refreshing = again
             self.publish(self.name, self.snapshot())
             if again:
-                self.refresh()
+                threading.Thread(target=self._run, daemon=True).start()
