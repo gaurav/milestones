@@ -14,17 +14,22 @@ _LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$"
 
 
 def parse(text: str) -> dict[str, str]:
-    """The KEY=VALUE lines of an env file. A value may be quoted; an unquoted one ends at
-    a ` #` comment. Anything that isn't an assignment is skipped rather than refused, so a
-    shell-flavoured file someone already has doesn't stop the tool."""
+    """The KEY=VALUE lines of an env file. A value may be quoted, and a comment may follow
+    the closing quote; an unquoted one ends at a ` #` comment. Anything that isn't an
+    assignment is skipped rather than refused, so a shell-flavoured file someone already
+    has doesn't stop the tool."""
     values = {}
     for line in text.splitlines():
         match = _LINE.match(line)
         if not match or line.lstrip().startswith("#"):
             continue
         key, value = match.groups()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        # A quoted value runs to its closing quote, and only a comment may follow that —
+        # `"abc"  # note` is abc, not `"abc"` with its quotes (which, as a token, would
+        # fail every call with Bad credentials).
+        quoted = re.fullmatch(r"""(["'])(.*?)\1(?:\s+#.*)?""", value)
+        if quoted:
+            value = quoted[2]
         else:
             value = re.split(r"\s+#", value, maxsplit=1)[0]
         values[key] = value
