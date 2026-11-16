@@ -66,6 +66,8 @@ class Board:
         # fetch knows which writes it may have read from before they were made.
         self.writes = 0
         self.landed_at: dict[int, int] = {}
+        # Milestone writes the same way: number → (write count, the milestone as written).
+        self.milestone_landed: dict[int, tuple[int, dict]] = {}
         self.todo: queue.Queue = queue.Queue()
         self.listeners: list[queue.Queue] = []
         self.read_only = gh.read_only()
@@ -79,6 +81,9 @@ class Board:
         with self.lock:
             self.repo = fetched["repo"]
             self.milestones = {m["number"]: m for m in fetched["milestones"]}
+            for number, (landed, milestone) in self.milestone_landed.items():
+                if landed > began:  # made, reopened or re-dated while the fetch read
+                    self.milestones[number] = milestone
             self.cards = {c["number"]: c for c in fetched["cards"]}
             self.remote = {(n, "milestone"): c["milestone"] for n, c in self.cards.items()}
             # A write that landed while the fetch was under way may or may not be in what
@@ -291,6 +296,8 @@ class Board:
             raise Refused(502, str(exit))
         with self.lock:
             self.milestones[milestone["number"]] = milestone
+            self.writes += 1
+            self.milestone_landed[milestone["number"]] = (self.writes, milestone)
         self.publish("milestone", milestone)
         return milestone
 

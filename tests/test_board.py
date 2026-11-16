@@ -312,3 +312,17 @@ def test_an_action_without_a_value_is_refused_rather_than_read_as_none(monkeypat
     with pytest.raises(server.Refused, match="needs a value") as refused:
         board.submit([{"issue": 5, "kind": "milestone"}])
     assert refused.value.status == 400 and board.cards[5]["milestone"] == 1
+
+
+def test_a_milestone_written_during_a_fetch_outlives_it(monkeypatch):
+    board = make_board(monkeypatch, [])
+    before = list(board.milestones.values())
+
+    def fetch(repo, progress):
+        board._milestone_write(lambda: {"number": 1, "title": "Soon", "state": "open",
+                                        "due_on": "2026-12-24T12:00:00Z", "html_url": "u"})
+        return {"repo": "o/r", "milestones": before, "cards": []}  # read before the write
+
+    board.fetch = fetch
+    board.load()
+    assert board.milestones[1]["due"] == "2026-12-24"
