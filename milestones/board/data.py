@@ -6,6 +6,10 @@ The normalisers here are pure, and are what `docs/BoardAPI.md` describes as a ca
 from .. import gh
 
 PAGE = 50
+# Both queries page in creation order, which nothing changes. Updated-at would let the
+# board's own writes, landing mid-refresh, move an issue across a page boundary it had
+# already been read past — and the card it pushed over the boundary would never be read.
+# The page sorts its columns itself.
 
 # One page of open issues. `issueFieldValues` is a union, hence the per-type fragments;
 # CROSS_REFERENCED_EVENT is how a pull request that mentions an issue without closing it
@@ -14,7 +18,7 @@ ISSUES_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
   nameWithOwner
   issues(first: %(page)d, states: OPEN, after: %(after)s,
-         orderBy: {field: UPDATED_AT, direction: DESC}) {
+         orderBy: {field: CREATED_AT, direction: ASC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {
       id number title url bodyHTML createdAt updatedAt
@@ -43,7 +47,7 @@ query { repository(owner: "%(owner)s", name: "%(name)s") {
 PRS_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
   pullRequests(first: %(page)d, states: OPEN, after: %(after)s,
-               orderBy: {field: UPDATED_AT, direction: DESC}) {
+               orderBy: {field: CREATED_AT, direction: ASC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {
       id number title url bodyHTML createdAt updatedAt isDraft
