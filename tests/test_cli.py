@@ -7,12 +7,14 @@ import pytest
 
 from milestones.board import reconcile
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, LATE, SOON, TRIAGE_BUCKET,
-    bucket_color, build_search_queries, _norm_issue, carries, closes_line, complete_titles,
-    parse_answer, label_plan, pr_group, prs_query, FOCUS_MARK, excerpt, is_focused,
-    is_ignored, item_marker, load_config, triage_order, free_buckets, milestone_problems,
-    parse_ignore, parse_issue_ref, parse_repo, print_table, sort_key, triage_scope,
-    triage_sources, triage_summary, untriaged_counts, visible, write_repo_list,
+    AHEAD, DISTANT, LATE, SOON, bucket_color, carries, closes_line, complete_titles,
+    parse_answer, label_plan, FOCUS_MARK, excerpt, item_marker, parse_ignore, print_table,
+    triage_scope, triage_sources, triage_summary, visible, write_repo_list,
+)
+from milestones.core import (
+    _norm_issue, build_search_queries, COLOR_NAMES, DEFAULT_BUCKETS, free_buckets,
+    is_focused, is_ignored, load_config, milestone_problems, parse_issue_ref, parse_repo,
+    pr_group, prs_query, sort_key, TRIAGE_BUCKET, triage_order, untriaged_counts,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]

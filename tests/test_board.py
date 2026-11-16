@@ -9,7 +9,8 @@ from milestones import gh
 from pathlib import Path
 
 from milestones.board import client, data, plan, reconcile, server
-from milestones.cli import DEFAULT_BUCKETS, remote_repo, sort_key, suggest_ref
+from milestones.cli import remote_repo, suggest_ref
+from milestones.core import DEFAULT_BUCKETS, sort_key
 
 
 def issue_node(number, **extra):

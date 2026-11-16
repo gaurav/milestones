@@ -18,13 +18,10 @@ from . import env, gh
 from .board import reconcile
 from .board.server import DEFAULT_PORT
 # The config, the conventions and the cross-repo reads, which the web app uses too.
-from .core import (  # noqa: F401 — re-exported: tests and older callers import them from here
-    COLOR_NAMES, DATE_RE, DEFAULT_BUCKETS, EXAMPLE_CONFIG, ISSUE_RE, KINDS, OPTIONAL_BUCKETS,
-    REPO_RE, TRIAGE_BUCKET, VERSION_RE, _milestones_by_title, _norm_issue, after,
-    build_search_queries, collect_findings, config_path, fetch_milestones, fetch_untriaged,
-    free_buckets, is_focused, is_ignored, load_config, milestone_problems, parse_color,
-    parse_issue_ref, parse_repo, pr_group, prs_data, prs_query, repo_url, rollover_move,
-    rollover_plan, sort_key, standard_labels, status_data, triage_order, untriaged_counts,
+from .core import (
+    COLOR_NAMES, ISSUE_RE, OPTIONAL_BUCKETS, REPO_RE, TRIAGE_BUCKET, _milestones_by_title, after,
+    config_path, fetch_untriaged, free_buckets, is_focused, is_ignored, load_config,
+    parse_issue_ref, parse_repo, repo_url, sort_key,
 )
 
 

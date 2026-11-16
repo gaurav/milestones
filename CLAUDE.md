@@ -5,8 +5,8 @@ whose home page shows every tracked repo and which serves a board per repo; see 
 below. `cli.py` is what is left on the command line: the `triage` walk, `assign`, `setup`,
 `suggest`, `doctor` and the config commands. `core.py` is what both stand on — the config, the
 conventions (`milestone_problems`, buckets) and the cross-repo reads — and prints nothing.
-`cli.py` re-exports core's names, so `from milestones.cli import sort_key` still works; put a
-new shared function in `core.py`.
+`cli.py` imports from core only what it uses, so import a shared name from `milestones.core`,
+and put a new shared function there.
 
 All GitHub access goes through `milestones/gh.py`, which shells out to the authenticated `gh`
 CLI. Hard-won API facts (verified live, Aug 2026):
