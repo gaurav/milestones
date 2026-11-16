@@ -1028,6 +1028,13 @@ def cmd_triage(config, args):
         if not title:
             return None
         milestone = known[repo].get(title)
+        if gh.read_only() and (milestone is None or milestone["state"] != "open"):
+            # Asked nothing and logged nothing: the write would be refused (ReadOnly, which
+            # would end the walk), and the summary lists only what was made. No number, so
+            # the walk's own read-only check says where the item would have gone.
+            print(f"  read-only: would {'create' if milestone is None else 'reopen'} {title}")
+            return {"title": title, "number": None, "html_url": "", "due_on": None,
+                    "open_issues": 0}
         if milestone is None:
             if ask(f"  no milestone '{title}' in {repo}; create it? [y/N] ").strip().lower() != "y":
                 return None
@@ -1130,8 +1137,11 @@ def cmd_triage(config, args):
                         existing = _milestones_by_title(repo)
                         choices[int(choice) - 1] = chosen = _ensure_bucket(
                             repo, chosen["title"], existing)
-                        done["reopened" if chosen["title"] in existing else "created"].append(
-                            (repo, chosen["title"]))
+                        # A read-only run's stand-in has no number: nothing was made, so
+                        # nothing is logged.
+                        if chosen["number"] is not None:
+                            done["reopened" if chosen["title"] in existing else "created"].append(
+                                (repo, chosen["title"]))
                 if chosen is not None and gh.read_only():
                     print(f"  read-only: would go on {chosen['title']}")
                     done["skipped"].append(f"{repo}#{issue['number']}")
