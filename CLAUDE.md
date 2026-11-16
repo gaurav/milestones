@@ -194,8 +194,17 @@ of it beyond the subparser — the board has its own fetch (`board/data.py`), be
 far more than `_norm_issue` keeps.
 
 - The `Board` applies a change to its cards first and writes after, from one worker thread, in
-  order. A failed write leaves the new value on the card (`load()` re-applies unsettled actions
-  after a refetch for the same reason); only `revert` puts it back.
+  order. A card shows its latest standing action's value until that is written, and `remote`
+  (what GitHub has) after: a failed write leaves the new value on the card, across a refetch too,
+  and only `revert` puts it back — on `remote`, never on the action's `previous`, which may itself
+  never have reached GitHub. A later change to a card gives up a failed action on it (and one
+  that fails behind a later change is given up as it fails), so a failed action is always its
+  card's latest and a retry can't write over something newer. `load()` counts writes landed
+  (`landed_at`), so one that lands mid-fetch beats the fetch's older read.
+- Both fetches page by `CREATED_AT`: by `UPDATED_AT`, the board's own writes during a refresh
+  would reorder pages already read past, and skip a card.
+- The API holds back a parked issue a PR closes unless the request says `carryParked`, which the
+  page sends (a person pressed the key) and an agent must not — `assign`'s `held`, over HTTP.
 - One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
   PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
   type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that

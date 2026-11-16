@@ -111,19 +111,26 @@ def run_queue(board):
     """One pass of the writer over everything queued, without its thread."""
     while not board.todo.empty():
         action = board.actions[board.todo.get()]
+        if action["status"] != "pending":
+            continue
         try:
             board.write(action)
-            action["status"] = "done"
+            board.settle(action, None)
         except SystemExit as exit:
-            action.update(status="failed", error=str(exit))
+            board.settle(action, str(exit))
+
+
+def move(board, issue, value, **extra):
+    """Submit one move; the actions it made."""
+    return board.submit([{"issue": issue, "kind": "milestone", "value": value, **extra}])[0]
 
 
 def test_a_move_shows_at_once_and_is_queued(monkeypatch):
     board = make_board(monkeypatch, [card(5)])
-    (action,) = board.submit([{"issue": 5, "kind": "milestone", "value": 1}])
+    (action,) = move(board, 5, 1)
     assert action["status"] == "pending" and action["previous"] is None
     assert board.cards[5]["milestone"] == 1
-    assert board.submit([{"issue": 5, "kind": "milestone", "value": 1}]) == []  # already there
+    assert move(board, 5, 1) == []  # already there
     run_queue(board)
     assert board.actions[1]["status"] == "done" and board.unsettled() == []
 
@@ -144,23 +151,30 @@ def test_a_pull_request_carries_unplaced_and_parked_issues_but_not_placed_ones(m
     closes = [{"number": n, "title": "", "state": "OPEN"} for n in (5, 6, 7, 99)]
     board = make_board(monkeypatch, [card(5), card(6, milestone=2), card(7, milestone=1),
                                      card(20, "pr", closes=closes)])
-    made = board.submit([{"issue": 20, "kind": "milestone", "value": 1}])
+    made = move(board, 20, 1, carryParked=True)
     assert [(a["issue"], a["carriedBy"]) for a in made] == [(20, None), (5, 20), (6, 20)]
     assert board.cards[6]["milestone"] == 1 and board.cards[7]["milestone"] == 1
+
+
+def test_a_parked_issue_is_held_unless_the_request_says_to_carry_it(monkeypatch):
+    closes = [{"number": n, "title": "", "state": "OPEN"} for n in (5, 6)]
+    board = make_board(monkeypatch, [card(5), card(6, milestone=2), card(20, "pr", closes=closes)])
+    made, held = board.submit([{"issue": 20, "kind": "milestone", "value": 1}])
+    assert [a["issue"] for a in made] == [20, 5]
+    assert held == [{"issue": 6, "carriedBy": 20}] and board.cards[6]["milestone"] == 2
 
 
 def test_a_pull_request_parked_with_its_issue_makes_no_write_for_the_issue(monkeypatch):
     closes = [{"number": 6, "title": "", "state": "OPEN"}]
     board = make_board(monkeypatch, [card(6, milestone=2), card(20, "pr", closes=closes)])
-    made = board.submit([{"issue": 20, "kind": "milestone", "value": 2}])
-    assert [a["issue"] for a in made] == [20]
+    assert [a["issue"] for a in move(board, 20, 2, carryParked=True)] == [20]
 
 
 def test_parked_issues_stay_put_when_the_config_has_no_needs_triage_bucket(monkeypatch):
     closes = [{"number": 6, "title": "", "state": "OPEN"}]
     board = make_board(monkeypatch, [card(6, milestone=2), card(20, "pr", closes=closes)],
                        buckets=())
-    assert [a["issue"] for a in board.submit([{"issue": 20, "kind": "milestone", "value": 1}])] == [20]
+    assert [a["issue"] for a in move(board, 20, 1, carryParked=True)] == [20]
 
 
 def test_a_failed_write_keeps_the_new_value_until_retried_or_reverted(monkeypatch):
@@ -171,7 +185,7 @@ def test_a_failed_write_keeps_the_new_value_until_retried_or_reverted(monkeypatc
             raise SystemExit("gh api failed:\nboom")
 
     board = make_board(monkeypatch, [card(5)], write=write)
-    board.submit([{"issue": 5, "kind": "milestone", "value": 1}])
+    move(board, 5, 1)
     run_queue(board)
     assert board.actions[1]["status"] == "failed" and "boom" in board.actions[1]["error"]
     assert board.cards[5]["milestone"] == 1  # what you asked for stays on screen
@@ -187,16 +201,81 @@ def test_a_failed_write_keeps_the_new_value_until_retried_or_reverted(monkeypatc
         board.revert(1)  # only a failed action can be given up on
 
     fail["on"] = True
-    board.submit([{"issue": 5, "kind": "milestone", "value": None}])
+    move(board, 5, None)
     run_queue(board)
-    assert board.revert(2)["status"] == "reverted"
-    assert board.cards[5]["milestone"] == 1 and board.unsettled() == []
+    action, shown = board.revert(2)
+    assert action["status"] == "reverted"
+    assert board.cards[5]["milestone"] == 1 == shown["milestone"] and board.unsettled() == []
+
+
+def test_a_refresh_shows_a_later_landed_write_over_an_earlier_failed_one(monkeypatch):
+    remote = {"milestone": None}
+
+    def write(action):
+        if action["value"] == 1:
+            raise SystemExit("boom")
+        remote["milestone"] = action["value"]
+
+    board = make_board(monkeypatch, [card(5)], write=write)
+    board.fetch = lambda repo, progress: {"repo": "o/r", "milestones": list(
+        board.milestones.values()), "cards": [card(5, milestone=remote["milestone"])]}
+    move(board, 5, 1)
+    run_queue(board)
+    move(board, 5, 2)
+    assert board.actions[1]["status"] == "reverted"  # given up: the later move is the word
+    run_queue(board)
+    board.load()
+    assert board.cards[5]["milestone"] == 2 and board.unsettled() == []
+    with pytest.raises(server.Refused):
+        board.retry(1)  # would put #5 back on 1 behind the page's back
+
+
+def test_a_write_that_fails_behind_a_later_move_is_given_up(monkeypatch):
+    def write(action):
+        if action["value"] == 1:
+            raise SystemExit("boom")
+
+    board = make_board(monkeypatch, [card(5)], write=write)
+    move(board, 5, 1)
+    move(board, 5, 2)  # queued before the first write is tried
+    run_queue(board)
+    assert [board.actions[i]["status"] for i in (1, 2)] == ["reverted", "done"]
+    assert board.cards[5]["milestone"] == 2 and board.unsettled() == []
+
+
+def test_reverting_puts_the_card_back_on_what_github_has(monkeypatch):
+    def write(action):
+        raise SystemExit("boom")
+
+    board = make_board(monkeypatch, [card(5)], write=write)
+    move(board, 5, 1)
+    run_queue(board)
+    move(board, 5, 2)
+    run_queue(board)
+    action, shown = board.revert(2)
+    # Not action 2's `previous` (1), which never reached GitHub.
+    assert shown["milestone"] is None and board.cards[5]["milestone"] is None
+    assert board.unsettled() == []
+
+
+def test_a_write_landing_during_a_fetch_wins_over_what_the_fetch_read(monkeypatch):
+    board = make_board(monkeypatch, [card(5)])
+    move(board, 5, 1)
+
+    def fetch(repo, progress):
+        run_queue(board)  # the write lands while the fetch is reading
+        return {"repo": "o/r", "milestones": list(board.milestones.values()),
+                "cards": [card(5)]}  # read before it landed
+
+    board.fetch = fetch
+    board.load()
+    assert board.cards[5]["milestone"] == 1
 
 
 def test_a_read_only_board_moves_cards_and_queues_nothing(monkeypatch):
     board = make_board(monkeypatch, [card(5)], read_only=True,
                        write=lambda action: pytest.fail("a write was made"))
-    (action,) = board.submit([{"issue": 5, "kind": "milestone", "value": 1}])
+    (action,) = move(board, 5, 1)
     assert action["status"] == "would" and board.todo.empty()
     assert board.cards[5]["milestone"] == 1 and board.snapshot()["permissions"] == "read"
     with pytest.raises(server.Refused, match="would create milestone 'New'") as refused:

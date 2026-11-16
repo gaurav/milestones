@@ -66,7 +66,12 @@ export interface BoardData {
   actions: Action[];
 }
 
-export interface Move { issue: number; kind: 'milestone'; value: number | null }
+/** `carryParked` moves the parked (Needs triage) issues a pull request closes along with it;
+ *  without it they are `held`, as `assign` holds them when no person is there to confirm. */
+export interface Move { issue: number; kind: 'milestone'; value: number | null; carryParked?: boolean }
+
+/** A parked issue a pull request closes, left where it was. */
+export interface Held { issue: number; carriedBy: number }
 
 /** The per-run token and the columns asked for with --from, from the URL fragment. */
 export function parseFragment(hash: string): { token: string; from: string[] } {
@@ -92,14 +97,16 @@ export class Api {
 
   board(): Promise<BoardData> { return this.call('GET', '/board'); }
   refresh(): Promise<BoardData> { return this.call('POST', '/refresh'); }
-  async act(moves: Move[]): Promise<Action[]> {
-    return (await this.call<{ actions: Action[] }>('POST', '/actions', { actions: moves })).actions;
+  act(moves: Move[]): Promise<{ actions: Action[]; held: Held[] }> {
+    return this.call('POST', '/actions', { actions: moves });
   }
   async retry(id: number): Promise<Action> {
     return (await this.call<{ action: Action }>('POST', `/actions/${id}/retry`)).action;
   }
-  async revert(id: number): Promise<Action> {
-    return (await this.call<{ action: Action }>('POST', `/actions/${id}/revert`)).action;
+  /** The card comes back too: with no change left standing on it, nothing in the action
+   *  says what GitHub has. */
+  revert(id: number): Promise<{ action: Action; card: Card }> {
+    return this.call('POST', `/actions/${id}/revert`);
   }
   async ensureMilestone(title: string, reopen = false): Promise<Milestone> {
     return (await this.call<{ milestone: Milestone }>('POST', '/milestones', { title, reopen })).milestone;
@@ -107,10 +114,12 @@ export class Api {
   async setDue(number: number, due: string | null): Promise<Milestone> {
     return (await this.call<{ milestone: Milestone }>('PATCH', `/milestones/${number}`, { due })).milestone;
   }
-  /** Server-sent events: every action as it changes state, every milestone as it changes. */
-  events(on: { action(a: Action): void; milestone(m: Milestone): void; reload(): void }): EventSource {
+  /** Server-sent events: every action as it changes state, every milestone as it changes, a
+   *  card a revert put back. */
+  events(on: { action(a: Action): void; card(c: Card): void; milestone(m: Milestone): void; reload(): void }): EventSource {
     const source = new EventSource(`/api/v1/events?token=${encodeURIComponent(this.token)}`);
     source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
+    source.addEventListener('card', (e) => on.card(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('reload', () => on.reload());
     return source;

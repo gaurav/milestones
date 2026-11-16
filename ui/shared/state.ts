@@ -23,7 +23,8 @@ export const shown = signal<ColumnId[]>([]);
 export const focused = signal<number | null>(null);
 export const selected = signal<Set<number>>(new Set());
 export const picking = signal(false);
-/** Batches of moves made here, newest last, for `z`. Each entry is one card's way back. */
+/** Batches of moves made here, newest last, for `z`. Each entry is one card's way back —
+ *  the issues a moved pull request carried included. */
 const undoStack: { issue: number; previous: number | null }[][] = [];
 
 export const columns = computed<ColumnId[]>(() =>
@@ -69,6 +70,7 @@ export async function start() {
   }
   api.events({
     action: applyAction,
+    card: applyCard,
     milestone: (m) => { milestones.value = new Map(milestones.value).set(m.number, m); },
     reload: () => { api.board().then((data) => take(data, false)).catch(() => {}); },
   });
@@ -80,16 +82,21 @@ export async function refresh() {
   loading.value = false;
 }
 
-/** Record an action, and make its card show what the latest action on it says. */
+/** Record an action, and make its card show what the latest standing action on it says. With
+ *  none left standing, the card shows what GitHub has, which only the server knows: it sends
+ *  the card (`applyCard`). Not the reverted action's `previous`, which may itself never have
+ *  reached GitHub. */
 export function applyAction(action: Action) {
   const all = new Map(actions.value).set(action.id, action);
   actions.value = all;
   const card = cards.value.get(action.issue);
-  if (!card) return;
   const latest = latestAction(all.values(), action.issue);
-  // No action left standing means the reverted one was the only one: back to before it.
-  const value = latest ? latest.value : action.previous;
-  if (card.milestone !== value) cards.value = new Map(cards.value).set(card.number, { ...card, milestone: value });
+  if (!card || !latest) return;
+  if (card.milestone !== latest.value) cards.value = new Map(cards.value).set(card.number, { ...card, milestone: latest.value });
+}
+
+export function applyCard(card: Card) {
+  cards.value = new Map(cards.value).set(card.number, card);
 }
 
 /** The focused card, or the whole selection when the focused card is part of it. */
@@ -99,7 +106,7 @@ export function targets(of: number | null = focused.value): number[] {
 }
 
 /** Move cards to a column. Shows the move at once; the server queues the write. */
-export async function move(issues: number[], to: ColumnId, remember = true) {
+export async function move(issues: number[], to: ColumnId) {
   const value = to === NONE ? null : to;
   const moving = issues.map((n) => cards.value.get(n)).filter((c): c is Card => !!c && c.milestone !== value);
   if (moving.length === 0) return;
@@ -114,21 +121,32 @@ export async function move(issues: number[], to: ColumnId, remember = true) {
     const from = grouped.value.get(columnOf(cards.value.get(focused.value)!)) ?? [];
     focused.value = nextFocus(from, leaving, focused.value) ?? focused.value;
   }
-  const back = moving.map((c) => ({ issue: c.number, previous: c.milestone }));
-  const next = new Map(cards.value);
-  for (const c of moving) next.set(c.number, { ...c, milestone: value });
-  cards.value = next;
   selected.value = new Set();
+  await act(moving.map((c) => ({ issue: c.number, value })), true);
+}
+
+/** Send one batch of changes, showing them at once. A person pressed the key, so the parked
+ *  issues a pull request closes go with it (`carryParked`), as they do in the triage walk. */
+async function act(changes: { issue: number; value: number | null }[], remember: boolean) {
+  const before = new Map(changes.map((c) => [c.issue, cards.value.get(c.issue)?.milestone ?? null]));
+  const next = new Map(cards.value);
+  for (const c of changes) {
+    const card = next.get(c.issue);
+    if (card) next.set(c.issue, { ...card, milestone: c.value });
+  }
+  cards.value = next;
   try {
-    const made = await api.act(moving.map((c) => ({ issue: c.number, kind: 'milestone' as const, value })));
+    const { actions: made } = await api.act(changes.map((c) => (
+      { issue: c.issue, kind: 'milestone' as const, value: c.value, carryParked: true })));
     made.forEach(applyAction);
-    if (remember) undoStack.push(back);
+    // From what the server made, so an issue a pull request carried comes back with it.
+    if (remember && made.length) undoStack.push(made.map((a) => ({ issue: a.issue, previous: a.previous })));
   } catch (error) {
     // Refused before anything was queued: put the cards back.
     const restore = new Map(cards.value);
-    for (const b of back) {
-      const c = restore.get(b.issue);
-      if (c) restore.set(b.issue, { ...c, milestone: b.previous });
+    for (const [issue, previous] of before) {
+      const c = restore.get(issue);
+      if (c) restore.set(issue, { ...c, milestone: previous });
     }
     cards.value = restore;
     say((error as Error).message);
@@ -136,16 +154,12 @@ export async function move(issues: number[], to: ColumnId, remember = true) {
 }
 
 /** Undo the last batch of moves made here. Undo is a move like any other, so it is written
- *  to GitHub too. */
+ *  to GitHub too — as one batch, so that a pull request going back doesn't carry again an
+ *  issue that is on its way back with it. */
 export async function undo() {
   const batch = undoStack.pop();
   if (!batch) { say('Nothing to undo.'); return; }
-  const by = new Map<ColumnId, number[]>();
-  for (const b of batch) {
-    const to = b.previous ?? NONE;
-    by.set(to, [...(by.get(to) ?? []), b.issue]);
-  }
-  for (const [to, issues] of by) await move(issues, to, false);
+  await act(batch.map((b) => ({ issue: b.issue, value: b.previous })), false);
   focused.value = batch[0]!.issue;
 }
 
@@ -154,7 +168,11 @@ export async function retry(id: number) {
 }
 
 export async function revert(id: number) {
-  try { applyAction(await api.revert(id)); } catch (error) { say((error as Error).message); }
+  try {
+    const { action, card } = await api.revert(id);
+    applyAction(action);
+    applyCard(card);
+  } catch (error) { say((error as Error).message); }
 }
 
 /** Move to a milestone by title, making it or (after asking) reopening it first. */

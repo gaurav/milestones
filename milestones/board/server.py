@@ -45,7 +45,12 @@ class Board:
 
     Every change is applied to the cards here first and written to GitHub after, by one
     worker thread in the order the changes were made — so the page never waits on the
-    network, and two moves of one issue can't arrive out of order."""
+    network, and two moves of one issue can't arrive out of order.
+
+    A card shows its latest standing (not reverted) action's value while that action is
+    unwritten — pending, failed or a read-only `would` — and otherwise what GitHub has
+    (`remote`). A failed action is only ever its card's latest standing one: a later change
+    to the card gives it up (`reverted`), so retrying it can't overwrite something newer."""
 
     def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
                  write=None):
@@ -54,6 +59,13 @@ class Board:
         self.lock = threading.RLock()
         self.repo, self.cards, self.milestones = repo, {}, {}
         self.actions: dict[int, dict] = {}
+        # What GitHub has, as far as this session knows: the last fetch, overtaken by each
+        # write that lands. Keyed (issue, kind).
+        self.remote: dict[tuple[int, str], object] = {}
+        # Writes landed so far, and the count at which each action's write landed, so a
+        # fetch knows which writes it may have read from before they were made.
+        self.writes = 0
+        self.landed_at: dict[int, int] = {}
         self.todo: queue.Queue = queue.Queue()
         self.listeners: list[queue.Queue] = []
         self.read_only = gh.read_only()
@@ -61,16 +73,38 @@ class Board:
     # --- state ---------------------------------------------------------------------------
 
     def load(self, progress=lambda *a: None) -> None:
+        with self.lock:
+            began = self.writes
         fetched = self.fetch(self.requested, progress)
         with self.lock:
             self.repo = fetched["repo"]
             self.milestones = {m["number"]: m for m in fetched["milestones"]}
             self.cards = {c["number"]: c for c in fetched["cards"]}
+            self.remote = {(n, "milestone"): c["milestone"] for n, c in self.cards.items()}
+            # A write that landed while the fetch was under way may or may not be in what
+            # it read; the write is the later word.
+            for action in sorted((a for a in self.actions.values()
+                                  if self.landed_at.get(a["id"], 0) > began),
+                                 key=lambda a: self.landed_at[a["id"]]):
+                if (action["issue"], action["kind"]) in self.remote:
+                    self.remote[action["issue"], action["kind"]] = action["value"]
             # What this session changed and GitHub hasn't confirmed is still the truth
             # here: a refetch must not put a card back where a failed write left it.
-            for action in self.actions.values():
-                if action["status"] in (*UNSETTLED, "would") and action["issue"] in self.cards:
-                    self.cards[action["issue"]][action["kind"]] = action["value"]
+            for (issue, kind) in self.remote:
+                self.cards[issue][kind] = self._shown(issue, kind)
+
+    def _standing(self, issue: int, kind: str) -> list[dict]:
+        """The card's actions that weren't given up on, oldest first."""
+        return [a for a in self.actions.values()
+                if a["issue"] == issue and a["kind"] == kind and a["status"] != "reverted"]
+
+    def _shown(self, issue: int, kind: str):
+        """What a card shows: its latest standing action's value until that is written,
+        then what GitHub has — which a refresh may since have found someone changed."""
+        standing = self._standing(issue, kind)
+        if standing and standing[-1]["status"] != "done":
+            return standing[-1]["value"]
+        return self.remote[issue, kind]
 
     def parked(self) -> int | None:
         """The open Needs triage milestone's number, if the config uses that bucket."""
@@ -100,6 +134,12 @@ class Board:
 
     def _new_action(self, issue: int, kind: str, value, carried_by: int | None = None) -> dict:
         card = self.cards[issue]
+        for earlier in self._standing(issue, kind):
+            if earlier["status"] == "failed":
+                # Given up on: this change is the newer word, and a retry of the old one
+                # would write over it.
+                earlier["status"] = "reverted"
+                self.publish("action", earlier)
         action = {"id": len(self.actions) + 1, "issue": issue, "kind": kind, "value": value,
                   "previous": card[kind], "carriedBy": carried_by, "error": None,
                   "status": "would" if self.read_only else "pending"}
@@ -107,9 +147,14 @@ class Board:
         card[kind] = value
         return action
 
-    def submit(self, requests: list[dict]) -> list[dict]:
+    def submit(self, requests: list[dict]) -> tuple[list[dict], list[dict]]:
         """Apply a batch of changes to the cards and queue their writes. All or none: one
-        bad request refuses the batch before anything has moved."""
+        bad request refuses the batch before anything has moved.
+
+        Returns the actions made, and the parked issues a pull request closes that were
+        `held`: left on Needs triage, where a person put them, because the request didn't
+        say `carryParked` — which the page sends, since a person pressed the key there, and
+        a script or a coding agent does not, as `assign` holds them from a pipe."""
         with self.lock:
             for request in requests:
                 if request.get("kind") != "milestone":
@@ -124,24 +169,29 @@ class Board:
                     if milestone["state"] != "open":
                         raise Refused(409, f"milestone '{milestone['title']}' is closed; "
                                            "reopen it first")
-            made = []
+            made, held = [], []
             moving = {r["issue"] for r in requests}
             for request in requests:
                 card = self.cards[request["issue"]]
-                if card["milestone"] == request["value"]:
+                value = request.get("value")
+                if card["milestone"] == value:
                     continue  # already there: nothing to write, as in the triage walk
-                made.append(self._new_action(card["number"], "milestone", request["value"]))
-                if card["kind"] == "pr" and request["value"] is not None:
+                made.append(self._new_action(card["number"], "milestone", value))
+                if card["kind"] == "pr" and value is not None:
                     # A pull request is triaged for the issues it closes too.
-                    for number in data.carried_by(card, self._issues(), self.parked(),
-                                                   request["value"]):
-                        if number not in moving:
-                            made.append(self._new_action(number, "milestone", request["value"],
-                                                         carried_by=card["number"]))
+                    for number in data.carried_by(card, self._issues(), self.parked(), value):
+                        if number in moving:
+                            continue
+                        if (self.cards[number]["milestone"] is not None
+                                and not request.get("carryParked")):
+                            held.append({"issue": number, "carriedBy": card["number"]})
+                            continue
+                        made.append(self._new_action(number, "milestone", value,
+                                                     carried_by=card["number"]))
             for action in made:
                 if action["status"] == "pending":
                     self.todo.put(action["id"])
-            return made
+            return made, held
 
     def _issues(self) -> dict:
         return {("issue", n): c for n, c in self.cards.items() if c["kind"] == "issue"}
@@ -151,23 +201,25 @@ class Board:
             action = self._action(action_id)
             if action["status"] != "failed":
                 raise Refused(409, f"action {action_id} is {action['status']}, not failed")
+            if self._standing(action["issue"], action["kind"])[-1] is not action:
+                # Can't happen while a later change gives a failed one up; kept, since a
+                # retry past a newer write would put the card back on GitHub unseen.
+                raise Refused(409, f"a later change to #{action['issue']} stands")
             action.update(status="pending", error=None)
             self.todo.put(action_id)
             return action
 
-    def revert(self, action_id: int) -> dict:
-        """Give up on a failed write: the card goes back to what GitHub still has."""
+    def revert(self, action_id: int) -> tuple[dict, dict]:
+        """Give up on a failed write: the card goes back to what GitHub has. Returns the
+        action and the card, whose value nothing in the action can tell a page."""
         with self.lock:
             action = self._action(action_id)
             if action["status"] != "failed":
                 raise Refused(409, f"action {action_id} is {action['status']}, not failed")
             action["status"] = "reverted"
-            later = [a for a in self.actions.values() if a["issue"] == action["issue"]
-                     and a["kind"] == action["kind"] and a["id"] > action_id
-                     and a["status"] != "reverted"]
-            if not later:
-                self.cards[action["issue"]][action["kind"]] = action["previous"]
-            return action
+            card = self.cards[action["issue"]]
+            card[action["kind"]] = self._shown(action["issue"], action["kind"])
+            return action, card
 
     def _action(self, action_id: int) -> dict:
         if action_id not in self.actions:
@@ -184,6 +236,21 @@ class Board:
         if got != action["value"]:
             raise SystemExit(f"GitHub kept #{action['issue']} on milestone {got!r}")
 
+    def settle(self, action: dict, error: str | None) -> None:
+        """Record how an action's write went: `error` is None if it landed."""
+        with self.lock:
+            if error is None:
+                self.writes += 1
+                self.landed_at[action["id"]] = self.writes
+                self.remote[action["issue"], action["kind"]] = action["value"]
+                action["status"] = "done"
+            else:
+                # Failed behind a later change already made to the card: given up, as that
+                # change gives up one that had failed before it was made.
+                later = self._standing(action["issue"], action["kind"])[-1] is not action
+                action.update(status="reverted" if later else "failed", error=error)
+            self.publish("action", action)
+
     def work(self) -> None:
         """The writer thread: one write at a time, in the order the changes were made."""
         while True:
@@ -191,17 +258,16 @@ class Board:
             with self.lock:
                 action = self.actions[action_id]
                 if action["status"] != "pending":
+                    self.todo.task_done()
                     continue
             try:
                 self.write(action)
-                outcome = {"status": "done"}
+                error = None
             except SystemExit as exit:
-                outcome = {"status": "failed", "error": str(exit)}
-            except Exception as error:  # a bug here must not kill the only writer
-                outcome = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
-            with self.lock:
-                action.update(outcome)
-            self.publish("action", action)
+                error = str(exit)
+            except Exception as failure:  # a bug here must not kill the only writer
+                error = f"{type(failure).__name__}: {failure}"
+            self.settle(action, error)
             self.todo.task_done()
 
     def unsettled(self) -> list[dict]:
@@ -328,15 +394,21 @@ def make_handler(board: Board, token: str):
                     requests = self._body().get("actions")
                     if not isinstance(requests, list):
                         raise Refused(400, "send {actions: [{issue, kind, value}, ...]}")
-                    made = board.submit(requests)
+                    made, held = board.submit(requests)
                     for action in made:
                         board.publish("action", action)
-                    return self._json(200, {"actions": made})
+                    return self._json(200, {"actions": made, "held": held})
                 if (method == "POST" and len(rest) == 3 and rest[0] == "actions"
-                        and rest[1].isdigit() and rest[2] in ("retry", "revert")):
-                    action = getattr(board, rest[2])(int(rest[1]))
+                        and rest[1].isdigit() and rest[2] == "retry"):
+                    action = board.retry(int(rest[1]))
                     board.publish("action", action)
                     return self._json(200, {"action": action})
+                if (method == "POST" and len(rest) == 3 and rest[0] == "actions"
+                        and rest[1].isdigit() and rest[2] == "revert"):
+                    action, card = board.revert(int(rest[1]))
+                    board.publish("action", action)
+                    board.publish("card", card)
+                    return self._json(200, {"action": action, "card": card})
                 if method == "POST" and rest == ["milestones"]:
                     body = self._body()
                     return self._json(200, {"milestone": board.ensure_milestone(
