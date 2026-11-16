@@ -48,6 +48,7 @@ URL, and is the place to start a new one.
 | `carriedBy` | the pull request whose move made this one, or `null` |
 | `status` | `pending` (queued or being written), `done`, `failed`, `would` (a read-only run: shown, never written), `reverted` (given up on: a failed action reverted, or one that a later change to the same card replaced before or after its write failed) |
 | `error` | what `gh` said, for a `failed` action |
+| `rev` | the number of the last event about it (`0` before its first): of two copies of one action, the one with the higher `rev` is newer |
 
 A card shows the `value` of its latest action that is not `reverted` while that action is
 `pending`, `failed` or `would`: a failed write keeps what you asked for on screen until you retry it
@@ -60,8 +61,8 @@ something newer.
 
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order. |
-| `POST /api/v1/actions` | Body `{actions: [{issue, kind: "milestone", value, carryParked?}]}`. `value` is required: a milestone number, or `null` to take the card off its milestone. Applies them to the cards at once, queues the writes, and returns `{actions: [Action], held: [{issue, carriedBy}]}`. A pull request moved onto a milestone takes the open issues it closes that have no milestone; those parked on Needs triage go too only with `carryParked: true`, and are otherwise listed in `held` and left where they are. Send it only when a person asked for the move — a parked issue is one a person put there, and an agent should leave it. An issue already on the target is never carried. A move to where the card already is makes no action. One bad request refuses the whole batch: `400` unknown kind or no `value`, `404` unknown issue or milestone, `409` closed milestone. |
+| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, rev}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `rev` is the number of the last event the snapshot includes. |
+| `POST /api/v1/actions` | Body `{actions: [{issue, kind: "milestone", value, carryParked?, carry?}]}`. `value` is required: a milestone number, or `null` to take the card off its milestone. Applies them to the cards at once, queues the writes, and returns `{actions: [Action], held: [{issue, carriedBy}]}`. A pull request moved onto a milestone takes the open issues it closes that have no milestone; those parked on Needs triage go too only with `carryParked: true`, and are otherwise listed in `held` and left where they are. Send it only when a person asked for the move — a parked issue is one a person put there, and an agent should leave it. An issue already on the target is never carried, and `carry: false` carries nothing — what an undo sends, to put back exactly the cards it names. A move to where the card already is makes no action. One bad request refuses the whole batch: `400` unknown kind or no `value`, `404` unknown issue or milestone, `409` closed milestone. |
 | `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
 | `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action. Returns `{action, card}`: the card shows what GitHub has, unless a pending or read-only action on it stands. |
 | `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
@@ -81,6 +82,8 @@ a milestone.
 | `card` | a Card | a revert put it back on what GitHub has |
 | `milestone` | a Milestone | one is created, reopened or re-dated |
 | `reload` | `{}` | a refresh finished; fetch the board again |
+
+Each event's SSE `id` is its number, counting up from 1 for the session, and is always sent after the change it reports. A client that keeps itself in step fetches the board only once the stream is open, holds events back while that fetch is under way, and then replays the ones numbered after the snapshot's `rev`. Nothing is replayed after a reconnection, so a client fetches the board again each time the stream reopens.
 
 A comment line arrives every 15 seconds to keep the connection open.
 

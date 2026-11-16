@@ -15,7 +15,7 @@ const card = (number: number, extra: Partial<Card> = {}): Card => ({
 const milestone = (number: number, title: string, state: 'open' | 'closed' = 'open'): Milestone =>
   ({ number, title, state, due: null, description: '', url: '' });
 const action = (id: number, issue: number, status: Action['status'], value: number | null = 1): Action =>
-  ({ id, issue, kind: 'milestone', value, previous: null, carriedBy: null, error: null, status });
+  ({ id, issue, kind: 'milestone', value, previous: null, carriedBy: null, error: null, status, rev: id });
 
 test('the fragment carries the token and the columns asked for', () => {
   assert.deepEqual(parseFragment('#t=abc&from=Critical&from=Babel%20v1.19'), { token: 'abc', from: ['Critical', 'Babel v1.19'] });

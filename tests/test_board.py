@@ -314,6 +314,13 @@ def test_an_action_without_a_value_is_refused_rather_than_read_as_none(monkeypat
     assert refused.value.status == 400 and board.cards[5]["milestone"] == 1
 
 
+def test_carry_false_moves_only_the_cards_named(monkeypatch):
+    closes = [{"number": 5, "title": "", "state": "OPEN"}]
+    board = make_board(monkeypatch, [card(5), card(20, "pr", milestone=None, closes=closes)])
+    assert [a["issue"] for a in move(board, 20, 1, carry=False)] == [20]
+    assert board.cards[5]["milestone"] is None
+
+
 def test_a_milestone_written_during_a_fetch_outlives_it(monkeypatch):
     board = make_board(monkeypatch, [])
     before = list(board.milestones.values())
@@ -326,3 +333,16 @@ def test_a_milestone_written_during_a_fetch_outlives_it(monkeypatch):
     board.fetch = fetch
     board.load()
     assert board.milestones[1]["due"] == "2026-12-24"
+
+
+def test_events_are_numbered_after_the_change_they_report(monkeypatch):
+    import queue
+    board = make_board(monkeypatch, [card(5)])
+    listener = queue.Queue()
+    board.listeners.append(listener)
+    (action,) = move(board, 5, 1)
+    taken = board.snapshot()["rev"]
+    board.publish("action", action)
+    run_queue(board)
+    numbers = [listener.get_nowait()[0] for _ in range(listener.qsize())]
+    assert numbers == [taken + 1, taken + 2] and board.actions[1]["rev"] == taken + 2

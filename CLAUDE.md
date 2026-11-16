@@ -205,6 +205,13 @@ far more than `_norm_issue` keeps.
   would reorder pages already read past, and skip a card.
 - The API holds back a parked issue a PR closes unless the request says `carryParked`, which the
   page sends (a person pressed the key) and an agent must not — `assign`'s `held`, over HTTP.
+  An undo sends `carry: false`, or putting a PR back on its old milestone would carry issues the
+  original move never touched.
+- `Board.publish` numbers every event (the SSE `id`) and must run *after* the change it reports:
+  the page (`sync` in `ui/shared/state.ts`) holds events back while it fetches a snapshot and
+  replays only those numbered after the snapshot's `rev`, so an event published before its change
+  would be dropped as already included. The stream replays nothing on reconnect; the page
+  refetches the board on every `open`.
 - One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
   PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
   type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that

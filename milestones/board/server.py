@@ -68,6 +68,11 @@ class Board:
         self.landed_at: dict[int, int] = {}
         # Milestone writes the same way: number → (write count, the milestone as written).
         self.milestone_landed: dict[int, tuple[int, dict]] = {}
+        # Every published event's number, counting up. A snapshot carries the count it was
+        # taken at, so a page that buffered events while fetching it replays only the later
+        # ones; an action carries the number of its last event, so a page can tell a stale
+        # copy of it (a POST response overtaken by the worker's event) from a newer one.
+        self.rev = 0
         self.todo: queue.Queue = queue.Queue()
         self.listeners: list[queue.Queue] = []
         self.read_only = gh.read_only()
@@ -129,11 +134,20 @@ class Board:
                 "columns": data.column_order(milestones, self.buckets, self.sort_key),
                 "cards": list(self.cards.values()),
                 "actions": list(self.actions.values()),
+                "rev": self.rev,
             }
 
     def publish(self, event: str, payload: dict) -> None:
-        for listener in list(self.listeners):
-            listener.put((event, payload))
+        """Send an event to every open page, numbered. Always after the change it reports,
+        so that a snapshot taken at `rev` N holds every change whose event is N or less."""
+        with self.lock:
+            self.rev += 1
+            if event == "action":
+                payload["rev"] = self.rev
+            # Serialised now, so a later change to the same dict can't ride on this number.
+            message = (self.rev, event, json.dumps(payload))
+            for listener in list(self.listeners):
+                listener.put(message)
 
     # --- actions -------------------------------------------------------------------------
 
@@ -147,7 +161,7 @@ class Board:
                 self.publish("action", earlier)
         action = {"id": len(self.actions) + 1, "issue": issue, "kind": kind, "value": value,
                   "previous": card[kind], "carriedBy": carried_by, "error": None,
-                  "status": "would" if self.read_only else "pending"}
+                  "status": "would" if self.read_only else "pending", "rev": 0}
         self.actions[action["id"]] = action
         card[kind] = value
         return action
@@ -159,7 +173,8 @@ class Board:
         Returns the actions made, and the parked issues a pull request closes that were
         `held`: left on Needs triage, where a person put them, because the request didn't
         say `carryParked` — which the page sends, since a person pressed the key there, and
-        a script or a coding agent does not, as `assign` holds them from a pipe."""
+        a script or a coding agent does not, as `assign` holds them from a pipe. `carry:
+        false` carries nothing at all: an undo puts back exactly the cards it names."""
         with self.lock:
             for request in requests:
                 if request.get("kind") != "milestone":
@@ -186,7 +201,7 @@ class Board:
                 if card["milestone"] == value:
                     continue  # already there: nothing to write, as in the triage walk
                 made.append(self._new_action(card["number"], "milestone", value))
-                if card["kind"] == "pr" and value is not None:
+                if card["kind"] == "pr" and value is not None and request.get("carry", True):
                     # A pull request is triaged for the issues it closes too.
                     for number in data.carried_by(card, self._issues(), self.parked(), value):
                         if number in moving:
@@ -464,8 +479,8 @@ def make_handler(board: Board, token: str):
             try:
                 while True:
                     try:
-                        event, payload = listener.get(timeout=15)
-                        chunk = f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+                        rev, event, data = listener.get(timeout=15)
+                        chunk = f"id: {rev}\nevent: {event}\ndata: {data}\n\n"
                     except queue.Empty:
                         chunk = ": keep-alive\n\n"  # also how a closed tab gets noticed
                     self.wfile.write(chunk.encode())

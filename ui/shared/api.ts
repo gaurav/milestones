@@ -53,6 +53,8 @@ export interface Action {
   carriedBy: number | null;
   error: string | null;
   status: ActionStatus;
+  /** The number of the last event about it: of two copies, the higher is the newer. */
+  rev: number;
 }
 
 export interface BoardData {
@@ -64,11 +66,25 @@ export interface BoardData {
   columns: number[];
   cards: Card[];
   actions: Action[];
+  /** The last event number this snapshot includes. */
+  rev: number;
 }
 
 /** `carryParked` moves the parked (Needs triage) issues a pull request closes along with it;
- *  without it they are `held`, as `assign` holds them when no person is there to confirm. */
-export interface Move { issue: number; kind: 'milestone'; value: number | null; carryParked?: boolean }
+ *  without it they are `held`, as `assign` holds them when no person is there to confirm.
+ *  `carry: false` carries nothing: an undo puts back exactly what it names. */
+export interface Move { issue: number; kind: 'milestone'; value: number | null; carryParked?: boolean; carry?: boolean }
+
+/** What the event stream calls back with. `rev` is the event's number (its SSE id). `open`
+ *  comes on the first connection and every reconnection, `error` whenever it drops. */
+export interface Handlers {
+  open(): void;
+  error(): void;
+  action(a: Action, rev: number): void;
+  card(c: Card, rev: number): void;
+  milestone(m: Milestone, rev: number): void;
+  reload(): void;
+}
 
 /** A parked issue a pull request closes, left where it was. */
 export interface Held { issue: number; carriedBy: number }
@@ -115,12 +131,16 @@ export class Api {
     return (await this.call<{ milestone: Milestone }>('PATCH', `/milestones/${number}`, { due })).milestone;
   }
   /** Server-sent events: every action as it changes state, every milestone as it changes, a
-   *  card a revert put back. */
-  events(on: { action(a: Action): void; card(c: Card): void; milestone(m: Milestone): void; reload(): void }): EventSource {
+   *  card a revert put back. Nothing is replayed after a reconnection: `open` is the cue to
+   *  fetch the board again. */
+  events(on: Handlers): EventSource {
     const source = new EventSource(`/api/v1/events?token=${encodeURIComponent(this.token)}`);
-    source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
-    source.addEventListener('card', (e) => on.card(JSON.parse((e as MessageEvent).data)));
-    source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
+    const read = (e: Event) => [JSON.parse((e as MessageEvent).data), Number((e as MessageEvent).lastEventId)] as const;
+    source.addEventListener('open', () => on.open());
+    source.addEventListener('error', () => on.error());
+    source.addEventListener('action', (e) => on.action(...read(e)));
+    source.addEventListener('card', (e) => on.card(...read(e)));
+    source.addEventListener('milestone', (e) => on.milestone(...read(e)));
     source.addEventListener('reload', () => on.reload());
     return source;
   }

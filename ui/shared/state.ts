@@ -1,6 +1,6 @@
 // The board's state and everything a view may do to it. Views read the signals and call the
 // functions; nothing else talks to the API.
-import { computed, signal } from '@preact/signals';
+import { computed, effect, signal } from '@preact/signals';
 import { Api, parseFragment } from './api.ts';
 import type { Action, BoardData, Card, Milestone } from './api.ts';
 import {
@@ -23,15 +23,33 @@ export const shown = signal<ColumnId[]>([]);
 export const focused = signal<number | null>(null);
 export const selected = signal<Set<number>>(new Set());
 export const picking = signal(false);
-/** Batches of moves made here, newest last, for `z`. Each entry is one card's way back —
- *  the issues a moved pull request carried included. */
-const undoStack: { issue: number; previous: number | null }[][] = [];
+/** One card's way back. */
+interface Way { issue: number; previous: number | null }
+/** Batches of moves made here, for `z`, in the order they were made — pushed before the
+ *  request goes, so overlapping requests can't reorder them. Each resolves, once answered, to
+ *  its cards' ways back (the issues a moved pull request carried included), or to null if
+ *  nothing moved. */
+const undoStack: Promise<Way[] | null>[] = [];
 
 export const columns = computed<ColumnId[]>(() =>
   board.value ? allColumns(board.value.columns, [...milestones.value.values()], [...cards.value.values()]) : []);
 export const grouped = computed(() => group([...cards.value.values()], filters.value));
 export const visibleColumns = computed(() => columns.value.filter((id) => shown.value.includes(id)));
 export const pending = computed(() => unsettled(actions.value.values()));
+/** The cards on screen: matching the filters, in a shown column. Only these can be moved by
+ *  key or picker, so a hidden card is never written by accident. */
+export const visible = computed(() => new Set(
+  visibleColumns.value.flatMap((id) => (grouped.value.get(id) ?? []).map((c) => c.number))));
+
+function topCard(): number | null {
+  return visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean)?.number ?? null;
+}
+
+// Focus follows the filters and the shown columns: a focused card they hide hands focus on,
+// and once they show cards again, the top one takes it.
+effect(() => {
+  if (focused.value === null || !visible.value.has(focused.value)) focused.value = topCard();
+});
 export const readOnly = computed(() => board.value?.permissions === 'read');
 
 export function columnTitle(id: ColumnId): string {
@@ -52,34 +70,75 @@ function take(data: BoardData, first: boolean) {
     shown.value = initialColumns(columns.value, data.milestones, fragment.from);
     document.title = `${data.repo} · milestones board`;
   }
-  if (focused.value === null || !cards.value.has(focused.value)) {
-    const top = visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean);
-    focused.value = top?.number ?? null;
+  if (focused.value === null || !visible.value.has(focused.value)) focused.value = topCard();
+}
+
+// Snapshots and events, kept in order. While a snapshot is being fetched, events are held
+// back; once it is in, those numbered after it are replayed and the rest, which it already
+// holds, dropped. A snapshot older than one already taken is ignored.
+let fetching = 0;
+let held: { rev: number; apply: () => void }[] = [];
+let snapshotRev = -1;
+
+function onEvent(rev: number, apply: () => void) {
+  if (fetching) held.push({ rev, apply });
+  else apply();
+}
+
+async function sync(fetch: () => Promise<BoardData>, first = false) {
+  fetching++;
+  try {
+    const data = await fetch();
+    if (data.rev < snapshotRev) return;
+    snapshotRev = data.rev;
+    take(data, first);
+    for (const e of held) if (e.rev > data.rev) e.apply();
+  } finally {
+    if (--fetching === 0) held = [];
   }
 }
 
 export async function start() {
+  // The stream first, and the board once it is open, so no event falls between the two. It
+  // reopens by itself after a drop, with nothing replayed: each reopening fetches the board.
+  let opened = false;
+  await new Promise<void>((ready) => {
+    api.events({
+      open: () => {
+        if (opened) sync(() => api.board()).catch(() => {});
+        opened = true;
+        ready();
+      },
+      error: ready, // a refused stream: the board fetch below says why
+      action: (a, rev) => onEvent(rev, () => applyAction(a)),
+      card: (c, rev) => onEvent(rev, () => applyCard(c)),
+      milestone: (m, rev) => onEvent(rev, () => applyMilestone(m)),
+      reload: () => { sync(() => api.board()).catch(() => {}); },
+    });
+  });
   try {
-    take(await api.board(), true);
+    await sync(() => api.board(), true);
   } catch (error) {
     fatal.value = `Could not load the board: ${(error as Error).message}. The link carries a `
       + 'token that is new each time `milestones board` starts; open the one it printed.';
-    return;
   } finally {
     loading.value = false;
   }
-  api.events({
-    action: applyAction,
-    card: applyCard,
-    milestone: (m) => { milestones.value = new Map(milestones.value).set(m.number, m); },
-    reload: () => { api.board().then((data) => take(data, false)).catch(() => {}); },
-  });
 }
 
 export async function refresh() {
   loading.value = true;
-  try { take(await api.refresh(), false); } catch (error) { say((error as Error).message); }
+  try { await sync(() => api.refresh()); } catch (error) { say((error as Error).message); }
   loading.value = false;
+}
+
+/** A milestone made, reopened or re-dated, here or in another tab. One newly open gets a
+ *  column, at the end until a refresh puts it in its place. */
+export function applyMilestone(m: Milestone) {
+  milestones.value = new Map(milestones.value).set(m.number, m);
+  if (m.state === 'open' && board.value && !board.value.columns.includes(m.number)) {
+    board.value = { ...board.value, columns: [...board.value.columns, m.number] };
+  }
 }
 
 /** Record an action, and make its card show what the latest standing action on it says. With
@@ -87,6 +146,9 @@ export async function refresh() {
  *  the card (`applyCard`). Not the reverted action's `previous`, which may itself never have
  *  reached GitHub. */
 export function applyAction(action: Action) {
+  // A copy older than the one held — a POST answer the worker's event overtook — is dropped.
+  const known = actions.value.get(action.id);
+  if (known && known.rev > action.rev) return;
   const all = new Map(actions.value).set(action.id, action);
   actions.value = all;
   const card = cards.value.get(action.issue);
@@ -99,10 +161,11 @@ export function applyCard(card: Card) {
   cards.value = new Map(cards.value).set(card.number, card);
 }
 
-/** The focused card, or the whole selection when the focused card is part of it. */
+/** The focused card, or the whole selection when the focused card is part of it — the cards
+ *  of it on screen, since a filter may hide some that were selected. */
 export function targets(of: number | null = focused.value): number[] {
-  if (of === null) return [];
-  return selected.value.has(of) ? [...selected.value] : [of];
+  if (of === null || !visible.value.has(of)) return [];
+  return selected.value.has(of) ? [...selected.value].filter((n) => visible.value.has(n)) : [of];
 }
 
 /** Move cards to a column. Shows the move at once; the server queues the write. */
@@ -122,12 +185,16 @@ export async function move(issues: number[], to: ColumnId) {
     focused.value = nextFocus(from, leaving, focused.value) ?? focused.value;
   }
   selected.value = new Set();
-  await act(moving.map((c) => ({ issue: c.number, value })), true);
+  const made = act(moving.map((c) => ({ issue: c.number, value })), true);
+  // From what the server made, so an issue a pull request carried comes back with it.
+  undoStack.push(made.then((m) => (m?.length ? m.map((a) => ({ issue: a.issue, previous: a.previous })) : null)));
+  await made;
 }
 
-/** Send one batch of changes, showing them at once. A person pressed the key, so the parked
- *  issues a pull request closes go with it (`carryParked`), as they do in the triage walk. */
-async function act(changes: { issue: number; value: number | null }[], remember: boolean) {
+/** Send one batch of changes, showing them at once; the actions made, or null if it was
+ *  refused. A person pressed the key, so the parked issues a pull request closes go with it
+ *  (`carryParked`), as they do in the triage walk — unless `carry` is false, as for an undo. */
+async function act(changes: { issue: number; value: number | null }[], carry: boolean): Promise<Action[] | null> {
   const before = new Map(changes.map((c) => [c.issue, cards.value.get(c.issue)?.milestone ?? null]));
   const next = new Map(cards.value);
   for (const c of changes) {
@@ -137,10 +204,9 @@ async function act(changes: { issue: number; value: number | null }[], remember:
   cards.value = next;
   try {
     const { actions: made } = await api.act(changes.map((c) => (
-      { issue: c.issue, kind: 'milestone' as const, value: c.value, carryParked: true })));
+      { issue: c.issue, kind: 'milestone' as const, value: c.value, carryParked: true, carry })));
     made.forEach(applyAction);
-    // From what the server made, so an issue a pull request carried comes back with it.
-    if (remember && made.length) undoStack.push(made.map((a) => ({ issue: a.issue, previous: a.previous })));
+    return made;
   } catch (error) {
     // Refused before anything was queued: put the cards back.
     const restore = new Map(cards.value);
@@ -150,17 +216,42 @@ async function act(changes: { issue: number; value: number | null }[], remember:
     }
     cards.value = restore;
     say((error as Error).message);
+    return null;
   }
 }
 
-/** Undo the last batch of moves made here. Undo is a move like any other, so it is written
- *  to GitHub too — as one batch, so that a pull request going back doesn't carry again an
- *  issue that is on its way back with it. */
+/** Undo the last batch of moves made here, once its request is answered. Undo is a move like
+ *  any other, so it is written to GitHub too, but it carries nothing: it puts back exactly the
+ *  cards the batch moved. One that can't be undone yet stays for another `z`. */
 export async function undo() {
-  const batch = undoStack.pop();
-  if (!batch) { say('Nothing to undo.'); return; }
-  await act(batch.map((b) => ({ issue: b.issue, value: b.previous })), false);
+  while (undoStack.length) {
+    const batch = await undoStack.pop()!;
+    if (!batch) continue; // refused, or nothing moved: nothing to take back
+    if (!(await putBack(batch))) undoStack.push(Promise.resolve(batch));
+    return;
+  }
+  say('Nothing to undo.');
+}
+
+async function putBack(batch: Way[]): Promise<boolean> {
+  // A card moved out of a closed milestone goes back only if that is reopened, asked first.
+  const closed = new Map<number, Milestone>();
+  for (const { previous } of batch) {
+    const m = previous === null ? undefined : milestones.value.get(previous);
+    if (m?.state === 'closed') closed.set(m.number, m);
+  }
+  for (const m of closed.values()) {
+    if (!confirm(`Undo puts cards back on '${m.title}', which is closed. Reopen it?`)) return false;
+    try {
+      applyMilestone(await api.ensureMilestone(m.title, true));
+    } catch (error) {
+      say((error as Error).message);
+      return false;
+    }
+  }
+  if (!(await act(batch.map((b) => ({ issue: b.issue, value: b.previous })), false))) return false;
   focused.value = batch[0]!.issue;
+  return true;
 }
 
 export async function retry(id: number) {
@@ -187,10 +278,7 @@ export async function moveToTitle(issues: number[], title: string) {
   }
   try {
     const milestone = await api.ensureMilestone(title, reopen);
-    milestones.value = new Map(milestones.value).set(milestone.number, milestone);
-    if (board.value && !board.value.columns.includes(milestone.number)) {
-      board.value = { ...board.value, columns: [...board.value.columns, milestone.number] };
-    }
+    applyMilestone(milestone);
     if (!shown.value.includes(milestone.number)) shown.value = [...shown.value, milestone.number];
     await move(issues, milestone.number);
   } catch (error) {
@@ -200,8 +288,7 @@ export async function moveToTitle(issues: number[], title: string) {
 
 export async function setDue(number: number, due: string | null) {
   try {
-    const milestone = await api.setDue(number, due);
-    milestones.value = new Map(milestones.value).set(milestone.number, milestone);
+    applyMilestone(await api.setDue(number, due));
   } catch (error) {
     say((error as Error).message);
   }
@@ -222,7 +309,7 @@ export function step(dx: number, dy: number) {
   const cols = visibleColumns.value;
   const current = focused.value === null ? undefined : cards.value.get(focused.value);
   if (!current) {
-    focused.value = cols.map((id) => grouped.value.get(id)?.[0]).find(Boolean)?.number ?? null;
+    focused.value = topCard();
     return;
   }
   const col = columnOf(current);
