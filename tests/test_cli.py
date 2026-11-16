@@ -202,6 +202,20 @@ def kinds(*args, **kwargs):
     return [kind for kind, _ in problems(*args, **kwargs)]
 
 
+def test_a_default_bucket_the_config_leaves_out_is_still_not_a_milestone_to_fix():
+    # BUCKETS has neither, as a config that names its buckets by hand may not.
+    for title in ("Critical", "Needs triage", "Upstream"):
+        assert title not in BUCKETS
+        assert problems(title, None, 0, 0) == []       # not rename, undated or empty
+        assert problems(title, None, 0, 4) == []       # nor done, which would offer to close it
+        assert problems(title, "2026-01-01", 3, 0) == [("overdue", "due 2026-01-01, 3 still open")]
+    # A closed one with work on it is stranded, as any closed milestone is.
+    assert [k for k, _ in milestone_problems("Critical", None, 2, 0, BUCKETS, "2026-06-01",
+                                             closed=True)] == ["stranded"]
+    # And a title that only resembles one is still an ordinary milestone.
+    assert [k for k, _ in problems("critical fixes", None, 1, 0)] == ["rename", "undated"]
+
+
 def test_milestone_problems_flags_names_dates_and_stale_milestones():
     assert kinds("Next release", "2026-09-01") == ["rename"]
     assert kinds("v2.0", "2026-08-19") == ["overdue"]

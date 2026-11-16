@@ -183,7 +183,7 @@ wants the same day — "after the project meeting" is one keypress each after th
 keypress acts immediately; the fixes that need more (a new title, a typed date, a milestone to roll
 onto) then ask, and take blank as "skip". The buckets to rename onto are keyed 1 to 9; a typed
 title Tab-completes over all of them, which is how a tenth is reached. A milestone is well-formed if it is one of the repo's
-standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
+standing buckets (the ones your config lists, and any named for one of the tool's default six even if your config leaves it out), or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
 2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
 to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
 else can see that work, since `status` shows open milestones and `triage` only what has no
