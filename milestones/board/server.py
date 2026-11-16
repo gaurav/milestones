@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from .. import gh
-from ..cli import TRIAGE_BUCKET
+from ..core import TRIAGE_BUCKET
 from . import data, plan, reconcile
 
 STATIC = Path(__file__).parent / "static"
