@@ -163,7 +163,7 @@ def due_instant(day: str | None) -> str | None:
 
 def column_order(milestones: list[dict], buckets: list[str], sort_key) -> list[int]:
     """Open milestones' numbers in the order the columns stand: dated ones by date, then
-    the buckets in config order, then the rest — `status`'s order."""
+    the buckets in config order, then the rest — the home page's order."""
     return [m["number"] for m in sorted((m for m in milestones if m["state"] == "open"),
                                         key=lambda m: sort_key(m["title"], m["due"], buckets))]
 

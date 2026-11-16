@@ -27,7 +27,7 @@ DEFAULT_BUCKETS = ["Critical", "Needed soon", "Needed later", "Not urgent", "Ups
 
 
 # Buckets that exist only once something needs them: `setup` doesn't create one, `triage`
-# offers it anyway and creates it when it's picked, and `status` hides one with nothing
+# offers it anyway and creates it when it's picked, and the home page hides one with nothing
 # open on it, so that a quiet "Critical" doesn't say "all is well" at the top of the table.
 OPTIONAL_BUCKETS = {"Critical"}
 
@@ -69,7 +69,8 @@ def load_config(needs_repos: bool = True) -> dict:
            if r.count("/") != 1 or not all(r.split("/"))]
     if bad:
         sys.exit(f"Config {path}: these are not OWNER/NAME: {', '.join(bad)}")
-    # Owner -> colour, resolved here so `status` can hand org_colors plain numbers.
+    # Owner -> colour, checked and resolved to a number. Nothing reads them since the status
+    # table went (the home page doesn't colour owners yet); a config that has them still loads.
     config["colors"] = {owner: parse_color(path, owner, value)
                         for owner, value in config.get("colors", {}).items()}
     # Repo -> a label of its own -> the standard label it stands for, both keyed in lower

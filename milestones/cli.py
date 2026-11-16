@@ -1,20 +1,16 @@
 """milestones: view and manage GitHub milestones across all my repositories."""
 
 import argparse
-import datetime
 import json
 import os
 import re
 import shlex
 import subprocess
 import sys
-import termios
 import textwrap
-import tty
 import webbrowser
 from urllib.parse import quote
 from collections import Counter
-from itertools import cycle
 from pathlib import Path
 
 from . import env, gh
@@ -208,10 +204,6 @@ def fg(n: int) -> str:
 # being news.
 LATE, SOON, AHEAD, DISTANT = (fg(n) for n in (196, 208, 226, 244))
 
-# How far along it is, as an upward-biased green ramp: grey until halfway, then lightening
-# green. Being at 10% is not bad news — it is a milestone somebody just filed — so nothing
-# down there is coloured as a warning; the ramp is there to pick out the ones near the end.
-PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 
 # A standing bucket's title — coloured only while it holds work, so an empty "Needed soon"
 # doesn't look like an alarm. The urgency levels run down the same ramp as due dates, red to
@@ -220,11 +212,6 @@ PCT_SCALE = ((50, 244), (65, 151), (80, 114), (95, 77), (101, 46))
 # for work nobody has been able to place yet.
 BUCKET_COLORS = {"Critical": "1;" + LATE, "Needed soon": SOON, "Needed later": fg(151),
                  "Not urgent": DISTANT, "Upstream": fg(74), TRIAGE_BUCKET: fg(170)}
-
-
-# The cycle for owners the config says nothing about.
-ORG_PALETTE = [fg(COLOR_NAMES[n]) for n in ("blue", "magenta", "cyan", "violet", "indigo",
-                                            "rose", "teal", "purple")]
 
 
 def visible(cell) -> int:
@@ -254,51 +241,8 @@ def star(focused: bool) -> str:
     return paint(FOCUS_MARK, FOCUS_COLOR) if focused else ""
 
 
-def org_colors(repos: list[str], configured: dict[str, str] | None = None) -> dict[str, str]:
-    """A colour for each owner the config names, and for each one that owns more than one
-    of these repos.
-
-    Colouring a one-off owner would say "these rows go together" about a single row — but
-    a colour someone has chosen by hand is worth honouring either way, and two owners can
-    share one to tie sibling organisations together.
-
-    The rest are assigned in alphabetical order rather than in the order the rows happen to
-    arrive: a caller sorts its rows by due date, so first-appearance order would repaint an
-    owner every time a milestone came or went. Adding an owner to the config can still shift
-    the ones after it, which is at least something you did on purpose.
-    """
-    configured = {o.lower(): c for o, c in (configured or {}).items()}
-    owners = {r.split("/")[0].lower(): r.split("/")[0] for r in repos}
-    counts = Counter(r.split("/")[0].lower() for r in repos)
-    colors, palette = {}, cycle(ORG_PALETTE)
-    for key in sorted(owners):
-        if key in configured:
-            colors[owners[key]] = fg(configured[key])
-        elif counts[key] > 1:
-            colors[owners[key]] = next(palette)
-    return colors
-
-
 def bucket_color(title: str, open_issues: int) -> str | None:
     return BUCKET_COLORS.get(title) if open_issues else None
-
-
-def due_color(due: str | None, today: str) -> str | None:
-    """Overdue, this week, this month, later — undated milestones stay plain."""
-    if not due:
-        return None
-    days = (datetime.date.fromisoformat(due) - datetime.date.fromisoformat(today)).days
-    if days < 0:
-        return LATE
-    return SOON if days <= 7 else AHEAD if days <= 30 else DISTANT
-
-
-def pct_color(closed: int, total: int) -> str | None:
-    """How far along, so nearly-finished milestones catch the eye."""
-    if not total:  # nothing ever filed against it; the cell is a dash anyway
-        return None
-    pct = 100 * closed / total
-    return next(fg(n) for limit, n in PCT_SCALE if pct < limit)
 
 
 def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
@@ -322,79 +266,6 @@ def print_table(rows: list[tuple], headers: tuple, right: tuple = ()):
 
 
 # --- commands ---------------------------------------------------------------
-
-
-def cmd_status(config, args):
-    today = datetime.date.today().isoformat()
-    data = status_data(config)
-    records, quiet = data["milestones"], [r["repo"] for r in data["quiet_repos"]]
-    stranded, untriaged = data["stranded"], data["untriaged"]
-    if args.json:
-        json.dump(data, sys.stdout, indent=2)
-        print()
-        return
-
-    orgs = org_colors([r["repo"] for r in records], config.get("colors"))
-    rows = []
-    for r in records:
-        owner, _, name = r["repo"].partition("/")
-        flags = " ".join(flag for kind, flag in (("overdue", "!OVERDUE"),
-                                                 ("empty", "(empty)"), ("done", "(done)"))
-                         if kind in r["flags"])
-        rows.append((star(r["focus"]),
-                     f"{paint(owner, orgs.get(owner))}/{name}",
-                     paint(VERSION_RE.sub(lambda m: paint(m[0], "1"), r["title"]),
-                           bucket_color(r["title"], r["open"] + r["open_prs"])),
-                     paint(r["due"], due_color(r["due"], today)) if r["due"] else "—",
-                     r["open"], r["closed"], r["open_prs"] or "",
-                     paint(f"{r['percent']}%",
-                           pct_color(r["closed"] + r["closed_prs"],
-                                     r["open"] + r["closed"] + r["open_prs"] + r["closed_prs"]))
-                     if r["percent"] is not None else "—",
-                     flags, r["url"]))
-    if rows:
-        # PRS is open pull requests, blank for none; print_table drops the column when no
-        # milestone has any.
-        print_table(rows, ("", "REPO", "MILESTONE", "DUE", "OPEN", "DONE", "PRS", "%", "", "URL"),
-                    right=("OPEN", "DONE", "PRS", "%"))
-    if quiet:
-        if rows:
-            print()
-        print(f"{len(quiet)} tracked repo{'s' if len(quiet) != 1 else ''} "
-              f"with no open milestones:")
-        print_table([(star(is_focused(r, config["focus"])), r, repo_url(r)) for r in quiet],
-                    ("", "REPO", "URL"))
-    elif not rows:
-        print("No open milestones in any configured repo.")
-    if stranded:
-        # One line, not rows: `check` owns the fix, and a closed milestone is not a state
-        # of the work so much as a place it has been lost.
-        items = sum(s["open"] + s["open_prs"] for s in stranded)
-        print(f"\n{len(stranded)} closed milestone{'s' if len(stranded) != 1 else ''} still "
-              f"hold{'s' if len(stranded) == 1 else ''} {items} open "
-              f"item{'s' if items != 1 else ''} — run: milestones check")
-    if not untriaged:
-        print("\nEverything open in every tracked repo is on a milestone.")
-        return
-    issues, prs = sum(r["issues"] for r in untriaged), sum(r["prs"] for r in untriaged)
-    waiting = sum(r["needs_triage"] for r in untriaged)
-    on_bucket = f"{waiting} sit{'s' if waiting == 1 else ''} on {TRIAGE_BUCKET}" if waiting else ""
-    if not issues and not prs:
-        # Placed, every one — but a parked issue is placed only in the sense that somebody
-        # has looked at it, and it is still the walk's to finish.
-        print(f"\nEverything open in every tracked repo is on a milestone, but {on_bucket}:")
-    else:
-        print(f"\n{issues} untriaged issue{'s' if issues != 1 else ''} and {prs} pull "
-              f"request{'s' if prs != 1 else ''} (no milestone)"
-              + (f", and {on_bucket}" if waiting else "") + ":")
-    # A zero prints as blank so a column reads as "which repos have PRs waiting", and a
-    # column nobody has anything in is dropped altogether.
-    print_table([(star(r["focus"]), r["repo"], r["issues"] or "", r["prs"] or "",
-                  r["needs_triage"] or "") for r in untriaged],
-                ("", "REPO", "ISSUES", "PRS", "NEEDS TRIAGE"),
-                right=("ISSUES", "PRS", "NEEDS TRIAGE"))
-    print("run: milestones triage --prs" + ("  (then: milestones triage)" if issues else "")
-          if prs else "run: milestones triage")
 
 
 def _ensure_bucket(repo: str, title: str, existing: dict[str, dict]) -> dict:
@@ -457,28 +328,6 @@ def cmd_setup(config, args):
                "[y/N] ").strip().lower() == "y":
             gh.api(f"{labels}/{quote(name)}", method="PATCH", body={"color": standard})
             print(f"recoloured:     {name}")
-
-
-def cmd_rollover(config, args):
-    src, dst, items = rollover_plan(args.repo, args.src, args.dst, args.close, config["buckets"])
-    if items:
-        for item in items:
-            print(f"  #{item['number']} {item['title']}"
-                  f"{' (PR)' if 'pull_request' in item else ''}")
-        if gh.read_only():
-            print(f"read-only: would move these {len(items)} from '{args.src}' to '{args.dst}'"
-                  + (f", and close '{args.src}'" if args.close else "") + ". Nothing written.")
-            return
-        answer = ask(f"Move {len(items)} open issues and PRs from '{args.src}' to '{args.dst}' "
-                     f"in {args.repo}? [y/N] ")
-        if answer.strip().lower() != "y":
-            sys.exit("Aborted.")
-    else:
-        print(f"Nothing open in '{args.src}'.")
-    rollover_move(args.repo, src, dst, items, args.close,
-                  moved=lambda item: print(f"moved #{item['number']}"))
-    if args.close:
-        print(f"closed '{args.src}'")
 
 
 def item_marker(item: dict) -> str:
@@ -637,7 +486,7 @@ def triage_summary(scope: str, total: int, done: dict[str, list], buckets: list[
                      f"with {total - decided} left undecided")
     for repo, title in done["created"]:
         # A bucket needs no date; anything else created here will be `check`'s `undated`.
-        undated = "" if title in buckets else " (undated: `milestones check` will ask for a date)"
+        undated = "" if title in buckets else " (undated: the app's home page will ask for a date)"
         lines.append(f"Created {title} in {repo}{undated}")
     for repo, title in done["reopened"]:
         lines.append(f"Reopened {title} in {repo}")
@@ -732,7 +581,7 @@ def cmd_triage(config, args):
             milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
             # A bucket is undated by design; anything else will be `check`'s `undated`.
             print(f"  created:  {title}" + ("" if title in config["buckets"]
-                                            else "  (undated — check will say so)"))
+                                            else "  (undated — the home page will say so)"))
             done["created"].append((repo, title))
         elif milestone["state"] != "open":
             if ask(f"  '{title}' is closed; reopen it? [y/N] ").strip().lower() != "y":
@@ -1091,275 +940,6 @@ def cmd_doctor(config, args):
             print(f"  {owner} issue fields: none (an organisation feature)")
 
 
-def cmd_prs(config, args):
-    prs = prs_data(config, args.assigned, args.review_requested, args.mentions)
-    if args.json:
-        json.dump({"prs": prs}, sys.stdout, indent=2)
-        print()
-        return
-    if not prs:
-        print("No open pull requests.")
-        return
-
-    def table(rows, heading):
-        # By repo, freshest first within it: the question is per repo, not per PR.
-        rows = sorted(rows, key=lambda p: p["updated"], reverse=True)
-        rows.sort(key=lambda p: p["repo"].lower())
-        print_table([(p["repo"], f"#{p['number']}", excerpt(p["title"], 60),
-                      "draft" if p["draft"] else "", p["updated"][:10], p["url"])
-                     for p in rows],
-                    (heading, "PR", "TITLE", "DRAFT", "UPDATED", "URL"), right=("PR",))
-
-    by = {g: [p for p in prs if p["group"] == g] for g in ("tracked", "untracked", "ignored")}
-    # Tracked repos only show what needs doing; a PR already on a milestone is in `status`.
-    todo = [p for p in by["tracked"] if not p["milestone"]]
-    done = len(by["tracked"]) - len(todo)
-    if todo:
-        print(f"{len(todo)} PR{'s' if len(todo) != 1 else ''} without a milestone in tracked "
-              f"repos ({done} more already {'have' if done != 1 else 'has'} one).")
-        table(todo, "TRACKED REPO")
-        print("run: milestones triage --prs")
-    elif by["tracked"]:
-        print(f"Every PR in a tracked repo is on a milestone ({done}).")
-    # ponytail: no split between repos you could track and upstream ones you can't set a
-    # milestone in. author_association would tell them apart for free on author:@me results,
-    # but it is the *author's* association, so it lies under --assigned and friends. Add
-    # when this list gets too long to eyeball.
-    if by["untracked"]:
-        print()
-        table(by["untracked"], "REPO NOT IN CONFIG")
-        print("`milestones add REPO` to track a repo; otherwise these are for your TODO list.")
-    if by["ignored"]:
-        print()
-        table(by["ignored"], "IGNORED REPO")
-
-
-def issue_count(issues: int, prs: int = 0) -> str:
-    """"(3 issues)", "(1 issue)", "(3 issues, 2 PRs)" — PRs only when there are any."""
-    count = f"{issues} issue{'' if issues == 1 else 's'}"
-    if prs:
-        count += f", {prs} PR{'' if prs == 1 else 's'}"
-    return f"({count})"
-
-
-def print_findings(findings: list[dict]) -> None:
-    repos = len({f["repo"] for f in findings})
-    print(f"{len(findings)} fixes across {repos} repo{'s' if repos != 1 else ''}.")
-    for kind, heading in KINDS.items():
-        group = [f for f in findings if f["kind"] == kind]
-        if not group:
-            continue
-        print(f"\n{heading}  ({len(group)})")
-        # Repo and title get their own column so a repeat offender is obvious at a glance.
-        repo_w = max(len(f["repo"]) for f in group)
-        title_w = max(len(f["title"]) for f in group)
-        counts = [issue_count(f["issues"], f["prs"]) for f in group]
-        count_w = max(len(c) for c in counts)
-        for count, f in zip(counts, group):
-            line = "  • %s  %s  %s  %s" % (f["repo"].ljust(repo_w), f["title"].ljust(title_w),
-                                           count.ljust(count_w), f["detail"])
-            print("%s\n    %s" % (line.rstrip(), f["url"]))
-
-
-def cmd_check(config, args):
-    findings = collect_findings(config)
-    if args.json:
-        # `kind` keys into KINDS, which says what the fix is; the rest of a finding is
-        # already the flat shape it is printed from.
-        json.dump({"findings": findings, "kinds": KINDS}, sys.stdout, indent=2)
-        print()
-        return
-    if not findings:
-        print("Nothing to fix — every milestone is named, dated and closed sensibly.")
-        return
-    print_findings(findings)
-    if args.interactive:
-        walk_findings(config, findings)
-
-
-def favourite_date(typed: list[datetime.date]) -> datetime.date | None:
-    """The date typed most often this session; the most recent one wins a tie."""
-    # max keeps the first of equal keys, so counting backwards breaks a tie in
-    # favour of the date typed most recently.
-    return max(reversed(typed), key=Counter(typed).__getitem__, default=None)
-
-
-def date_choices(today: datetime.date,
-                 favourite: datetime.date | None = None) -> list[tuple[str, str, datetime.date]]:
-    """The keyed dates on offer. The fourth slot is the far-off default until a
-    session types a date of its own, after which it offers that date back — the
-    same handful of milestones usually want the same day."""
-    day = datetime.timedelta(days=1)
-    next_month = (today.replace(day=28) + day * 4).replace(day=1)
-    return [("t", "today", today),
-            ("m", "tomorrow", today + day),
-            ("n", "next Monday", today + day * (7 - today.weekday())),
-            ("x", "start of next month", next_month) if favourite is None
-            else ("x", f"again, {favourite:%a}", favourite)]
-
-
-def set_due(repo: str, number: int, date: datetime.date) -> None:
-    # Midday UTC: GitHub stores the instant, and midnight can read back as the day before.
-    gh.api(f"repos/{repo}/milestones/{number}", method="PATCH",
-           due_on=f"{date.isoformat()}T12:00:00Z")
-    print(f"  → due {date.isoformat()}")
-
-
-def read_key(prompt: str) -> str:
-    """One keypress, no Enter. Falls back to a whole line when stdin isn't a terminal."""
-    print(prompt, end="", flush=True)
-    if not sys.stdin.isatty():  # ponytail: also how the scripted tests drive this
-        line = sys.stdin.readline()
-        if not line:
-            sys.exit("\nAborted.")
-        print(line.strip())
-        return line.strip()[:1]
-    fd = sys.stdin.fileno()
-    saved = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        key = sys.stdin.read(1)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
-    if key in ("\x03", "\x04"):  # Ctrl-C, Ctrl-D: raw mode swallows the usual signal
-        sys.exit("\nAborted.")
-    print(key)
-    return key
-
-
-STAY, QUIT = "stay", "quit"  # what an option's action asks the walk to do next
-
-
-def walk_findings(config, findings: list[dict]) -> None:
-    today = datetime.date.today()
-    typed: list[datetime.date] = []  # session-only; the "again" slot follows these
-    gone: set[tuple[str, int]] = set()  # deleted, closed, or now a standing bucket
-    for n, f in enumerate(findings, 1):
-        dates = date_choices(today, favourite_date(typed))
-        repo, number, kind = f["repo"], f["number"], f["kind"]
-        if (repo, number) in gone:
-            continue
-        detail = f"  ({f['detail']})" if f["detail"] else ""
-        count = issue_count(f["issues"], f["prs"])
-        print(f"\n[{n}/{len(findings)}] {kind}: {repo}  {f['title']}"
-              f"{'  ' + count if count else ''}{detail}")
-        print(f"  {f['url']}")
-
-        def patch(**fields):
-            gh.api(f"repos/{repo}/milestones/{number}", method="PATCH", **fields)
-
-        def rename(new: str) -> None:
-            # Findings were collected up front and one milestone can raise several,
-            # so carry the new title across to the rest — and drop them altogether
-            # once it has become a standing bucket, where they no longer apply.
-            patch(title=new)
-            print(f"  → renamed to '{new}'")
-            for other in findings:
-                if (other["repo"], other["number"]) == (repo, number):
-                    other["title"] = new
-            if new in config["buckets"]:
-                gone.add((repo, number))
-
-        # Anything needing more than a keypress asks a second question; blank skips.
-        def rename_typed():
-            title = ask("  new title (blank to skip): ").strip()
-            if title:
-                rename(title)
-
-        def roll_over():
-            dst = ask("  roll its open issues onto which milestone? (blank to skip) ").strip()
-            if dst:
-                # rollover is also a top-level command, so it exits on a bad title or a
-                # declined confirmation; the walk below turns that back into one failed
-                # answer rather than the end of the run.
-                cmd_rollover(config, argparse.Namespace(repo=repo, src=f["title"],
-                                                        dst=dst, close=False))
-
-        def type_date():
-            answer = ask("  due date, YYYY-MM-DD (blank to skip): ").strip()
-            if not answer:
-                return None
-            try:
-                chosen = datetime.date.fromisoformat(answer)
-            except ValueError:
-                print("  Not a YYYY-MM-DD date.")
-                return STAY
-            typed.append(chosen)
-            set_due(repo, number, chosen)
-
-        def delete_it():
-            if ask(f"  delete '{f['title']}' from {repo}? [y/N] ").strip().lower() != "y":
-                return STAY
-            gh.api(f"repos/{repo}/milestones/{number}", method="DELETE")
-            print("  → deleted")
-            gone.add((repo, number))
-
-        def close_it():
-            patch(state="closed")
-            print("  → closed")
-            gone.add((repo, number))
-
-        def reopen_it():
-            # Reopening is the one state change that can't hide anything, so a bucket
-            # gets it too; setup would have done the same.
-            patch(state="open")
-            print("  → reopened" + (" (setup would also have done this)"
-                                   if f["title"] in config["buckets"] else ""))
-
-        def open_it():
-            webbrowser.open(f["url"])
-            return STAY
-
-        # (key, label, what it does). One table, so a key can't be offered without a
-        # handler or handled without being offered; an action returns STAY to ask
-        # again and QUIT to leave the walk, and anything else moves on.
-        options = []
-        if kind == "rename":
-            # The repo's own missing buckets, not every configured one: renaming onto a
-            # title it already has is a duplicate-title 422, and a repo using none of
-            # them has opted out, so it is offered a typed title and nothing else.
-            options += [(str(i), f"→ {b}", lambda b=b: rename(b))
-                        for i, b in enumerate(f["free_buckets"], 1)]
-            options.append(("r", "rename to…", rename_typed))
-        if kind in ("undated", "overdue"):
-            options += [(key, f"{label} {date.isoformat()}", lambda d=date: set_due(repo, number, d))
-                        for key, label, date in dates]
-            options.append(("e", "another date…", type_date))
-        if kind == "overdue":
-            options.append(("r", "roll its issues over…", roll_over))
-        if kind == "stranded":
-            # rollover takes a closed source as it is; only the destination must be open.
-            options += [("r", "roll its work over…", roll_over), ("p", "reopen it", reopen_it)]
-        if kind == "done":
-            options.append(("c", "close it", close_it))
-        if kind == "empty":
-            options.append(("d", "delete it", delete_it))
-        options += [("o", "open", open_it), ("s", "skip", lambda: None),
-                    ("q", "quit", lambda: QUIT)]
-
-        actions = {key: action for key, _, action in options}
-        prompt = "  " + "  ".join(f"[{key}] {label}" for key, label, _ in options) + "  "
-        while True:
-            action = actions.get(read_key(prompt).lower())
-            if action is None:
-                print("  Not one of those.")
-                continue
-            try:
-                outcome = action()
-            except SystemExit as exit:
-                # Every way an action can fail arrives as a SystemExit: gh.py raises one
-                # for any failed call, and `ask` raises one for a declined confirmation
-                # or a Ctrl-C. None of them should cost you the findings still queued, so
-                # report it and ask again — nothing was fixed either way. The Ctrl-C that
-                # leaves is the one at the keypress prompt above, outside this.
-                print(f"  {exit}")
-                continue
-            if outcome == QUIT:
-                return
-            if outcome != STAY:
-                break
-
-
 def cmd_add(config, args):
     # The API answer normalises case and follows renames, and 404s on a typo.
     repo = gh.api(f"repos/{parse_repo(args.repo)}")["full_name"]
@@ -1389,7 +969,7 @@ def cmd_remove(config, args):
 
 
 def cmd_focus(config, args):
-    """Name the repos you're working on right now, so `status` marks their rows."""
+    """Name the repos you're working on right now, so the home page marks their rows."""
     focus = list(config["focus"])
     if not args.repos:
         # Somewhere to look that isn't the config file.
@@ -1401,7 +981,7 @@ def cmd_focus(config, args):
     tracked = {r.lower(): r for r in config["repos"]}
     for text in args.repos:
         repo = parse_repo(text)
-        # Focusing on an untracked repo would mark nothing, since `status` only ever lists
+        # Focusing on an untracked repo would mark nothing, since the home page only ever lists
         # the tracked ones — so say so rather than writing an entry that does nothing.
         if repo.lower() not in tracked:
             print(f"not tracked: {repo} — `milestones add {repo}` first")
@@ -1563,11 +1143,6 @@ def main():
     app_flags(home)
     home.set_defaults(func=cmd_home)
 
-    status = sub.add_parser("status",
-                            help="all open milestones across configured repos, by due date")
-    status.add_argument("--json", action="store_true",
-                        help="print the milestones as JSON instead of a table")
-    status.set_defaults(func=cmd_status)
     triage = sub.add_parser("triage", help="interactively assign milestones to untriaged issues")
     triage.add_argument("--repo", metavar="OWNER/NAME", help="triage a single repo")
     # Nothing to walk if the issues are going out to a pipe.
@@ -1592,12 +1167,6 @@ def main():
     assign.add_argument("--priority", choices=[n.lower() for n in reconcile.KINDS["priority"]["options"]],
                         help="also set the Priority: label on each issue and pull request")
     assign.set_defaults(func=cmd_assign)
-    rollover = sub.add_parser("rollover", help="move open issues from one milestone to another")
-    rollover.add_argument("repo", metavar="OWNER/NAME")
-    rollover.add_argument("src", metavar="FROM", help="source milestone title")
-    rollover.add_argument("dst", metavar="TO", help="destination milestone title")
-    rollover.add_argument("--close", action="store_true", help="close FROM once empty")
-    rollover.set_defaults(func=cmd_rollover)
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
     setup.set_defaults(func=cmd_setup)
@@ -1645,15 +1214,6 @@ def main():
                          help='read a batch from stdin: [{"ref", "kind", "value", "reason"}]')
     suggest.set_defaults(func=cmd_suggest)
 
-    check = sub.add_parser("check",
-                           help="milestones that need renaming, dating, closing or rolling over")
-    # Nothing to walk if the findings are going out as JSON.
-    how = check.add_mutually_exclusive_group()
-    how.add_argument("-i", "--interactive", action="store_true",
-                     help="walk the findings one by one and fix them")
-    how.add_argument("--json", action="store_true",
-                     help="print the findings as JSON instead of a report")
-    check.set_defaults(func=cmd_check)
     add = sub.add_parser("add", help="track a repo (OWNER/NAME or github.com URL)")
     add.add_argument("repo", metavar="REPO")
     add.set_defaults(func=cmd_add)
@@ -1661,7 +1221,7 @@ def main():
     remove.add_argument("repo", metavar="REPO")
     remove.set_defaults(func=cmd_remove)
     focus = sub.add_parser("focus", help="mark repos you're working on right now; "
-                                        "`status` stars their rows")
+                                        "the home page stars their rows")
     focus.add_argument("repos", metavar="REPO", nargs="*",
                        help="the repos to focus on; none, to list what's in focus")
     focus.set_defaults(func=cmd_focus)
@@ -1685,16 +1245,6 @@ def main():
     doctor = sub.add_parser("doctor", help="show which GitHub token and permissions are in "
                                            "effect, and what that token can see")
     doctor.set_defaults(func=cmd_doctor)
-
-    prs = sub.add_parser("prs", help="every open PR of yours, anywhere, grouped by whether "
-                                     "its repo is tracked, ignored, or neither")
-    prs.add_argument("--assigned", action="store_true", help="also PRs assigned to you")
-    prs.add_argument("--review-requested", action="store_true",
-                     help="also PRs waiting on your review")
-    prs.add_argument("--mentions", action="store_true", help="also PRs that mention you")
-    prs.add_argument("--json", action="store_true",
-                     help="print the PRs as JSON instead of tables")
-    prs.set_defaults(func=cmd_prs)
 
     argv = route_argv(sys.argv[1:], set(sub.choices))
     args = parser.parse_args(argv)
