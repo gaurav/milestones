@@ -299,6 +299,8 @@ function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
   const key = e.key;
+  // Space presses a focused button or opens a menu; the board's own keys don't use it there.
+  if (key === ' ' && (e.target as HTMLElement).closest('button, summary, a, label')) return;
   if (key === 'j' || key === 'ArrowDown') step(0, 1);
   else if (key === 'k' || key === 'ArrowUp') step(0, -1);
   else if (key === 'h' || key === 'ArrowLeft') step(-1, 0);
