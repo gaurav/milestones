@@ -71,6 +71,10 @@ export interface Action {
 }
 
 export interface BoardData {
+  /** Only while the repo is still being read, or could not be: how far the read has got, and
+   *  `error` if it stopped. Nothing else but `repo` and `permissions` comes with it. */
+  loading?: { what?: string; seen?: number; total?: number };
+  error?: string | null;
   /** From a refresh only: the cards it found closed, merged or gone, and took off the board. */
   gone?: number[];
   repo: string;
@@ -131,9 +135,32 @@ export function parseLocation(search: string, hash: string): { token: string; fr
   };
 }
 
+/** OWNER/NAME from a board's address, `/r/OWNER/NAME/`; empty for any other page. */
+export function repoFromPath(pathname: string): string {
+  const match = /^\/r\/([^/]+)\/([^/]+)\/?$/.exec(pathname);
+  return match ? `${decodeURIComponent(match[1]!)}/${decodeURIComponent(match[2]!)}` : '';
+}
+
+/** A link to another of the app's pages, carrying the token on in its fragment: each page
+ *  is a load of its own, and the fragment is the only place the token is kept. */
+export function pageLink(path: string, token: string): string {
+  return `${path}#t=${token}`;
+}
+
+/** The address of a repo's board, opened at a card or on some milestones if asked. */
+export function boardPath(repo: string, query: { card?: number; from?: string[] } = {}): string {
+  const params = new URLSearchParams();
+  for (const title of query.from ?? []) params.append('from', title);
+  if (query.card) params.set('card', String(query.card));
+  const asked = params.toString();
+  return `/r/${repo}/${asked ? `?${asked}` : ''}`;
+}
+
+/** One repo's board, as the app serves it under /api/v1/repos/OWNER/NAME/. */
 export class Api {
   token: string;
-  constructor(token: string) { this.token = token; }
+  base: string;
+  constructor(token: string, repo: string) { this.token = token; this.base = `/api/v1/repos/${repo}`; }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const init: RequestInit = { method, headers: { 'X-Milestones-Token': this.token } };
@@ -141,7 +168,7 @@ export class Api {
       init.body = JSON.stringify(body);
       (init.headers as Record<string, string>)['Content-Type'] = 'application/json';
     }
-    const response = await fetch(`/api/v1${path}`, init);
+    const response = await fetch(`${this.base}${path}`, init);
     const answer = await response.json().catch(() => ({ error: response.statusText }));
     if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
     return answer as T;
@@ -173,7 +200,7 @@ export class Api {
   }
   /** Server-sent events: every action as it changes state, every milestone as it changes. */
   events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; plan(p: PlanInfo): void; reload(): void }): EventSource {
-    const source = new EventSource(`/api/v1/events?token=${encodeURIComponent(this.token)}`);
+    const source = new EventSource(`${this.base}/events?token=${encodeURIComponent(this.token)}`);
     source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('suggestion', (e) => on.suggestion(JSON.parse((e as MessageEvent).data)));

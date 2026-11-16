@@ -4,6 +4,7 @@ import { render } from 'preact';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
+import { pageLink } from '../shared/api.ts';
 import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, isValueLabel,
@@ -11,7 +12,7 @@ import {
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
+  actions, board, cards, reading, token, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
   planInfo, readOnly, reviewPlan, refresh, refreshCards, refreshing, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
@@ -806,6 +807,7 @@ function Toolbar() {
   const unsaved = pending.value;
   return (
     <header class="toolbar">
+      <a class="home" href={pageLink('/', token)} title="Every tracked repo's milestones">‹ milestones</a>
       <strong>{board.value?.repo}</strong>
       <ViewControls />
       {dimension.value !== 'milestone' && scope.value && (
@@ -913,7 +915,7 @@ function App() {
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('beforeunload', guard); };
   }, []);
   if (fatal.value) return <p class="fatal">{fatal.value}</p>;
-  if (!board.value) return <p class="fatal">Reading the board…</p>;
+  if (!board.value) return <p class="fatal">{reading.value || 'Reading the board…'}</p>;
   return (
     <>
       <Toolbar />

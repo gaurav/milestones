@@ -1,12 +1,14 @@
-"""The board's backend: holds one repo's cards in memory, writes each change to GitHub as it
-is made, and tells every open page what happened. `docs/BoardAPI.md` is the contract; a
-front end needs nothing from this file but that."""
+"""The web app's backend. A `Board` holds one repo's cards in memory, writes each change to
+GitHub as it is made, and tells every open page what happened; the `App` holds a board for
+each repo that has been opened, read from GitHub the first time its page is visited.
+`docs/BoardAPI.md` is the contract; a front end needs nothing from this file but that."""
 
 import datetime
 import json
 import mimetypes
 import os
 import queue
+import re
 import secrets
 import signal
 import socket
@@ -17,10 +19,11 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 from .. import gh
 from ..core import TRIAGE_BUCKET
+from .. import core
 from . import data, plan, reconcile
 
 STATIC = Path(__file__).parent / "static"
@@ -28,9 +31,14 @@ TOKEN_HEADER = "X-Milestones-Token"
 # Statuses an action can be left in when the page or the server goes away with work undone.
 UNSETTLED = ("pending", "failed")
 
-NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>milestones board</title>
+# The port the app asks for when none is named. A fixed one, so that the address — and with it
+# the browser's history and anything bookmarked — is the same from one run to the next; if it
+# is taken, any free port does.
+DEFAULT_PORT = 8377
+
+NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>milestones</title>
 <body style="font: 16px system-ui; max-width: 40em; margin: 4em auto">
-<h1>The board's front end hasn't been built</h1>
+<h1>The front end hasn't been built</h1>
 <p>From the top of the <code>milestones</code> checkout, run:</p>
 <pre>npm install
 npm run build</pre>
@@ -91,9 +99,7 @@ def set_card_value(card: dict, kind: str, value, colours: dict[str, str]) -> Non
 def state_path(repo: str, environ=None) -> Path:
     """Where a repo's undecided suggestions are kept between runs. Decisions live on GitHub;
     this is only what hasn't been decided yet, and what was turned down."""
-    environ = os.environ if environ is None else environ
-    home = Path(environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
-    return home / "milestones" / f"board-{repo.replace('/', '-')}.json"
+    return state_dir(environ) / f"board-{repo.replace('/', '-')}.json"
 
 
 def plan_path(repo: str, environ=None) -> Path:
@@ -142,6 +148,42 @@ class Board:
         self.todo: queue.Queue = queue.Queue()
         self.listeners: list[queue.Queue] = []
         self.read_only = gh.read_only()
+        # "new" until something reads the repo; `start` reads it in the background, and the
+        # snapshot says only how far that has got ("loading") or why it stopped ("failed").
+        self.status, self.error = "new", None
+        self.progress: dict = {}
+        self.ready = threading.Event()
+        # What `restore_plan` picked up and left out, for whoever started the board to say.
+        self.plan_notes: tuple[int, list[str]] = (0, [])
+
+    def start(self, on_ready=lambda board: None) -> None:
+        """Start the writer, and read the repo without making anyone wait for it: a page can
+        open on the board at once and watch the read. `on_ready` is called when it ends,
+        well or badly."""
+        threading.Thread(target=self.work, daemon=True).start()
+        self.status = "loading"
+
+        def read():
+            self.reload()
+            on_ready(self)
+        threading.Thread(target=read, daemon=True).start()
+
+    def reload(self) -> None:
+        """The first read, or another go at one that failed. Never raises: the outcome is the
+        board's status, and a `reload` event to whichever pages are watching."""
+        def progress(what: str, seen: int, total: int) -> None:
+            self.progress = {"what": "issues" if what == "issues" else "pull requests",
+                             "seen": seen, "total": total}
+        self.status, self.error = "loading", None
+        try:
+            self.load(progress)
+            self.plan_notes = self.restore_plan()
+        except SystemExit as exit:
+            self.status, self.error = "failed", str(exit)
+        except Exception as error:  # a bug in a read must not leave the page waiting for ever
+            self.status, self.error = "failed", f"{type(error).__name__}: {error}"
+        self.ready.set()
+        self.publish("reload", {})
 
     # --- state ---------------------------------------------------------------------------
 
@@ -158,6 +200,7 @@ class Board:
             restored, self._restored = self._restored, []
             self._add_suggestions([s for s in restored if s["issue"] in self.cards])
             self._rules(self.cards)
+            self.status = "ready"
 
     def _reapply(self, cards: dict[int, dict]) -> None:
         """What this session changed and GitHub hasn't confirmed is still the truth here: a
@@ -195,6 +238,10 @@ class Board:
 
     def snapshot(self) -> dict:
         with self.lock:
+            if self.status in ("loading", "failed"):
+                # Nothing to show yet. A page asks again until `loading` is gone.
+                return {"repo": self.repo, "permissions": "read" if self.read_only else "write",
+                        "loading": dict(self.progress), "error": self.error}
             milestones = list(self.milestones.values())
             return {
                 "repo": self.repo,
@@ -712,6 +759,92 @@ class Board:
             body={"due_on": data.due_instant(day)}))
 
 
+def state_dir(environ=None) -> Path:
+    environ = os.environ if environ is None else environ
+    return Path(environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "milestones"
+
+
+REPO_PART = re.compile(r"[\w.-]+")
+
+
+class App:
+    """Every board this run has opened. A board is made, and its repo read, the first time
+    something asks for it; after that it stays for as long as the app runs, so going back to
+    a repo costs nothing."""
+
+    def __init__(self, config: dict, next_ids: dict[str, int] | None = None, make_board=None):
+        self.config = config
+        self.read_only = gh.read_only()
+        self.lock = threading.Lock()
+        # Boards by GitHub's own name for the repo, lower-cased; and every spelling that has
+        # been asked for, to that name. Two spellings of one repo must never get two boards:
+        # each would hold its own idea of the cards and overwrite the other's saved state.
+        self.boards: dict[str, Board] = {}
+        self.names: dict[str, str] = {}
+        # Where each repo's action ids carry on from, after a `--reload`.
+        self.next_ids = next_ids or {}
+        self.make_board = make_board or self._make_board
+
+    def _make_board(self, repo: str) -> Board:
+        return Board(repo, self.config["buckets"], core.sort_key, state_file=state_path(repo),
+                     plan_file=plan_path(repo),
+                     aliases=self.config["labels"].get(repo.lower()),
+                     first_id=self.next_ids.get(repo.lower(), 1))
+
+    def canonical(self, repo: str) -> str:
+        """GitHub's name for a repo: it follows a rename, settles the case, and is where a
+        mistyped name is found out."""
+        try:
+            return gh.api(f"repos/{repo}")["full_name"]
+        except SystemExit as exit:
+            raise Refused(404, f"can't read {repo}: {str(exit).splitlines()[-1]}")
+
+    def board(self, repo: str) -> Board:
+        owner, _, name = repo.partition("/")
+        if not (REPO_PART.fullmatch(owner) and REPO_PART.fullmatch(name)):
+            raise Refused(404, f"not a repo: {repo!r}")
+        with self.lock:
+            if repo.lower() in self.names:
+                return self.boards[self.names[repo.lower()]]
+        found = self.canonical(repo)
+        with self.lock:
+            key = found.lower()
+            if key not in self.boards:
+                self.boards[key] = self.make_board(found)
+                self.boards[key].start(self.loaded)
+            self.names[repo.lower()] = self.names[key] = key
+            return self.boards[key]
+
+    def loaded(self, board: Board) -> None:
+        """Say in the terminal what a board's first read came to."""
+        if board.status == "failed":
+            print(f"{board.repo}: could not be read — {board.error}", file=sys.stderr, flush=True)
+            return
+        print(f"{board.repo}: {len(board.cards)} open issues and pull requests",
+              file=sys.stderr, flush=True)
+        restored, skipped = board.plan_notes
+        if restored or skipped:
+            print(f"  picked up {restored} change{'' if restored == 1 else 's'} from the plan "
+                  f"left by an earlier read-only run ({board.plan_file}).", file=sys.stderr)
+            for line in skipped:
+                print(f"    left out: {line}", file=sys.stderr)
+        elif not board.read_only and board.plan_info()["count"]:
+            print(f"  a read-only run left a plan of {board.plan_info()['count']} changes "
+                  f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
+
+    def info(self) -> dict:
+        with self.lock:
+            return {"permissions": "read" if self.read_only else "write",
+                    "repos": list(self.config["repos"]), "focus": list(self.config["focus"]),
+                    "config": str(core.config_path()),
+                    "boards": [{"repo": b.repo, "status": b.status} for b in self.boards.values()]}
+
+    def pending(self) -> bool:
+        with self.lock:
+            boards = list(self.boards.values())
+        return any(a["status"] == "pending" for b in boards for a in b.unsettled())
+
+
 def allowed_host(host: str | None, port: int) -> bool:
     """A request must name this server as it is reached on loopback. Anything else is a
     page on another site trying a rebound DNS name against a server that can write to
@@ -719,7 +852,20 @@ def allowed_host(host: str | None, port: int) -> bool:
     return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
 
-def make_handler(board: Board, token: str):
+def page_for(path: str) -> str | None:
+    """The built file a page's address is served from, relative to the static folder; None
+    for an address that is a file of its own. `/r/OWNER/NAME/` is the board, whichever repo."""
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return "index.html"
+    if parts[0] == "r" and len(parts) == 3:
+        return "board/index.html"
+    if len(parts) == 1 and "." not in parts[0]:
+        return f"{parts[0]}/index.html"
+    return None
+
+
+def make_handler(app: App, token: str):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -740,10 +886,10 @@ def make_handler(board: Board, token: str):
                 self._json(403, {"error": "bad Host"})
                 return False
             if url.path.startswith("/api/"):
-                # EventSource can't set a header, so the event stream alone may carry the
+                # EventSource can't set a header, so an event stream alone may carry the
                 # token in its query string.
                 given = self.headers.get(TOKEN_HEADER)
-                if given is None and url.path == "/api/v1/events":
+                if given is None and url.path.endswith("/events"):
                     given = (parse_qs(url.query).get("token") or [None])[0]
                 if given is None or not secrets.compare_digest(given, token):
                     self._json(401, {"error": "missing or wrong token"})
@@ -764,94 +910,113 @@ def make_handler(board: Board, token: str):
             url = urlparse(self.path)
             if not self._guard(url):
                 return
-            parts = [p for p in url.path.split("/") if p]
+            parts = [unquote(p) for p in url.path.split("/") if p]
             try:
                 if parts[:2] != ["api", "v1"]:
                     if method != "GET":
                         raise Refused(404, "not found")
                     return self._static(url.path)
                 rest = parts[2:]
-                if method == "GET" and rest == ["board"]:
-                    return self._json(200, board.snapshot())
-                if method == "GET" and rest == ["events"]:
-                    return self._events()
-                if method == "POST" and rest == ["actions"]:
-                    requests = self._body().get("actions")
-                    if not isinstance(requests, list):
-                        raise Refused(400, "send {actions: [{issue, kind, value}, ...]}")
-                    made = board.submit(requests)
-                    board.save_plan()
-                    for action in made:
-                        board.publish("action", action)
-                    board.publish("plan", board.plan_info())
-                    return self._json(200, {"actions": made})
-                if method == "POST" and rest == ["plan", "review"]:
-                    added, dropped = board.review_plan()
-                    for suggestion in added:
-                        board.publish("suggestion", suggestion)
-                    board.publish("plan", board.plan_info())
-                    return self._json(200, {"suggestions": added, "dropped": dropped})
-                if method == "POST" and rest == ["plan", "discard"]:
-                    board.discard_plan()
-                    board.publish("plan", board.plan_info())
-                    return self._json(200, {"plan": board.plan_info()})
-                if (method == "POST" and len(rest) == 3 and rest[0] == "actions"
-                        and rest[1].isdigit() and rest[2] in ("retry", "revert")):
-                    action = getattr(board, rest[2])(int(rest[1]))
-                    board.publish("action", action)
-                    return self._json(200, {"action": action})
-                if method == "POST" and rest == ["suggestions"]:
-                    proposed = self._body().get("suggestions")
-                    if not isinstance(proposed, list):
-                        raise Refused(400, "send {suggestions: [{issue, kind, value, reason, "
-                                           "source}, ...]}")
-                    added = board.suggest(proposed)
-                    for suggestion in added:
-                        board.publish("suggestion", suggestion)
-                    return self._json(200, {"suggestions": added})
-                if method == "POST" and rest == ["suggestions", "resolve"]:
-                    body = self._body()
-                    if not isinstance(body.get("ids"), list):
-                        raise Refused(400, "send {ids: [...], decision: 'accept' | 'reject'}")
-                    changed, actions = board.resolve(body["ids"], body.get("decision"))
-                    board.save_plan()
-                    board.publish("plan", board.plan_info())
-                    for action in actions:
-                        board.publish("action", action)
-                    for suggestion in changed:
-                        board.publish("suggestion", suggestion)
-                    return self._json(200, {"suggestions": changed, "actions": actions})
-                if method == "POST" and rest == ["view"]:
-                    return self._json(200, {"view": board.set_view(self._body())})
-                if method == "POST" and rest == ["milestones"]:
-                    body = self._body()
-                    return self._json(200, {"milestone": board.ensure_milestone(
-                        body.get("title"), bool(body.get("reopen")))})
-                if (method == "PATCH" and len(rest) == 2 and rest[0] == "milestones"
-                        and rest[1].isdigit()):
-                    body = self._body()
-                    if "due" not in body:
-                        raise Refused(400, "send {due: 'YYYY-MM-DD'} or {due: null}")
-                    return self._json(200, {"milestone": board.set_due(int(rest[1]),
-                                                                        body["due"])})
-                if method == "POST" and rest == ["refresh"]:
-                    # With {issues: [N, …]}, just those cards; otherwise the whole repo.
-                    numbers = self._body().get("issues")
-                    if numbers is not None and (not isinstance(numbers, list) or not numbers
-                                                or not all(isinstance(n, int) for n in numbers)):
-                        raise Refused(400, "send {issues: [number, …]}, or no body")
-                    try:
-                        gone = board.refresh_cards(numbers) if numbers else board.load()
-                    except SystemExit as exit:
-                        raise Refused(502, str(exit))
-                    board.publish("reload", {})
-                    return self._json(200, {**board.snapshot(), "gone": gone or []})
+                if rest[:1] == ["repos"] and len(rest) >= 4:
+                    return self._board(method, app.board(f"{rest[1]}/{rest[2]}"), rest[3:])
+                if method == "GET" and rest == ["app"]:
+                    return self._json(200, app.info())
                 raise Refused(404, "not found")
             except Refused as refused:
                 self._json(refused.status, {"error": str(refused)})
 
+        def _board(self, method: str, board: Board, rest: list[str]) -> None:
+            """One repo's board: everything under /api/v1/repos/OWNER/NAME/."""
+            if method == "GET" and rest == ["board"]:
+                return self._json(200, board.snapshot())
+            if method == "GET" and rest == ["events"]:
+                return self._events(board.listeners)
+            if method == "POST" and rest == ["refresh"] and board.status == "failed":
+                board.reload()
+                return self._json(200, {**board.snapshot(), "gone": []})
+            if method == "POST" and rest == ["suggestions"]:
+                # From `milestones suggest`, which may be the first thing to name this repo:
+                # it waits for the read rather than being told to come back.
+                board.ready.wait(timeout=600)
+            if board.status != "ready":
+                raise Refused(503, f"{board.repo} could not be read: {board.error}"
+                              if board.status == "failed"
+                              else f"still reading {board.repo} from GitHub")
+            if method == "POST" and rest == ["actions"]:
+                requests = self._body().get("actions")
+                if not isinstance(requests, list):
+                    raise Refused(400, "send {actions: [{issue, kind, value}, ...]}")
+                made = board.submit(requests)
+                board.save_plan()
+                for action in made:
+                    board.publish("action", action)
+                board.publish("plan", board.plan_info())
+                return self._json(200, {"actions": made})
+            if method == "POST" and rest == ["plan", "review"]:
+                added, dropped = board.review_plan()
+                for suggestion in added:
+                    board.publish("suggestion", suggestion)
+                board.publish("plan", board.plan_info())
+                return self._json(200, {"suggestions": added, "dropped": dropped})
+            if method == "POST" and rest == ["plan", "discard"]:
+                board.discard_plan()
+                board.publish("plan", board.plan_info())
+                return self._json(200, {"plan": board.plan_info()})
+            if (method == "POST" and len(rest) == 3 and rest[0] == "actions"
+                    and rest[1].isdigit() and rest[2] in ("retry", "revert")):
+                action = getattr(board, rest[2])(int(rest[1]))
+                board.publish("action", action)
+                return self._json(200, {"action": action})
+            if method == "POST" and rest == ["suggestions"]:
+                proposed = self._body().get("suggestions")
+                if not isinstance(proposed, list):
+                    raise Refused(400, "send {suggestions: [{issue, kind, value, reason, "
+                                       "source}, ...]}")
+                added = board.suggest(proposed)
+                for suggestion in added:
+                    board.publish("suggestion", suggestion)
+                return self._json(200, {"suggestions": added})
+            if method == "POST" and rest == ["suggestions", "resolve"]:
+                body = self._body()
+                if not isinstance(body.get("ids"), list):
+                    raise Refused(400, "send {ids: [...], decision: 'accept' | 'reject'}")
+                changed, actions = board.resolve(body["ids"], body.get("decision"))
+                board.save_plan()
+                board.publish("plan", board.plan_info())
+                for action in actions:
+                    board.publish("action", action)
+                for suggestion in changed:
+                    board.publish("suggestion", suggestion)
+                return self._json(200, {"suggestions": changed, "actions": actions})
+            if method == "POST" and rest == ["view"]:
+                return self._json(200, {"view": board.set_view(self._body())})
+            if method == "POST" and rest == ["milestones"]:
+                body = self._body()
+                return self._json(200, {"milestone": board.ensure_milestone(
+                    body.get("title"), bool(body.get("reopen")))})
+            if (method == "PATCH" and len(rest) == 2 and rest[0] == "milestones"
+                    and rest[1].isdigit()):
+                body = self._body()
+                if "due" not in body:
+                    raise Refused(400, "send {due: 'YYYY-MM-DD'} or {due: null}")
+                return self._json(200, {"milestone": board.set_due(int(rest[1]),
+                                                                    body["due"])})
+            if method == "POST" and rest == ["refresh"]:
+                # With {issues: [N, …]}, just those cards; otherwise the whole repo.
+                numbers = self._body().get("issues")
+                if numbers is not None and (not isinstance(numbers, list) or not numbers
+                                            or not all(isinstance(n, int) for n in numbers)):
+                    raise Refused(400, "send {issues: [number, …]}, or no body")
+                try:
+                    gone = board.refresh_cards(numbers) if numbers else board.load()
+                except SystemExit as exit:
+                    raise Refused(502, str(exit))
+                board.publish("reload", {})
+                return self._json(200, {**board.snapshot(), "gone": gone or []})
+            raise Refused(404, "not found")
+
         def _static(self, path: str) -> None:
-            name = "index.html" if path in ("", "/") else path.lstrip("/")
+            name = page_for(path) or path.lstrip("/")
             target = (STATIC / name).resolve()
             if not (STATIC / "index.html").exists():
                 return self._send(200, NOT_BUILT.encode(), "text/html; charset=utf-8")
@@ -862,13 +1027,13 @@ def make_handler(board: Board, token: str):
                 kind += "; charset=utf-8"
             self._send(200, target.read_bytes(), kind)
 
-        def _events(self) -> None:
+        def _events(self, listeners: list) -> None:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             listener: queue.Queue = queue.Queue()
-            board.listeners.append(listener)
+            listeners.append(listener)
             try:
                 while True:
                     try:
@@ -881,7 +1046,7 @@ def make_handler(board: Board, token: str):
             except OSError:
                 pass
             finally:
-                board.listeners.remove(listener)
+                listeners.remove(listener)
 
         def do_GET(self):
             self._route("GET")
@@ -895,8 +1060,8 @@ def make_handler(board: Board, token: str):
     return Handler
 
 
-# Set for the process a `--reload` board replaces itself with: the listening socket's fd, the
-# token and the next action id, as JSON.
+# Set for the process a `--reload` app replaces itself with: the listening socket's fd, the
+# token and each board's next action id, as JSON.
 HANDOFF = "MILESTONES_BOARD_HANDOFF"
 SOURCE = Path(__file__).resolve().parents[1]
 
@@ -904,16 +1069,16 @@ SOURCE = Path(__file__).resolve().parents[1]
 class Server(ThreadingHTTPServer):
     def handle_error(self, request, client_address) -> None:
         """A page that goes away before its answer is written (a reload, a closed tab) is not
-        worth a traceback in the board's log; anything else still gets one."""
+        worth a traceback in the app's log; anything else still gets one."""
         if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
             return
         super().handle_error(request, client_address)
 
 
 def listen(port: int, handler, fd: int | None = None) -> ThreadingHTTPServer:
-    """The board's server: on a new socket, or on the one a reloaded board handed over. Taking
+    """The app's server: on a new socket, or on the one a reloaded app handed over. Taking
     it over rather than binding the port again means a request made while the new process is
-    still reading the repo waits in the socket's backlog instead of being refused."""
+    still starting waits in the socket's backlog instead of being refused."""
     if fd is None:
         server = Server(("127.0.0.1", port), handler)
     else:
@@ -931,7 +1096,7 @@ def source_stamp(root: Path = SOURCE) -> dict[str, int]:
 
 def importable() -> str | None:
     """None if the package as it now stands on disk imports and can still reload, else what
-    went wrong: a board must not replace itself with code that dies at its first line, nor
+    went wrong: an app must not replace itself with code that dies at its first line, nor
     with code from before `--reload` (a branch lower in a stack, checked out to restack it),
     which would refuse the flag on its own command line and stop."""
     found = subprocess.run([sys.executable, "-c",
@@ -942,15 +1107,14 @@ def importable() -> str | None:
     return None if found.returncode == 0 else (found.stderr.strip() or "import failed")
 
 
-def watch_sources(server: ThreadingHTTPServer, board: "Board", reloading: threading.Event,
+def watch_sources(server: ThreadingHTTPServer, app: App, reloading: threading.Event,
                   last: dict[str, int], interval: float = 1.0) -> None:
     """`--reload`: once the package's Python has changed and then stayed put for a moment (a
     checkout or a rebase writes many files), and no write is queued, stop serving so that `run`
     can replace the process. A change that doesn't import is reported and waited out.
 
-    `last` is the source as it was when this process imported it. Taken here instead, after the
-    repo has been read (a minute, on Babel), it took in whatever was saved during that minute,
-    and the board ran the older code it had imported without ever reloading."""
+    `last` is the source as it was when this process imported it, not as it is when the
+    watching starts: a change saved in between would otherwise never be noticed."""
     while True:
         time.sleep(interval)
         now = source_stamp()
@@ -965,70 +1129,69 @@ def watch_sources(server: ThreadingHTTPServer, board: "Board", reloading: thread
         last = now
         problem = importable()
         if problem:
-            print(f"\nThe board's source changed but doesn't import, so it is not reloading:\n"
+            print(f"\nThe app's source changed but doesn't import, so it is not reloading:\n"
                   f"{problem.splitlines()[-1]}", file=sys.stderr, flush=True)
             continue
-        while any(a["status"] == "pending" for a in board.unsettled()):
+        while app.pending():
             time.sleep(0.2)
-        print("\nThe board's source changed: reloading …", file=sys.stderr, flush=True)
+        print("\nThe app's source changed: reloading …", file=sys.stderr, flush=True)
         reloading.set()
         server.shutdown()
         return
 
 
-def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bool = True,
-        shown: list[str] | None = None, by: str | None = None,
-        group: str | None = None, aliases: dict[str, str] | None = None,
-        reload: bool = False) -> None:
+def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = None,
+        port: int | None = None, open_browser: bool = True, reload: bool = False) -> None:
+    """Start the app and open `path` in it — or, if it is already running, open `path` in the
+    one that is: there is only ever one, so that a repo only ever has one board."""
     # Imported here, as client imports this module.
     from .client import running_session, write_session
     handoff = json.loads(os.environ.pop(HANDOFF, "null"))
-    # Before the repo is read: the code running is what was on disk about now. See watch_sources.
+    # Before anything is read: the code running is what was on disk about now. See watch_sources.
     imported = source_stamp() if reload else {}
-    other = running_session(repo)
+    mode = "read" if gh.read_only() else "write"
+    other = running_session()
     # After a reload the session file names this very process, which is still the same pid.
     if other and not (handoff and int(other["pid"]) == os.getpid()):
-        # Two boards on one repo would each hold their own idea of the cards, overwrite each
-        # other's saved suggestions, and leave `milestones suggest` reaching only the newer.
-        raise SystemExit(f"A board is already running for {repo}: {other['url']}\n"
-                         f"Stop it first (Ctrl-C there, or kill {other['pid']}).")
-    board = Board(repo, buckets, sort_key, state_file=state_path(repo),
-                  plan_file=plan_path(repo), aliases=aliases,
-                  first_id=handoff["next_id"] if handoff else 1)
-
-    def progress(what: str, seen: int, total: int) -> None:
-        label = "issues" if what == "issues" else "pull requests"
-        print(f"\r  {label}: {seen}/{total}   ", end="", file=sys.stderr, flush=True)
-
-    print(f"Reading {repo} …", file=sys.stderr)
-    board.load(progress)
-    print(file=sys.stderr)
-    restored, skipped = board.restore_plan()
-    if restored or skipped:
-        print(f"Picked up {restored} change{'' if restored == 1 else 's'} from the plan left by "
-              f"an earlier read-only run ({board.plan_file}).", file=sys.stderr)
-        for line in skipped:
-            print(f"  left out: {line}", file=sys.stderr)
-    elif not board.read_only and board.plan_info()["count"]:
-        print(f"A read-only run left a plan of {board.plan_info()['count']} changes "
-              f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
+        if other.get("permissions", mode) != mode:
+            # The one thing the running app can't be asked to change: someone who asked for
+            # a read-only look must not be handed a page that writes.
+            raise SystemExit(
+                f"milestones is already running at {other['url']} with {other['permissions']} "
+                f"permissions, and this run asks for {mode}. Stop that one first (Ctrl-C "
+                f"there, or kill {other['pid']}).")
+        url = page_url(other["url"], other["token"], path, query)
+        print(f"milestones is already running (pid {other['pid']}); opening there:\n{url}",
+              file=sys.stderr)
+        if open_browser:
+            webbrowser.open(url)
+        return
+    app = App(config, next_ids=handoff["next_ids"] if handoff else None)
     token = handoff["token"] if handoff else secrets.token_urlsafe(24)
-    server = listen(port, make_handler(board, token), handoff and handoff["fd"])
-    threading.Thread(target=board.work, daemon=True).start()
-    url = page_url(server.server_address[1], token, shown, by, group)
-    # Where `milestones suggest` finds this board.
-    session = write_session(board.repo, f"http://127.0.0.1:{server.server_address[1]}", token)
-    mode = "  (read-only: nothing will be written)" if board.read_only else ""
-    print(f"{board.repo}: {len(board.cards)} open issues and pull requests{mode}\n{url}\n"
-          "Ctrl-C to stop." + ("  Reloads when its Python changes." if reload else ""),
-          file=sys.stderr)
+    handler = make_handler(app, token)
+    if handoff:
+        server = listen(0, handler, handoff["fd"])
+    else:
+        try:
+            server = listen(DEFAULT_PORT if port is None else port, handler)
+        except OSError as error:
+            if port is not None:
+                raise SystemExit(f"Can't listen on port {port}: {error.strerror}")
+            server = listen(0, handler)  # the usual port is taken: any free one
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    url = page_url(base, token, path, query)
+    # Where `milestones suggest`, and the next `milestones`, find this app.
+    session = write_session(base, token, mode)
+    print(("milestones  (read-only: nothing will be written)" if app.read_only else "milestones")
+          + f"\n{url}\nCtrl-C to stop."
+          + ("  Reloads when its Python changes." if reload else ""), file=sys.stderr, flush=True)
     if open_browser and not handoff:
         webbrowser.open(url)
     reloading = threading.Event()
     if reload:
-        threading.Thread(target=watch_sources, args=(server, board, reloading, imported),
+        threading.Thread(target=watch_sources, args=(server, app, reloading, imported),
                          daemon=True).start()
-    # A plain `kill` should end the board as Ctrl-C does, so that the session file goes and
+    # A plain `kill` should end the app as Ctrl-C does, so that the session file goes and
     # the closing lines are printed. The first one also ignores the rest: `pkill -f` reaches
     # both `uv run` and this process, and uv passes its own on, so two arrive together and the
     # second used to land before the clean-up below could ignore it.
@@ -1047,34 +1210,49 @@ def run(repo: str, buckets: list[str], sort_key, port: int = 0, open_browser: bo
         if not reloading.is_set():
             session.unlink(missing_ok=True)
         # A write already handed to gh finishes or fails within its own timeout; give the
-        # queue a moment, then say what never reached GitHub.
+        # queues a moment, then say what never reached GitHub.
         deadline = time.time() + 10
-        while time.time() < deadline and any(a["status"] == "pending" for a in board.unsettled()):
+        while time.time() < deadline and app.pending():
             time.sleep(0.2)
-        print("\n".join(closing_lines(board.snapshot())), file=sys.stderr, flush=True)
+        for board in list(app.boards.values()):
+            if board.actions:
+                print("\n".join(closing_lines(board.snapshot())), file=sys.stderr, flush=True)
     if reloading.is_set():
-        # The same process, pid and all, on the same socket: the page's URL and token, and
+        # The same process, pid and all, on the same socket: every page's URL and token, and
         # the session file `milestones suggest` reads, stay good. What this run kept only in
-        # memory goes: the undo history, and the record of any write that failed.
+        # memory goes: the boards (each is read again when its page next asks), the undo
+        # history, and the record of any write that failed.
         fd = server.socket.fileno()
         os.set_inheritable(fd, True)
-        os.environ[HANDOFF] = json.dumps({"fd": fd, "token": token,
-                                          "next_id": board.first_id + len(board.actions)})
+        os.environ[HANDOFF] = json.dumps({
+            "fd": fd, "token": token,
+            "next_ids": {key: b.first_id + len(b.actions) for key, b in app.boards.items()}})
         # An ignored signal stays ignored across exec, which would leave the new process
-        # unkillable until it has read the repo and set its own handler.
+        # unkillable until it has set its own handler.
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         os.execv(sys.executable, sys.orig_argv)
 
 
-def page_url(port: int, token: str, shown: list[str] | None = None,
-             by: str | None = None, group: str | None = None) -> str:
-    """The address to open. The view asked for — `from` once per milestone, `by`, `group` —
-    is a query string, which the page reads and then keeps up to date as the view changes.
-    The token rides in the fragment, which a browser never sends to a server or leaves in a
-    Referer; the page reads it and sends it back as a header."""
-    view = [("by", by)] * bool(by) + [("group", group)] * bool(group) + [("from", t) for t in shown or []]
-    query = urlencode(view, quote_via=quote)
-    return f"http://127.0.0.1:{port}/{'?' + query if query else ''}#t={token}"
+def board_path(repo: str) -> str:
+    return f"/r/{repo}/"
+
+
+def board_query(shown: list[str] | None = None, by: str | None = None,
+                group: str | None = None, card: int | None = None) -> list[tuple[str, str]]:
+    """The view a board is asked to open on — `from` once per milestone, `by`, `group` — and
+    the card to open it at, as the query the page reads."""
+    return ([("by", by)] * bool(by) + [("group", group)] * bool(group)
+            + [("from", t) for t in shown or []] + [("card", str(card))] * bool(card))
+
+
+def page_url(base: str, token: str, path: str = "/",
+             query: list[tuple[str, str]] | None = None) -> str:
+    """The address to open. What the page is asked to show is a query string, which the page
+    reads and then keeps up to date as the view changes. The token rides in the fragment,
+    which a browser never sends to a server or leaves in a Referer; the page reads it and
+    sends it back as a header."""
+    asked = urlencode(query or [], quote_via=quote)
+    return f"{base}{path}{'?' + asked if asked else ''}#t={token}"
 
 
 def closing_lines(snapshot: dict) -> list[str]:

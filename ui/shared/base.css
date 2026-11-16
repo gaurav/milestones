@@ -1,0 +1,33 @@
+/* What every page of the app shares: the colours, the root size, and how a plain control
+   looks. Each page's own stylesheet is loaded after this one.
+
+   Every size that should grow with the text is in rem, against the one root size on `html`:
+   change that and a whole page scales. Borders, radii and shadows stay in px. The root is 14px,
+   between 13px (too small to read at a glance on a laptop) and 16px (too large on a big
+   monitor), and browser zoom tunes it for each screen. */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9; --panel: #fff; --ink: #1f2328; --muted: #656d76; --line: #d0d7de;
+  --accent: #0969da; --focus: #0969da; --select: #ddf4ff; --warn: #9a6700; --bad: #cf222e; --good: #1a7f37;
+  --chip: #eaeef2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #8d96a0; --line: #30363d;
+    --accent: #4493f8; --focus: #4493f8; --select: #12304f; --warn: #d29922; --bad: #f85149; --good: #3fb950;
+    --chip: #21262d;
+  }
+}
+* { box-sizing: border-box; }
+html { font-size: 14px; }
+body { margin: 0; font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, select, input { font: inherit; color: inherit; }
+button, select, input[type="search"], input[type="date"], .picker input {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.625rem;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+kbd { font: 0.8125rem ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3rem; background: var(--chip); }
+small { color: var(--muted); }

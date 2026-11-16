@@ -134,9 +134,62 @@ def test_remote_repo_reads_githubs_remote_spellings():
 
 
 def test_the_page_url_asks_for_the_view_in_its_query_and_keeps_the_token_in_its_fragment():
-    assert server.page_url(8000, "tok") == "http://127.0.0.1:8000/#t=tok"
-    assert (server.page_url(8000, "tok", ["Babel v1.19 & after", "none"], "priority", "effort")
-            == "http://127.0.0.1:8000/?by=priority&group=effort&from=Babel%20v1.19%20%26%20after&from=none#t=tok")
+    base = "http://127.0.0.1:8000"
+    assert server.page_url(base, "tok") == "http://127.0.0.1:8000/#t=tok"
+    query = server.board_query(["Babel v1.19 & after", "none"], "priority", "effort", card=12)
+    assert (server.page_url(base, "tok", server.board_path("o/r"), query)
+            == "http://127.0.0.1:8000/r/o/r/?by=priority&group=effort"
+               "&from=Babel%20v1.19%20%26%20after&from=none&card=12#t=tok")
+
+
+def test_a_board_is_served_for_any_repo_and_a_page_from_its_folder():
+    assert server.page_for("/") == "index.html"
+    assert server.page_for("/r/NCATSTranslator/Babel/") == "board/index.html"
+    assert server.page_for("/r/o/r") == "board/index.html"
+    assert server.page_for("/prs/") == "prs/index.html"
+    assert server.page_for("/base.css") is None
+    assert server.page_for("/board/main.js") is None
+
+
+class FakeApp(server.App):
+    """An app whose repos are whatever they are called, and whose boards read nothing."""
+
+    def __init__(self, renamed=None):
+        super().__init__({"buckets": DEFAULT_BUCKETS, "repos": [], "focus": [], "labels": {}},
+                         make_board=lambda repo: server.Board(
+                             repo, DEFAULT_BUCKETS, sort_key,
+                             fetch=lambda repo, progress: {"repo": repo, "milestones": [], "cards": []}))
+        self.renamed, self.asked = renamed or {}, []
+
+    def canonical(self, repo):
+        self.asked.append(repo)
+        return self.renamed.get(repo.lower(), repo)
+
+
+def test_one_repo_has_one_board_however_it_is_spelt_or_renamed(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: False)
+    app = FakeApp({"o/old": "O/New", "o/new": "O/New"})
+    board = app.board("o/old")
+    assert app.board("O/NEW") is board and app.board("o/old") is board
+    assert app.asked == ["o/old"]        # the name GitHub gave back needs no second lookup
+    assert board.ready.wait(5) and board.status == "ready" and board.repo == "O/New"
+    assert app.board("a/b") is not board
+    with pytest.raises(server.Refused, match="not a repo"):
+        app.board('o/r") { evil')
+
+
+def test_a_board_that_is_still_being_read_says_so_and_nothing_else(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: False)
+    def failing(repo, progress):
+        progress("issues", 50, 120)
+        raise SystemExit("gh api graphql failed:\nnot found")
+    board = server.Board("o/r", DEFAULT_BUCKETS, sort_key, fetch=failing)
+    board.status = "loading"
+    assert board.snapshot() == {"repo": "o/r", "permissions": "write", "loading": {}, "error": None}
+    board.reload()
+    assert board.status == "failed" and board.ready.is_set()
+    assert board.snapshot()["loading"] == {"what": "issues", "seen": 50, "total": 120}
+    assert "not found" in board.snapshot()["error"]
 
 
 def test_only_loopback_hosts_on_the_servers_own_port_are_served():
@@ -562,27 +615,29 @@ def test_suggest_refs_are_bare_numbers_inside_a_checkout():
         suggest_ref("62", None)
 
 
-def test_a_running_board_is_found_by_repo_whatever_the_case(tmp_path, monkeypatch):
+def test_the_running_app_is_found_through_its_session_file(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    with pytest.raises(SystemExit, match="No board is running for o/r"):
-        client.find_session("o/r")
-    path = client.write_session("O/R", "http://127.0.0.1:1", "tok")
+    with pytest.raises(SystemExit, match="milestones is not running"):
+        client.find_session()
+    path = client.write_session("http://127.0.0.1:1", "tok", "read")
+    assert path == tmp_path / "milestones" / "app.session.json"
     assert path.stat().st_mode & 0o777 == 0o600
-    assert client.find_session("o/r")["token"] == "tok"
+    assert client.find_session()["token"] == "tok"
+    assert client.find_session()["permissions"] == "read"
     with pytest.raises(SystemExit, match="not answering"):
-        client.post(client.find_session("o/r"), "/api/v1/suggestions", {})
+        client.post(client.find_session(), "/api/v1/repos/o/r/suggestions", {})
 
 
-def test_a_board_counts_as_running_only_while_its_process_is(tmp_path, monkeypatch):
+def test_the_app_counts_as_running_only_while_its_process_is(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    assert client.running_session("o/r") is None
-    path = client.write_session("o/r", "http://127.0.0.1:1", "tok")   # this process: alive
-    assert client.running_session("O/R")["url"] == "http://127.0.0.1:1"
-    # A pid no process has: what a board killed outright leaves behind.
-    path.write_text('{"repo": "o/r", "url": "u", "token": "t", "pid": 2147483646}')
-    assert client.running_session("o/r") is None
-    path.write_text('{"repo": "o/r", "url": "u", "token": "t"}')
-    assert client.running_session("o/r") is None
+    assert client.running_session() is None
+    path = client.write_session("http://127.0.0.1:1", "tok")   # this process: alive
+    assert client.running_session()["url"] == "http://127.0.0.1:1"
+    # A pid no process has: what an app killed outright leaves behind.
+    path.write_text('{"url": "u", "token": "t", "pid": 2147483646}')
+    assert client.running_session() is None
+    path.write_text('{"url": "u", "token": "t"}')
+    assert client.running_session() is None
 
 
 def test_brief_buckets_match_milestones_md():

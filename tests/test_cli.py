@@ -764,3 +764,31 @@ def test_doctor_lines_name_the_setting_and_never_the_token():
 def test_token_kind_tells_a_classic_token_by_its_scopes_header():
     assert token_kind("repo, read:org") == "classic token, scopes: repo, read:org"
     assert token_kind(None).startswith("fine-grained or app token")
+
+
+from milestones.cli import app_target, route_argv  # noqa: E402
+
+
+def test_a_repo_or_an_issue_in_place_of_a_command_opens_its_board():
+    commands = {"home", "board", "status", "triage"}
+    assert route_argv([], commands) == ["home"]
+    assert route_argv(["--no-open"], commands) == ["home", "--no-open"]
+    assert route_argv(["--port", "8792", "--no-open"], commands)[0] == "home"
+    assert route_argv(["--port", "8792", "a/b"], commands)[0] == "board"
+    assert route_argv(["status", "--json"], commands) == ["status", "--json"]
+    assert route_argv(["gaurav/milestones"], commands) == ["board", "gaurav/milestones"]
+    assert route_argv(["--no-open", "https://github.com/a/b/pull/7"], commands)[0] == "board"
+    assert route_argv(["a/b#7"], commands) == ["board", "a/b#7"]
+    assert route_argv(["--help"], commands) == ["--help"]
+    assert route_argv(["statsu"], commands) == ["statsu"]      # argparse says what is wrong
+    assert app_target("https://github.com/a/b/pull/7") == ("a/b", 7)
+    assert app_target("a/b#7") == ("a/b", 7)
+    assert app_target("https://github.com/a/b") == ("a/b", None)
+
+
+def test_the_app_opens_without_a_config_but_a_command_about_repos_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    with pytest.raises(SystemExit, match="No config found"):
+        load_config()
+    config = load_config(needs_repos=False)
+    assert config["repos"] == [] and config["buckets"] == DEFAULT_BUCKETS and config["labels"] == {}

@@ -1,6 +1,7 @@
-// Builds every view under ui/<name>/ into milestones/board/static/, which the Python server
-// serves. The first view alphabetically that is called `board` lands at the root; any other
-// view lands in a folder of its own name, so a second front end can sit beside the first.
+// Builds every page under ui/<name>/ into milestones/board/static/, which the Python server
+// serves. `home` lands at the root, where the app opens; any other page lands in a folder of
+// its own name (`board` is served for every /r/OWNER/NAME/). ui/shared/'s stylesheets land
+// at the root too, for every page to link.
 // `node build.mjs --watch` rebuilds on change for `npm run dev`.
 import { build, context } from 'esbuild';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, watch as watchDir } from 'node:fs';
@@ -9,7 +10,7 @@ import { join } from 'node:path';
 const watch = process.argv.includes('--watch');
 const out = 'milestones/board/static';
 const views = readdirSync('ui').filter((d) => d !== 'shared' && statSync(join('ui', d)).isDirectory());
-const outdir = (name) => (name === 'board' ? out : join(out, name));
+const outdir = (name) => (name === 'home' ? out : join(out, name));
 
 const builds = views.map((name) => ({
   entryPoints: [`ui/${name}/main.tsx`],
@@ -35,6 +36,8 @@ for (const name of views) {
   mkdirSync(outdir(name), { recursive: true });
   for (const f of readdirSync(`ui/${name}`)) if (asset(f)) copy(name, f);
 }
+const shared = () => { for (const f of readdirSync('ui/shared')) if (asset(f)) cpSync(`ui/shared/${f}`, join(out, f)); };
+shared();
 if (watch) {
   const ctxs = await Promise.all(builds.map((o) => context(o)));
   await Promise.all(ctxs.map((c) => c.watch()));
@@ -45,6 +48,7 @@ if (watch) {
       console.log(`[watch] copied ui/${name}/${f}`);
     });
   }
+  watchDir('ui/shared', (_, f) => { if (f && asset(f) && existsSync(`ui/shared/${f}`)) shared(); });
   console.log(`watching ${views.length} view(s)`);
 } else {
   await Promise.all(builds.map((o) => build(o)));

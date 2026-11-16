@@ -45,19 +45,25 @@ def config_path() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "milestones.toml"
 
 
-def load_config() -> dict:
+def load_config(needs_repos: bool = True) -> dict:
+    """The config, checked. Most commands are about the repos it names and stop without
+    any; the app is not, and with `needs_repos` off gets the defaults for a config that
+    isn't there yet."""
     path = config_path()
     try:
         with open(path, "rb") as f:
             config = tomllib.load(f)
     except FileNotFoundError:
-        sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
+        if needs_repos:
+            sys.exit(f"No config found at {path}. Create it; for example:\n\n{EXAMPLE_CONFIG}")
+        config = {"repos": []}
     config.setdefault("buckets", list(DEFAULT_BUCKETS))
     # An empty ignore list is the normal state; an empty repos list is not. Focusing on
     # nothing in particular is the normal state too.
     config.setdefault("ignore", [])
     config.setdefault("focus", [])
-    if not config.get("repos"):
+    config.setdefault("repos", [])
+    if needs_repos and not config["repos"]:
         sys.exit(f"Config {path} has no repos. Add some; for example:\n\n{EXAMPLE_CONFIG}")
     bad = [r for r in config["repos"] + config["ignore"] + config["focus"]
            if r.count("/") != 1 or not all(r.split("/"))]

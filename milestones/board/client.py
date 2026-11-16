@@ -1,7 +1,8 @@
-"""Talking to a board that is already running: how `milestones suggest` — and so a coding
-agent in another terminal — puts a proposal in front of the person at the board.
+"""Talking to the app that is already running: how `milestones suggest` — and so a coding
+agent in another terminal — puts a proposal in front of the person at a board, and how a
+second `milestones` opens its page in the first.
 
-A running board leaves a session file saying where it is and the token to use; this reads it."""
+The running app leaves a session file saying where it is and the token to use; this reads it."""
 
 import json
 import os
@@ -10,29 +11,31 @@ import urllib.request
 from pathlib import Path
 
 from . import reconcile
-from .server import CLOSE_REASONS, TOKEN_HEADER, state_path
+from .server import CLOSE_REASONS, TOKEN_HEADER, state_dir
 
 
-def session_path(repo: str, environ=None) -> Path:
-    return state_path(repo, environ).with_suffix(".session.json")
+def session_path(environ=None) -> Path:
+    return state_dir(environ) / "app.session.json"
 
 
-def write_session(repo: str, url: str, token: str) -> Path:
-    """Say where this board is. Mode 0600: the token in it is what lets a request write to
-    GitHub through the board."""
-    path = session_path(repo)
+def write_session(url: str, token: str, permissions: str = "write") -> Path:
+    """Say where the app is. Mode 0600: the token in it is what lets a request write to
+    GitHub through the app. `permissions` is there for the next `milestones` to read: it
+    won't open a read-only look in an app that writes."""
+    path = session_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(mode=0o600, exist_ok=True)
     path.chmod(0o600)
-    path.write_text(json.dumps({"repo": repo, "url": url, "token": token, "pid": os.getpid()}))
+    path.write_text(json.dumps({"url": url, "token": token, "pid": os.getpid(),
+                                "permissions": permissions}))
     return path
 
 
-def running_session(repo: str) -> dict | None:
-    """The session of a board that is still running for a repo, if there is one. A file left
-    by a board that was killed outright names a process that is gone, and counts for nothing."""
+def running_session() -> dict | None:
+    """The session of an app that is still running, if there is one. A file left by one that
+    was killed outright names a process that is gone, and counts for nothing."""
     try:
-        session = find_session(repo)
+        session = find_session()
         os.kill(int(session["pid"]), 0)
     except (SystemExit, KeyError, ValueError, TypeError, ProcessLookupError):
         return None
@@ -41,18 +44,14 @@ def running_session(repo: str) -> dict | None:
     return session
 
 
-def find_session(repo: str) -> dict:
-    """The running board for a repo, whatever case the name was typed in."""
-    wanted = session_path(repo)
-    for path in wanted.parent.glob("board-*.session.json") if wanted.parent.is_dir() else []:
-        try:
-            session = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if str(session.get("repo", "")).lower() == repo.lower():
-            return session
-    raise SystemExit(f"No board is running for {repo}. Start one in another terminal: "
-                     f"milestones board {repo}")
+def find_session() -> dict:
+    """Where the app says it is. There is one app, whatever repos it has open."""
+    try:
+        session = json.loads(session_path().read_text())
+        session["url"], session["token"]
+    except (OSError, ValueError, KeyError, TypeError):
+        raise SystemExit("milestones is not running. Start it in another terminal: milestones")
+    return session
 
 
 def post(session: dict, path: str, payload: dict) -> dict:
@@ -60,17 +59,18 @@ def post(session: dict, path: str, payload: dict) -> dict:
         session["url"] + path, data=json.dumps(payload).encode(), method="POST",
         headers={TOKEN_HEADER: session["token"], "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        # Long enough for the app to read a large repo it had not opened yet.
+        with urllib.request.urlopen(request, timeout=660) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         try:
             message = json.load(error).get("error")
         except ValueError:
             message = None
-        raise SystemExit(f"The board refused: {message or error.reason}")
+        raise SystemExit(f"milestones refused: {message or error.reason}")
     except OSError:
-        raise SystemExit(f"The board for {session['repo']} is not answering at {session['url']}; "
-                         f"it may have stopped. Start it again: milestones board {session['repo']}")
+        raise SystemExit(f"milestones is not answering at {session['url']}; it may have "
+                         "stopped. Start it again: milestones")
 
 
 def proposals(issue: int, reason: str, source: str, milestone: str | None = None,

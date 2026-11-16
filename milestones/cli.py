@@ -20,6 +20,7 @@ from pathlib import Path
 from . import env, gh
 # The table of priority and effort labels: pure, and the board's as much as the CLI's.
 from .board import reconcile
+from .board.server import DEFAULT_PORT
 # The config, the conventions and the cross-repo reads, which the web app uses too.
 from .core import (  # noqa: F401 — re-exported: tests and older callers import them from here
     COLOR_NAMES, DATE_RE, DEFAULT_BUCKETS, EXAMPLE_CONFIG, ISSUE_RE, KINDS, OPTIONAL_BUCKETS,
@@ -937,23 +938,38 @@ def remote_repo(url: str) -> str | None:
     return f"{match[1]}/{match[2]}" if match else None
 
 
+def app_target(text: str | None) -> tuple[str, int | None]:
+    """(repo, issue or pull request number) for what the app is asked to open: a repo as
+    OWNER/NAME or its URL, or an issue or a pull request as OWNER/NAME#N or its URL."""
+    if ISSUE_RE.fullmatch(text.strip()):
+        return parse_issue_ref(text)
+    return parse_repo(text), None
+
+
+def cmd_home(config, args):
+    """Open the app on its home page: every tracked repo's milestones."""
+    from .board import server
+    server.run(config, port=args.port, open_browser=not args.no_open, reload=args.reload)
+
+
 def cmd_board(config, args):
-    """Open the triage board for one repo: the one named, or the checkout you are in."""
-    # Imported here: the board is the one command with a server and a front end behind it.
+    """Open the board for one repo: the one named, the one an issue or a pull request named
+    is in, or the checkout you are in. The repo need not be in the config."""
+    # Imported here: the app is the one command with a server and a front end behind it.
     from .board import client, server
     if args.brief:
         print(client.brief(config["buckets"]))
         return
     if args.repo:
-        repo = parse_repo(args.repo)
+        repo, card = app_target(args.repo)
     else:
-        repo = cwd_repo()
+        repo, card = cwd_repo(), None
         if repo is None:
-            sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
+            sys.exit("Name a repo (milestones OWNER/NAME), or run this from a checkout "
                      "whose origin is on GitHub.")
-    server.run(repo, config["buckets"], sort_key, port=args.port,
-               open_browser=not args.no_open, shown=args.sources, by=args.by, group=args.group,
-               aliases=config["labels"].get(repo.lower()), reload=args.reload)
+    server.run(config, server.board_path(repo),
+               server.board_query(args.sources, args.by, args.group, card), port=args.port,
+               open_browser=not args.no_open, reload=args.reload)
 
 
 def cwd_repo() -> str | None:
@@ -1008,7 +1024,7 @@ def cmd_suggest(config, args):
             effort=args.effort, add_labels=args.add_label, remove_labels=args.remove_label,
             title=args.title, comment=comment, close=args.close)
     for repo, proposed in by_repo.items():
-        added = client.post(client.find_session(repo), "/api/v1/suggestions",
+        added = client.post(client.find_session(), f"/api/v1/repos/{repo}/suggestions",
                             {"suggestions": proposed})["suggestions"]
         for s in added:
             print(f"suggested for {repo}#{s['issue']}: {s['kind']} → "
@@ -1515,11 +1531,37 @@ def cmd_discover(config, args):
               + ("" if args.list_ignored else " Pass `--list-ignored` to see which."))
 
 
+def route_argv(argv: list[str], commands: set[str]) -> list[str]:
+    """The command line with its command spelt out: nothing at all, or flags alone, is `home`;
+    a repo, an issue or a pull request in place of a command is `board` on it."""
+    # `--port N` is the one flag here whose value is a word of its own, and not the command.
+    first = next((a for i, a in enumerate(argv)
+                  if not a.startswith("-") and not (i and argv[i - 1] == "--port")), None)
+    if first in commands or any(a in ("-h", "--help") for a in argv):
+        return argv
+    if first is None:
+        return ["home", *argv]
+    if ISSUE_RE.fullmatch(first) or REPO_RE.fullmatch(first):
+        return ["board", *argv]
+    return argv
+
+
 def main():
     parser = argparse.ArgumentParser(prog="milestones", description=__doc__)
     sub = parser.add_subparsers()
-    # Bare `milestones` is `milestones status`, so it needs that command's defaults too.
-    parser.set_defaults(func=cmd_status, json=False)
+
+    def app_flags(command):
+        command.add_argument("--port", type=int,
+                             help=f"default: {DEFAULT_PORT}, or any free port if that is taken")
+        command.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
+        command.add_argument("--reload", action="store_true",
+                             help="restart on the same URL whenever the package's Python "
+                                  "changes (for working on the app; pages need a refresh after)")
+
+    home = sub.add_parser("home", help="open the app in your browser, on every tracked repo's "
+                                       "milestones (what `milestones` alone does)")
+    app_flags(home)
+    home.set_defaults(func=cmd_home)
 
     status = sub.add_parser("status",
                             help="all open milestones across configured repos, by due date")
@@ -1561,9 +1603,11 @@ def main():
     setup.set_defaults(func=cmd_setup)
     board = sub.add_parser("board", help="triage one repo's issues on a board in your browser, "
                                          "a column per milestone; every move is written "
-                                         "to GitHub as you make it")
-    board.add_argument("repo", nargs="?", metavar="OWNER/NAME",
-                       help="default: the origin of the checkout you are in")
+                                         "to GitHub as you make it (what `milestones REPO` does)")
+    board.add_argument("repo", nargs="?", metavar="REPO",
+                       help="OWNER/NAME or its URL, or an issue or pull request (OWNER/NAME#N "
+                            "or its URL) to open the board at; default: the origin of the "
+                            "checkout you are in")
     board.add_argument("--from", dest="sources", action="append", metavar="MILESTONE",
                        help="show only these milestones' columns to begin with (repeatable; "
                             "`none` is the issues with no milestone)")
@@ -1574,11 +1618,7 @@ def main():
                        metavar="KIND",
                        help="group the cards within each column to begin with: priority, "
                             "effort, milestone, or priority,effort for both (the default)")
-    board.add_argument("--port", type=int, default=0, help="default: any free port")
-    board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
-    board.add_argument("--reload", action="store_true",
-                       help="restart on the same URL whenever the package's Python changes "
-                            "(for working on the board; the page needs a refresh after)")
+    app_flags(board)
     board.add_argument("--brief", action="store_true",
                        help="print the briefing to give a coding agent that will suggest "
                             "changes, and exit")
@@ -1656,8 +1696,10 @@ def main():
                      help="print the PRs as JSON instead of tables")
     prs.set_defaults(func=cmd_prs)
 
-    args = parser.parse_args()
-    args.func(load_config(), args)
+    argv = route_argv(sys.argv[1:], set(sub.choices))
+    args = parser.parse_args(argv)
+    # The app opens with no config at all, and on a repo the config doesn't name.
+    args.func(load_config(needs_repos=args.func not in (cmd_home, cmd_board, cmd_suggest)), args)
 
 
 if __name__ == "__main__":
