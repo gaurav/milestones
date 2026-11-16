@@ -205,9 +205,11 @@ try {
     // In the panel, a linked pull request that is on the board (an open one) is focused rather
     // than opened on GitHub; a closed one, which has no card, still opens GitHub.
     if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
-    await page.click('.card:has(.card-ties .closed-by) .card-title >> nth=0'); await settle();
+    // Only where some card is closed by a pull request: a repo may have mentions and no more.
+    const closed = page.locator('.card:has(.card-ties .closed-by) .card-title').first();
+    if (await closed.count()) { await closed.click(); await settle(); }
     const link = page.locator('.detail dt:text-is("Closed by") + dd a').first();
-    if (await link.count()) {
+    if (await closed.count() && await link.count()) {
       const number = (await link.textContent()).trim();
       const popup = page.context().waitForEvent('page', { timeout: 1500 }).catch(() => null);
       await link.click(); await settle();
