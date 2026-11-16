@@ -1,0 +1,10 @@
+/* The pull requests page. Over ui/shared/base.css and pages.css. */
+td.title a { color: var(--ink); }
+td.when { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+td.number { white-space: nowrap; color: var(--muted); }
+.chip.draft { color: var(--muted); margin-left: 0.5rem; font-size: 0.75rem; line-height: 1.25rem; }
+.chip.none { color: var(--warn); }
+section > p { margin: 0 0 0.5rem; color: var(--muted); }
+table.prs { table-layout: fixed; }
+table.prs col.repo { width: 22%; } table.prs col.number { width: 5rem; } table.prs col.milestone { width: 16%; } table.prs col.when { width: 7rem; } table.prs col.go { width: 5rem; }
+table.prs td { overflow-wrap: anywhere; }
