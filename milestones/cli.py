@@ -7,6 +7,7 @@ import os
 import re
 import select
 import shlex
+import subprocess
 import sys
 import termios
 import textwrap
@@ -17,7 +18,7 @@ from collections import Counter
 from itertools import cycle
 from pathlib import Path
 
-from . import gh
+from . import env, gh
 
 # The one bucket the triage walk reads from as well as writes to: an issue on it has been
 # looked at and can't be placed yet — it needs a reproduction, tests, an investigation or a
@@ -740,6 +741,11 @@ def _milestones_by_title(repo: str, state: str = "all") -> dict[str, dict]:
 def _ensure_bucket(repo: str, title: str, existing: dict[str, dict]) -> dict:
     """The open milestone called `title`, creating or reopening it as needed."""
     milestone = existing.get(title)
+    if gh.read_only() and (milestone is None or milestone["state"] != "open"):
+        # No number: nothing can be put on a milestone that wasn't made.
+        print(f"would {'create' if milestone is None else 'reopen'}: {title}")
+        return {"title": title, "number": None, "html_url": "", "due_on": None,
+                "open_issues": 0}
     if milestone is None:
         milestone = gh.api(f"repos/{repo}/milestones", method="POST", title=title)
         print(f"created:  {title}")
@@ -791,6 +797,10 @@ def cmd_rollover(config, args):
         for item in items:
             print(f"  #{item['number']} {item['title']}"
                   f"{' (PR)' if 'pull_request' in item else ''}")
+        if gh.read_only():
+            print(f"read-only: would move these {len(items)} from '{args.src}' to '{args.dst}'"
+                  + (f", and close '{args.src}'" if args.close else "") + ". Nothing written.")
+            return
         answer = ask(f"Move {len(items)} open issues and PRs from '{args.src}' to '{args.dst}' "
                      f"in {args.repo}? [y/N] ")
         if answer.strip().lower() != "y":
@@ -841,7 +851,8 @@ def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
         return None
     data = gh.graphql(
         f'query {{ organization(login: "{owner}") {{ issueFields(first: 50) {{ nodes {{ '
-        f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}")
+        f"__typename ... on IssueFieldSingleSelect {{ id name options {{ id name }} }} }} }} }} }}",
+        owner)
     # Either level can come back null beside a partial error that gh.graphql has already
     # warned about — a token without read:org, the feature off, SSO not authorised — and
     # that means no Priority field to offer, not the end of the walk.
@@ -849,13 +860,13 @@ def fetch_priority_field(owner: str) -> dict[str, tuple[str, str]] | None:
     return priority_options(fields)
 
 
-def set_priority(issue_id: str, field_id: str, option_id: str) -> None:
-    """Raises SystemExit on any failure, as every other write here does — strict, since a
-    failed mutation still answers with a non-null `data`."""
-    data = gh.graphql(
-        f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
-        f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
-        f"{{ clientMutationId }} }}", strict=True)
+def set_priority(issue_id: str, field_id: str, option_id: str, owner: str | None = None) -> None:
+    """Raises SystemExit on any failure, as every other write here does — `gh.mutate` is
+    strict, since a failed mutation still answers with a non-null `data`."""
+    data = gh.mutate("set an issue's Priority field",
+                     f'mutation {{ setIssueFieldValue(input: {{issueId: "{issue_id}", '
+                     f'issueFields: [{{fieldId: "{field_id}", singleSelectOptionId: "{option_id}"}}]}}) '
+                     f"{{ clientMutationId }} }}", owner)
     if data.get("setIssueFieldValue") is None:
         raise SystemExit("setIssueFieldValue returned nothing; the priority was not set")
 
@@ -1155,7 +1166,7 @@ def cmd_triage(config, args):
         field_id, option_id = priority[key]
         for target, node_id in targets:
             try:
-                set_priority(node_id, field_id, option_id)
+                set_priority(node_id, field_id, option_id, owner)
             except SystemExit as exit:
                 print(f"  {exit}")
                 # Its first line: the rest is gh's stderr, already printed above.
@@ -1175,6 +1186,13 @@ def cmd_triage(config, args):
         if not title:
             return None
         milestone = known[repo].get(title)
+        if gh.read_only() and (milestone is None or milestone["state"] != "open"):
+            # Asked nothing and logged nothing: the write would be refused (ReadOnly, which
+            # would end the walk), and the summary lists only what was made. No number, so
+            # the walk's own read-only check says where the item would have gone.
+            print(f"  read-only: would {'create' if milestone is None else 'reopen'} {title}")
+            return {"title": title, "number": None, "html_url": "", "due_on": None,
+                    "open_issues": 0}
         if milestone is None:
             if ask(f"  no milestone '{title}' in {repo}; create it? [y/N] ").strip().lower() != "y":
                 return None
@@ -1275,11 +1293,20 @@ def cmd_triage(config, args):
                         choices[int(choice) - 1] = chosen = _ensure_bucket(
                             repo, chosen["title"], existing)
                         # Logged by what _ensure_bucket found: one made open since the menu
-                        # was built (another session, say) took no write, so it isn't logged.
-                        if before is None:
+                        # was built (another session, say) took no write, so it isn't logged,
+                        # and nor is a read-only run's stand-in, which has no number.
+                        if chosen["number"] is None:
+                            pass
+                        elif before is None:
                             done["created"].append((repo, chosen["title"]))
                         elif before["state"] != "open":
                             done["reopened"].append((repo, chosen["title"]))
+                if chosen is not None and gh.read_only():
+                    # Ahead of every write the answer makes: the milestone, a priority, the
+                    # issues a PR closes.
+                    print(f"  read-only: would go on {chosen['title']}")
+                    done["skipped"].append(f"{repo}#{issue['number']}")
+                    break
                 if chosen is not None:
                     if chosen["title"] == issue["milestone"]:
                         # Where it already is: no milestone to write, and it is still to
@@ -1394,6 +1421,9 @@ def cmd_assign(config, args):
     # ponytail: a pipe is the confirmation — the refs were picked in fzf or listed by a
     # script, there is no tty to answer from, and a milestone is a reversible field that
     # never closes or deletes anything. What a pipe can't confirm, it leaves (`held`).
+    if gh.read_only():
+        print("read-only: nothing written.")
+        return
     if confirming and ask("Proceed? [y/N] ").strip().lower() != "y":
         sys.exit("Aborted.")
     failed: list[str] = []  # what didn't land, for the line the run ends on
@@ -1425,7 +1455,7 @@ def cmd_assign(config, args):
         # After the milestone, so a failed field write can't lose the assignment.
         if "pull_request" not in issue:
             if attempt(f"{repo}#{number} priority",
-                       lambda: set_priority(issue["node_id"], *field)):
+                       lambda: set_priority(issue["node_id"], *field, owner)):
                 print(f"    priority {PRIORITY_KEYS[key]}")
             continue
         # A PR has no fields: its priority goes onto the open issues it closes.
@@ -1433,7 +1463,7 @@ def cmd_assign(config, args):
                        and c["repo"].split("/")[0].lower() == owner.lower()]
         for c in prioritised:
             if attempt(f"{c['repo']}#{c['number']} priority",
-                       lambda: set_priority(c["id"], *field)):
+                       lambda: set_priority(c["id"], *field, owner)):
                 print(f"    {c['repo']}#{c['number']} priority {PRIORITY_KEYS[key]} "
                       f"(closed by #{number})")
         if not prioritised:
@@ -1450,6 +1480,87 @@ def cmd_assign(config, args):
     if failed:
         sys.exit(f"{plural(len(failed), 'write')} failed, and the rest went through: "
                  + "; ".join(failed))
+
+
+def remote_repo(url: str) -> str | None:
+    """OWNER/NAME from a git remote's URL, in either spelling git uses for GitHub; None for
+    a remote that is somewhere else."""
+    match = re.fullmatch(r"(?:git@github\.com:|ssh://git@github\.com/|https?://github\.com/)"
+                         r"([^/\s]+)/([^/\s]+?)(?:\.git)?/?", url.strip())
+    return f"{match[1]}/{match[2]}" if match else None
+
+
+def cmd_board(config, args):
+    """Open the triage board for one repo: the one named, or the checkout you are in."""
+    # Imported here: the board is the one command with a server and a front end behind it.
+    from .board import server
+    if args.repo:
+        repo = parse_repo(args.repo)
+    else:
+        found = subprocess.run(["git", "remote", "get-url", "origin"],
+                               capture_output=True, text=True)
+        repo = remote_repo(found.stdout) if found.returncode == 0 else None
+        if repo is None:
+            sys.exit("Name a repo (milestones board OWNER/NAME), or run this from a checkout "
+                     "whose origin is on GitHub.")
+    server.run(repo, config["buckets"], sort_key, port=args.port,
+               open_browser=not args.no_open, shown=args.sources)
+
+
+def token_kind(scopes: str | None) -> str:
+    """What `doctor` says about a token, from the X-OAuth-Scopes header of a call made with
+    it. Only a classic token sends that header; a fine-grained one sends none, and what it
+    may do can only be found by trying."""
+    if scopes is None:
+        return "fine-grained or app token (permissions are per repository; probed below)"
+    names = [s.strip() for s in scopes.split(",") if s.strip()]
+    return f"classic token, scopes: {', '.join(names) or 'none'}"
+
+
+def doctor_lines(settings: dict, sources: dict, owners: list[str]) -> list[str]:
+    """The settings half of `doctor`: the mode, and which token each owner's calls use.
+    Never a token itself — a report gets pasted into issues."""
+    mode = env.permissions(settings)
+    lines = [f"permissions: {mode}"
+             + (f"  ({env.PERMISSIONS} from {sources[env.PERMISSIONS]})"
+                if env.PERMISSIONS in sources else "  (default)")
+             + ("" if mode == "write" else " — every command says what it would do, and writes nothing")]
+    for owner in owners:
+        key = env.token_key(settings, owner)
+        lines.append(f"{owner}: " + (f"{key} from {sources[key]}" if key else "gh's own login"))
+    return lines
+
+
+def cmd_doctor(config, args):
+    """Which token and permissions are in effect, and what that token can see."""
+    settings, sources = gh.settings()
+    owners = sorted({r.split("/")[0] for r in config["repos"]}, key=str.lower)
+    print("env files, nearest first: " + ", ".join(
+        f"{path}{'' if path.exists() else ' (none)'}" for path in env.files()))
+    print("\n".join(doctor_lines(settings, sources, owners)))
+    seen = {}
+    for owner in owners:
+        key = env.token_key(settings, owner)
+        if key not in seen:
+            # -i puts the response headers ahead of the body, a blank line between them.
+            head, _, body = gh._run(["api", "-i", "user"], owner=owner).replace(
+                "\r", "").partition("\n\n")
+            scopes = next((line.split(":", 1)[1].strip() for line in head.splitlines()
+                           if line.lower().startswith("x-oauth-scopes:")), None)
+            seen[key] = (json.loads(body)["login"], scopes)
+            print(f"\n{key or 'gh login'}: signed in as {seen[key][0]}; {token_kind(scopes)}")
+        kind = "organization" if gh.api(f"users/{owner}")["type"] == "Organization" else "user"
+        checks = {"projects": f'{kind}(login: "{owner}") {{ projectsV2(first: 1) '
+                              "{ nodes { title } } }"}
+        if kind == "organization":
+            checks["issue fields"] = (f'organization(login: "{owner}") {{ issueFields(first: 1) '
+                                      "{ nodes { __typename } } }")
+        for name, query in checks.items():
+            errors = gh.probe(f"query {{ {query} }}", owner)
+            print(f"  {owner} {name}: " + ("readable" if not errors else
+                                           f"not readable — {errors[0].splitlines()[0]}"))
+        if kind == "user":
+            print(f"  {owner} issue fields: none (an organisation feature)")
 
 
 def cmd_prs(config, args):
@@ -1993,6 +2104,18 @@ def main():
     setup = sub.add_parser("setup", help="create the standing bucket milestones in a repo")
     setup.add_argument("repo", metavar="OWNER/NAME")
     setup.set_defaults(func=cmd_setup)
+    board = sub.add_parser("board", help="triage one repo's issues on a board in your browser, "
+                                         "a column per milestone; every move is written "
+                                         "to GitHub as you make it")
+    board.add_argument("repo", nargs="?", metavar="OWNER/NAME",
+                       help="default: the origin of the checkout you are in")
+    board.add_argument("--from", dest="sources", action="append", metavar="MILESTONE",
+                       help="show only these milestones' columns to begin with (repeatable; "
+                            "`none` is the issues with no milestone)")
+    board.add_argument("--port", type=int, default=0, help="default: any free port")
+    board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
+    board.set_defaults(func=cmd_board)
+
     check = sub.add_parser("check",
                            help="milestones that need renaming, dating, closing or rolling over")
     # Nothing to walk if the findings are going out as JSON.
@@ -2030,6 +2153,10 @@ def main():
     listing.add_argument("--ignore-remaining", action="store_true",
                          help="add every repo suggested above to the ignore list")
     discover.set_defaults(func=cmd_discover)
+    doctor = sub.add_parser("doctor", help="show which GitHub token and permissions are in "
+                                           "effect, and what that token can see")
+    doctor.set_defaults(func=cmd_doctor)
+
     prs = sub.add_parser("prs", help="every open PR of yours, anywhere, grouped by whether "
                                      "its repo is tracked, ignored, or neither")
     prs.add_argument("--assigned", action="store_true", help="also PRs assigned to you")

@@ -3,6 +3,10 @@
 /data/*
 !/data/.gitkeep
 
+# The board's front end: built by `npm run build`
+/milestones/board/static/
+node_modules/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
