@@ -3,9 +3,22 @@ all the places an earlier triage decision might have been written down.
 
 The normalisers here are pure, and are what `docs/BoardAPI.md` describes as a card."""
 
+import time
+
 from .. import gh
+from .log import say
 
 PAGE = 50
+# How long to wait before each new try at a page that failed, and the page size halves with
+# each one: a page of fifty cards with every field is a heavy query, and what GitHub answers
+# a heavy query with, when it is busy, is a timeout (a 502, or "Something went wrong while
+# executing your query"). A smaller page usually goes through.
+RETRY_WAITS = (2, 8, 30)
+# Both queries page by creation date, which nothing changes: by last update, the board's own
+# writes landing mid-read would move an issue from after the cursor to before it, and it would
+# never be read. Newest first, so that recent work is what a board filling in shows first; an
+# issue opened during the read is behind the cursor, and the next refresh finds it. The page
+# sorts its columns itself.
 
 # What a card needs of an issue, for a page of them and for one read alone.
 # `issueFieldValues` is a union, hence the per-type fragments; CROSS_REFERENCED_EVENT is how a
@@ -37,9 +50,8 @@ ISSUE_FIELDS = """
 # One page of open issues.
 ISSUES_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
-  nameWithOwner
   issues(first: %(page)d, states: OPEN, after: %(after)s,
-         orderBy: {field: UPDATED_AT, direction: DESC}) {
+         orderBy: {field: CREATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {""" + ISSUE_FIELDS + """} } } }
 """
@@ -60,7 +72,7 @@ PR_FIELDS = """
 PRS_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
   pullRequests(first: %(page)d, states: OPEN, after: %(after)s,
-               orderBy: {field: UPDATED_AT, direction: DESC}) {
+               orderBy: {field: CREATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {""" + PR_FIELDS + """} } } }
 """
@@ -180,18 +192,34 @@ def carried_by(pr: dict, cards: dict[tuple[str, int], dict], parked: int | None)
     return numbers
 
 
-def _pages(query: str, owner: str, name: str, connection: str, progress):
-    after, seen = "null", 0
+def _pages(query: str, owner: str, name: str, connection: str, sleep=time.sleep):
+    """Each page of a connection as `{what, cards: [node], seen, total}`, retrying a page that
+    fails (`RETRY_WAITS`) at the same cursor with a smaller page. If the last try fails too,
+    the last thing yielded is `{what, gap: why, seen, total}`, and the rest of the connection
+    goes unread: one bad page costs what is after it, not what was read before."""
+    after, seen, total, size = "null", 0, None, PAGE
     while True:
-        data = gh.graphql(query % {"owner": owner, "name": name, "page": PAGE, "after": after},
-                          owner)
+        for wait in (*RETRY_WAITS, None):
+            try:
+                data = gh.graphql(query % {"owner": owner, "name": name, "page": size,
+                                           "after": after}, owner)
+                break
+            except SystemExit as exit:
+                why = str(exit).strip().splitlines()[-1]
+                if wait is None:
+                    yield {"what": connection, "gap": why, "seen": seen, "total": total}
+                    return
+                size = max(size // 2, 5)
+                say(f"{owner}/{name}: GitHub failed reading {connection} after {seen} ({why}); "
+                    f"trying again in {wait} s, {size} at a time", "warn")
+                sleep(wait)
         repository = data.get("repository")
         if repository is None:
             raise SystemExit(f"No such repository, or not one this token can read: {owner}/{name}")
         page = repository[connection]
-        seen += len(page["nodes"])
-        progress(connection, seen, page["totalCount"])
-        yield repository.get("nameWithOwner"), page["nodes"]
+        seen, total = seen + len(page["nodes"]), page["totalCount"]
+        yield {"what": connection, "cards": [n for n in page["nodes"] if n],
+               "seen": seen, "total": total}
         if not page["pageInfo"]["hasNextPage"]:
             return
         after = '"%s"' % page["pageInfo"]["endCursor"]
@@ -230,22 +258,35 @@ def fetch_cards(repo: str, numbers: list[int]) -> dict:
             "milestones": fetch_milestones(repo)}
 
 
-def fetch_board(repo: str, progress=lambda *a: None) -> dict:
-    """Everything `GET /api/v1/board` returns but the session's own state."""
+def fetch_frame(repo: str) -> dict:
+    """What a board needs before its first card: GitHub's name for the repo (which follows a
+    rename or a transfer), its milestones, labels and the owner's issue fields. Only the name
+    and the milestones are needed: without labels or fields, a board still works."""
+    found = gh.api(f"repos/{repo}")
+    canonical = found["full_name"]
+    frame = {"repo": canonical, "milestones": fetch_milestones(canonical),
+             "labels": [], "fields": {}}
+    try:
+        frame["labels"] = [{"name": l["name"], "color": l["color"]} for l in
+                           gh.api(f"repos/{canonical}/labels?per_page=100", paginate=True)]
+        frame["fields"] = fetch_fields(canonical.split("/")[0])
+    except SystemExit as exit:
+        say(f"{canonical}: could not read its labels or issue fields "
+            f"({str(exit).strip().splitlines()[-1]}); the board goes on without them", "warn")
+    return frame
+
+
+def card_pages(repo: str, sleep=time.sleep):
+    """Every open issue's card, then every open pull request's, a page at a time, as
+    `_pages` yields them. Issues come first so that a pull request is never on a board
+    without the issues it closes, which a move of it carries along."""
     owner, name = repo.split("/")
-    cards = []
-    canonical = repo
-    for name_with_owner, nodes in _pages(ISSUES_QUERY, owner, name, "issues", progress):
-        # The name GitHub answers with, which follows a rename or a transfer.
-        canonical = name_with_owner or canonical
-        cards += [norm_issue(n, canonical) for n in nodes if n]
-    for _, nodes in _pages(PRS_QUERY, owner, name, "pullRequests", progress):
-        cards += [norm_pr(n, canonical) for n in nodes if n]
-    milestones = fetch_milestones(canonical)
-    labels = [{"name": l["name"], "color": l["color"]} for l in
-              gh.api(f"repos/{canonical}/labels?per_page=100", paginate=True)]
-    return {"repo": canonical, "milestones": milestones, "cards": cards, "labels": labels,
-            "fields": fetch_fields(canonical.split("/")[0])}
+    for query, connection, norm in ((ISSUES_QUERY, "issues", norm_issue),
+                                    (PRS_QUERY, "pullRequests", norm_pr)):
+        for page in _pages(query, owner, name, connection, sleep):
+            if "cards" in page:
+                page = {**page, "cards": [norm(n, repo) for n in page["cards"]]}
+            yield page
 
 
 def norm_fields(nodes: list[dict]) -> dict:

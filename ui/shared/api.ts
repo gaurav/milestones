@@ -1,5 +1,6 @@
 // The board's HTTP API, as docs/BoardAPI.md describes it. This is the only file that knows a
 // URL: a different front end starts by copying it.
+import { watch } from './alive.ts';
 
 export interface Label { name: string; color: string }
 export interface PrRef { number: number; title: string; state: string; draft: boolean; url: string }
@@ -70,10 +71,23 @@ export interface Action {
   status: ActionStatus;
 }
 
+/** How far a read of the cards has got: `what` is `issues` or `pullRequests`; `total` is null
+ *  until the first page is in. */
+export interface Filling { what: string; seen: number; total: number | null }
+
+/** What the last read of the cards couldn't get. */
+export interface Gap { what: string; seen: number; total: number | null; error: string }
+
+/** A page of cards, as the `cards` event brings it while the board is read. */
+export interface CardsPage { cards: Card[]; filling: Filling; suggestions: Suggestion[] }
+
 export interface BoardData {
-  /** Only while the repo is still being read, or could not be: how far the read has got, and
-   *  `error` if it stopped. Nothing else but `repo` and `permissions` comes with it. */
-  loading?: { what?: string; seen?: number; total?: number };
+  /** Only until the repo's milestones are read, or if they could not be: `error` if it
+   *  stopped. Nothing else but `repo` and `permissions` comes with it. */
+  loading?: Record<string, never>;
+  /** While the cards are still arriving; null once the read has ended. */
+  filling?: Filling | null;
+  gaps?: Gap[];
   error?: string | null;
   /** From a refresh only: the cards it found closed, merged or gone, and took off the board. */
   gone?: number[];
@@ -199,13 +213,15 @@ export class Api {
     return this.call('POST', '/suggestions/resolve', { ids, decision });
   }
   /** Server-sent events: every action as it changes state, every milestone as it changes. */
-  events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; plan(p: PlanInfo): void; reload(): void }): EventSource {
+  events(on: { action(a: Action): void; milestone(m: Milestone): void; suggestion(s: Suggestion): void; plan(p: PlanInfo): void; cards(p: CardsPage): void; reload(): void }): EventSource {
     const source = new EventSource(`${this.base}/events?token=${encodeURIComponent(this.token)}`);
     source.addEventListener('action', (e) => on.action(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('milestone', (e) => on.milestone(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('suggestion', (e) => on.suggestion(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('plan', (e) => on.plan(JSON.parse((e as MessageEvent).data)));
+    source.addEventListener('cards', (e) => on.cards(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('reload', () => on.reload());
+    watch(source, this.token);
     return source;
   }
 }

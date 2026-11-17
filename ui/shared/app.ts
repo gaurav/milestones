@@ -1,4 +1,5 @@
 // The app's own API: what is not about one repo's board. See docs/BoardAPI.md.
+import { watch } from './alive.ts';
 
 export interface AppInfo {
   permissions: 'read' | 'write';
@@ -96,6 +97,7 @@ export class AppApi {
     for (const [name, take] of Object.entries(on)) {
       source.addEventListener(name, (e) => take(JSON.parse((e as MessageEvent).data)));
     }
+    watch(source, this.token);
     return source;
   }
 }

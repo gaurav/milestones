@@ -39,6 +39,13 @@ small { color: var(--muted); }
 .picker { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: 32rem; max-width: 90vw; padding: 0.75rem; box-shadow: 0 16px 48px #0006; }
 .picker-head { color: var(--muted); margin-bottom: 0.375rem; }
 .picker input { width: 100%; padding: 0.375rem 0.625rem; font-size: 1.0625rem; }
+/* The page switched off because the app behind it has stopped (ui/shared/alive.ts). */
+.stopped { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: grayscale(1); }
+.stopped > div { max-width: 32rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.25rem; box-shadow: 0 8px 24px rgb(0 0 0 / 0.15); }
+.stopped h2 { margin: 0 0 0.5rem; font-size: 1.15rem; }
+.stopped p { margin: 0; color: var(--muted); }
+.stopped code { font: 0.9em ui-monospace, monospace; color: var(--ink); }
 .toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 0.625rem 1rem; border-radius: 8px; z-index: 20; max-width: 80vw; cursor: pointer; }
 .fatal { padding: 3em; max-width: 46em; margin: auto; font-size: 1.125rem; }
 .picker-foot { display: flex; justify-content: flex-end; gap: 0.625rem; margin-top: 0.625rem; }

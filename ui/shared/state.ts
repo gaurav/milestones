@@ -2,7 +2,7 @@
 // functions; nothing else talks to the API.
 import { computed, effect, signal } from '@preact/signals';
 import { Api, parseLocation, repoFromPath } from './api.ts';
-import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
+import type { Action, BoardData, Card, CardsPage, Filling, Gap, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
   DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, filtersFrom, group, initialView,
   focusAfter, latestAction, nextFocus, noFilters, unsettled, viewQuery, withValue,
@@ -17,8 +17,12 @@ export const api = new Api(asked.token, repoFromPath(location.pathname));
 const askedCard = Number(new URLSearchParams(location.search).get('card')) || null;
 
 export const loading = signal(true);
-/** How far the first read of the repo has got, while there is no board to show yet. */
+/** What the page says while there is no board to show yet: until the milestones are read. */
 export const reading = signal('');
+/** How far a read of the cards has got, while one is under way; null once it has ended. */
+export const filling = signal<Filling | null>(null);
+/** What the last read couldn't get: the board shows what it has, and says so. */
+export const gaps = signal<Gap[]>([]);
 export const fatal = signal('');
 export const toast = signal('');
 export const board = signal<BoardData | null>(null);
@@ -115,6 +119,8 @@ function say(message: string) {
 
 function take(data: BoardData, first: boolean) {
   board.value = data;
+  filling.value = data.filling ?? null;
+  gaps.value = data.gaps ?? [];
   cards.value = new Map(data.cards.map((c) => [c.number, c]));
   milestones.value = new Map(data.milestones.map((m) => [m.number, m]));
   actions.value = new Map(data.actions.map((a) => [a.id, a]));
@@ -128,15 +134,44 @@ function take(data: BoardData, first: boolean) {
     detailOpen.value = view.detail;
     if (askedCard !== null) {
       if (cards.value.has(askedCard)) { focused.value = askedCard; detailOpen.value = true; }
+      else if (data.filling) openAsked(askedCard, data.repo);
       else say(`#${askedCard} is not on the board: it is closed or merged, or not in ${data.repo}.`);
     }
     rememberView();
     document.title = `milestones: ${data.repo}`;   // the tool first, so its tabs sort and search together
   }
+  focusTop();
+}
+
+/** Focus the top card of the first column if nothing on the board is focused. */
+function focusTop() {
   if (focused.value === null || !cards.value.has(focused.value)) {
     const top = visibleColumns.value.map((id) => grouped.value.get(id)?.[0]).find(Boolean);
     focused.value = top?.number ?? null;
   }
+}
+
+/** The card the address asked for, while the board is still reading: read it on its own,
+ *  rather than wait for its page, and open it. */
+async function openAsked(number: number, repo: string) {
+  try {
+    const data = await api.refresh([number]);
+    take(data, false);
+    if (cards.value.has(number)) { focused.value = number; detailOpen.value = true; }
+    else say(`#${number} is not on the board: it is closed or merged, or not in ${repo}.`);
+  } catch (error) {
+    say((error as Error).message);
+  }
+}
+
+/** A page of cards from a read under way: onto the board, without moving the focus. */
+function takePage(page: CardsPage) {
+  const next = new Map(cards.value);
+  for (const card of page.cards) next.set(card.number, card);
+  cards.value = next;
+  page.suggestions.forEach(applySuggestion);
+  filling.value = page.filling;
+  focusTop();
 }
 
 /** Tell the server how the board is being looked at whenever that changes, so the next run
@@ -166,12 +201,13 @@ export async function start() {
   try {
     // The app reads a repo the first time its board is asked for, and answers at once with
     // how far it has got; ask again until there is a board.
+    // Only its milestones are waited for, which takes a second or two; the cards arrive as
+    // `cards` events after.
     let data = await api.board();
     while (data.loading) {
       if (data.error) throw new Error(data.error);
-      const { what, seen, total } = data.loading;
-      reading.value = what ? `Reading ${data.repo}: ${what} ${seen}/${total} …` : `Reading ${data.repo} …`;
-      await new Promise((done) => setTimeout(done, 400));
+      reading.value = `Reading ${data.repo} …`;
+      await new Promise((done) => setTimeout(done, 300));
       data = await api.board();
     }
     take(data, true);
@@ -187,6 +223,7 @@ export async function start() {
     milestone: (m) => { milestones.value = new Map(milestones.value).set(m.number, m); },
     suggestion: applySuggestion,
     plan: (p) => { planInfo.value = p; },
+    cards: takePage,
     reload: () => { api.board().then((data) => take(data, false)).catch(() => {}); },
   });
 }
@@ -221,6 +258,7 @@ export async function refreshCards(numbers: number[]) {
   }
 }
 
+/** Read the whole repo again. The answer comes at once, and the cards after it, as events. */
 export async function refresh() {
   loading.value = true;
   try { take(await api.refresh(), false); } catch (error) { say((error as Error).message); }
