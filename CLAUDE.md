@@ -224,6 +224,12 @@ stopped being the only page) plus `ui/` (Preact, built by `npm run build` into
   and landed, write made, refused or kept in a read-only plan, and suggestion received. A
   `Section` says what each of its yields came to through `describe`; a new section should pass
   one. Only the startup banner and the closing summary print plainly.
+- The same terminal takes one-key commands (`board/keys.py`: `o` opens the page, `q` stops as
+  Ctrl-C does, by sending the process SIGINT). It holds the terminal in cbreak mode with signals
+  left on, only while the app's process group is in the terminal's foreground, and gives it back
+  in `run`'s `finally`, which also comes before a `--reload`'s `exec`. Nothing of it happens when
+  stdin isn't a tty. Drive it with `expect` and `BROWSER` set to a script that logs its argument,
+  so `o` opens no real tab.
 - The port is 8377 unless it is taken, so the origin is stable and the home page keeps its two
   filters in `localStorage`. A board still saves its view on the server: a run that fell back to
   another port would otherwise lose it.

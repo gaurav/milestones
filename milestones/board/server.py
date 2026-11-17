@@ -26,6 +26,7 @@ from .. import gh
 from ..core import TRIAGE_BUCKET
 from .. import core
 from . import build, cache, data, plan, reconcile
+from .keys import Keys
 from .log import plural, say, seconds
 
 STATIC = build.STATIC
@@ -1438,8 +1439,10 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
     url = page_url(base, token, path, query)
     # Where `milestones suggest`, and the next `milestones`, find this app.
     session = write_session(base, token, mode)
+    keys = Keys(url)
     print(("milestones  (read-only: nothing will be written)" if app.read_only else "milestones")
-          + f"\n{url}\nCtrl-C to stop."
+          + f"\n{url}\n"
+          + ("q or Ctrl-C to stop, o to open the page again." if keys.start() else "Ctrl-C to stop.")
           + ("  Reloads when its Python changes." if reload else "") + "\n",
           file=sys.stderr, flush=True)
     if not handoff:
@@ -1470,6 +1473,7 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
     except KeyboardInterrupt:
         pass
     finally:
+        keys.restore()
         # `uv run` passes a SIGTERM on to its child, so a `kill` aimed at both arrives
         # twice; the second must not cut the clean-up short.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

@@ -142,8 +142,9 @@ milestones https://github.com/a/b/pull/12   # its repo's board, opened at that p
 
 `milestones` starts a server on your machine (port 8377, or any free port if that is taken) and
 opens a page in your browser. There is one app at a time: run `milestones` again, with a repo or
-without, and it opens the page in the app that is already running and returns. Stop it with
-Ctrl-C in the terminal it started in. That terminal is the app's log: a line for every page
+without, and it opens the page in the app that is already running and returns. In the terminal
+it started in, `o` opens the page again (if you closed the tab) and `q` or Ctrl-C stops it. That
+terminal is the app's log: a line for every page
 opened, every read from GitHub and what it found, and every change written or refused. If the
 pages haven't been built, or were built from other code, the page and the log both say so and
 what to run.
