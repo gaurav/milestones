@@ -219,6 +219,11 @@ stopped being the only page) plus `ui/` (Preact, built by `npm run build` into
 - The fixes on the home page go through `/api/v1/milestones/OWNER/NAME/N`, not through a
   `Board`: fixing a milestone must not first read five hundred issues. If that repo has a
   board open, `App._fixed` tells it to read its milestones (or everything, after a rollover).
+- The terminal the app runs in is its log: one timestamped line (`board/log.say`, never a bare
+  `print`, since reads and writes run on their own threads) for each page opened, read started
+  and landed, write made, refused or kept in a read-only plan, and suggestion received. A
+  `Section` says what each of its yields came to through `describe`; a new section should pass
+  one. Only the startup banner and the closing summary print plainly.
 - The port is 8377 unless it is taken, so the origin is stable and the home page keeps its two
   filters in `localStorage`. A board still saves its view on the server: a run that fell back to
   another port would otherwise lose it.

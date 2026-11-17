@@ -7,9 +7,11 @@ nothing is decided from it, and the pages keep their writes switched off until `
 
 import datetime
 import json
-import sys
 import threading
+import time
 from pathlib import Path
+
+from .log import say, seconds
 
 # A copy older than this is read again when a page next asks for it.
 MAX_AGE = datetime.timedelta(minutes=5)
@@ -20,11 +22,15 @@ def now() -> datetime.datetime:
 
 
 class Section:
-    def __init__(self, name: str, path: Path | None, fetch, publish=lambda name, payload: None):
+    def __init__(self, name: str, path: Path | None, fetch, publish=lambda name, payload: None,
+                 describe=None, title: str | None = None):
         """`fetch(params)` yields the data, once or more than once: each yield but the last
         is a part-way answer worth showing (the quick half of a read whose other half is
-        slow). `publish` is told each time what a page would now be given."""
+        slow). `publish` is told each time what a page would now be given. `describe(data)`
+        says in a line what each yield came to, for the terminal, and `title` names the
+        read there ("your pull requests"); without `describe` a read says only if it fails."""
         self.name, self.path, self.fetch, self.publish = name, path, fetch, publish
+        self.describe, self.title = describe, title or name
         self.lock = threading.Lock()
         self.data = None
         self.params: dict = {}
@@ -56,7 +62,7 @@ class Section:
             self.path.write_text(json.dumps(
                 {"fetched_at": self.fetched_at, "params": self.params, "data": self.data}))
         except OSError as error:
-            print(f"warning: could not keep {self.path}: {error}", file=sys.stderr)
+            say(f"could not keep {self.path}: {error}", "warn")
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -89,6 +95,9 @@ class Section:
 
     def _run(self) -> None:
         params = dict(self.params)
+        start = time.monotonic()
+        if self.describe:
+            say(f"Reading {self.title} …")
         try:
             data = None
             for data in self.fetch(params):
@@ -96,6 +105,8 @@ class Section:
                     if params != self.params:
                         break  # asked something else meanwhile; the finally starts that read
                     self.data = data
+                if self.describe:
+                    say(f"{self.describe(data)}  ({seconds(start)})")
                 self.publish(self.name, self.snapshot())
             with self.lock:
                 if params == self.params and data is not None and not self.again:
@@ -103,8 +114,10 @@ class Section:
                     self._save()
         except SystemExit as exit:
             self.error = str(exit)
+            say(f"Could not read {self.title}: {self.error}", "error")
         except Exception as error:  # a bug in a read must not leave `refreshing` set for ever
             self.error = f"{type(error).__name__}: {error}"
+            say(f"Could not read {self.title}: {self.error}", "error")
         finally:
             with self.lock:
                 again, self.again = self.again or params != self.params, False

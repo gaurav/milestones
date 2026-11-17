@@ -25,6 +25,7 @@ from .. import gh
 from ..core import TRIAGE_BUCKET
 from .. import core
 from . import cache, data, plan, reconcile
+from .log import plural, say, seconds
 
 STATIC = Path(__file__).parent / "static"
 TOKEN_HEADER = "X-Milestones-Token"
@@ -175,15 +176,28 @@ class Board:
             self.progress = {"what": "issues" if what == "issues" else "pull requests",
                              "seen": seen, "total": total}
         self.status, self.error = "loading", None
+        start = time.monotonic()
+        say(f"Reading the issues and pull requests in {self.requested} …")
         try:
             self.load(progress)
             self.plan_notes = self.restore_plan()
+            say(f"{self.repo}: {self.summary()}  ({seconds(start)})")
         except SystemExit as exit:
             self.status, self.error = "failed", str(exit)
         except Exception as error:  # a bug in a read must not leave the page waiting for ever
             self.status, self.error = "failed", f"{type(error).__name__}: {error}"
+        if self.status == "failed":
+            say(f"{self.requested} could not be read: {self.error}", "error")
         self.ready.set()
         self.publish("reload", {})
+
+    def summary(self) -> str:
+        with self.lock:
+            prs = sum(c["kind"] == "pr" for c in self.cards.values())
+            open_milestones = sum(m["state"] == "open" for m in self.milestones.values())
+        return (f"{plural(len(self.cards) - prs, 'open issue')}, "
+                f"{plural(prs, 'open pull request')}, "
+                f"{plural(open_milestones, 'open milestone')}")
 
     # --- state ---------------------------------------------------------------------------
 
@@ -382,6 +396,9 @@ class Board:
             for action in made:
                 if action["status"] == "pending":
                     self.todo.put(action["id"])
+                else:
+                    say(f"{self.repo}: read-only, so kept in the plan: "
+                        f"{action_text(action, self._titles())}")
             return made
 
     def _issues(self) -> dict:
@@ -403,6 +420,7 @@ class Board:
             if action["status"] != "failed":
                 raise Refused(409, f"action {action_id} is {action['status']}, not failed")
             action["status"] = "reverted"
+            say(f"{self.repo}: gave up on {action_text(action, self._titles())}")
             later = [a for a in self.actions.values() if a["issue"] == action["issue"]
                      and a["kind"] == action["kind"] and a["id"] > action_id
                      and a["status"] != "reverted"]
@@ -482,6 +500,12 @@ class Board:
                 outcome = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
             with self.lock:
                 action.update(outcome)
+                said = action_text(action, self._titles())
+            if outcome["status"] == "done":
+                say(f"{self.repo}: wrote {said}")
+            else:
+                say(f"{self.repo}: could not write {said}: "
+                    f"{outcome['error'].splitlines()[-1]}", "error")
             self.publish("action", action)
             self.todo.task_done()
 
@@ -522,8 +546,7 @@ class Board:
                     plan.document(self.repo, entries, self.cards, self._titles(), saved),
                     indent=2, ensure_ascii=False))
             except OSError as error:
-                print(f"warning: could not save the plan to {self.plan_file}: {error}",
-                      file=sys.stderr)
+                say(f"could not save the plan to {self.plan_file}: {error}", "warn")
 
     def restore_plan(self) -> tuple[int, list[str]]:
         """Pick a saved plan up again on a read-only board: (changes restored, the ones that
@@ -603,8 +626,7 @@ class Board:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             self.state_file.write_text(json.dumps(kept, indent=2))
         except OSError as error:
-            print(f"warning: could not save suggestions to {self.state_file}: {error}",
-                  file=sys.stderr)
+            say(f"could not save suggestions to {self.state_file}: {error}", "warn")
 
     def _add_suggestions(self, proposed: list[dict]) -> list[dict]:
         """Record suggestions, skipping one already open and one already turned down."""
@@ -678,6 +700,10 @@ class Board:
                     raise Refused(400, "a source starting 'rule:' is the board's own")
             added = self._add_suggestions(proposed)
             self._save_state()
+            sources = sorted({str(p.get("source") or "someone") for p in proposed})
+            say(f"{self.repo}: {plural(len(added), 'new suggestion')} from {', '.join(sources)}"
+                + (f" ({len(proposed) - len(added)} already made or turned down)"
+                   if len(added) < len(proposed) else ""))
             return added
 
     def resolve(self, ids: list[int], decision: str) -> tuple[list[dict], list[dict]]:
@@ -799,8 +825,10 @@ class App:
         # The pages that are not a board: each a slow read, shown from its last answer first.
         self.sections = {
             "overview": cache.Section("overview", state and state / "overview.json",
-                                      self._overview, self.publish),
-            "prs": cache.Section("prs", state and state / "prs.json", self._prs, self.publish),
+                                      self._overview, self.publish, describe_overview,
+                                      "the tracked repositories' milestones"),
+            "prs": cache.Section("prs", state and state / "prs.json", self._prs, self.publish,
+                                 describe_prs, "your pull requests"),
         }
 
     def publish(self, event: str, payload: dict) -> None:
@@ -861,21 +889,19 @@ class App:
             return self.boards[key]
 
     def loaded(self, board: Board) -> None:
-        """Say in the terminal what a board's first read came to."""
+        """Say in the terminal what became of a plan left by a read-only run. (The board says
+        what its read came to.)"""
         if board.status == "failed":
-            print(f"{board.repo}: could not be read — {board.error}", file=sys.stderr, flush=True)
             return
-        print(f"{board.repo}: {len(board.cards)} open issues and pull requests",
-              file=sys.stderr, flush=True)
         restored, skipped = board.plan_notes
         if restored or skipped:
-            print(f"  picked up {restored} change{'' if restored == 1 else 's'} from the plan "
-                  f"left by an earlier read-only run ({board.plan_file}).", file=sys.stderr)
-            for line in skipped:
-                print(f"    left out: {line}", file=sys.stderr)
+            say(f"{board.repo}: picked up {plural(restored, 'change')} from the plan left by "
+                f"an earlier read-only run ({board.plan_file})."
+                + "".join(f"\n  left out: {line}" for line in skipped))
         elif not board.read_only and board.plan_info()["count"]:
-            print(f"  a read-only run left a plan of {board.plan_info()['count']} changes "
-                  f"({board.plan_file}); the board will offer to review it.", file=sys.stderr)
+            say(f"{board.repo}: a read-only run left a plan of "
+                f"{plural(board.plan_info()['count'], 'change')} ({board.plan_file}); "
+                "the board will offer to review it.")
 
     # --- milestones, from the home page -----------------------------------------------------
 
@@ -909,9 +935,11 @@ class App:
         if self.read_only:
             raise Refused(403, f"read-only: would {what}")
         try:
-            return call()
+            done = call()
         except SystemExit as exit:
-            raise Refused(502, str(exit))
+            raise Refused(502, f"could not {what}: {exit}")
+        say(f"Done: {what}")
+        return done
 
     def fix_milestone(self, repo: str, number: int, change: dict) -> dict:
         milestone = self._milestone(repo, number)
@@ -1112,6 +1140,8 @@ def make_handler(app: App, token: str):
                     return self._json(200, {name: app.sections[name].snapshot() for name in names})
                 raise Refused(404, "not found")
             except Refused as refused:
+                if parts[:2] == ["api", "v1"]:
+                    say(f"Refused {method} {url.path}: {refused}", "warn")
                 self._json(refused.status, {"error": str(refused)})
 
         def _board(self, method: str, board: Board, rest: list[str]) -> None:
@@ -1205,10 +1235,13 @@ def make_handler(app: App, token: str):
             raise Refused(404, "not found")
 
         def _static(self, path: str) -> None:
-            name = page_for(path) or path.lstrip("/")
+            page = page_for(path)
+            name = page or path.lstrip("/")
             target = (STATIC / name).resolve()
             if not (STATIC / "index.html").exists():
                 return self._send(200, NOT_BUILT.encode(), "text/html; charset=utf-8")
+            if page:
+                say(f"Opened {page_name(page, path)}")
             if STATIC.resolve() not in target.parents or not target.is_file():
                 raise Refused(404, "not found")
             kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
@@ -1321,12 +1354,12 @@ def watch_sources(server: ThreadingHTTPServer, app: App, reloading: threading.Ev
         last = now
         problem = importable()
         if problem:
-            print(f"\nThe app's source changed but doesn't import, so it is not reloading:\n"
-                  f"{problem.splitlines()[-1]}", file=sys.stderr, flush=True)
+            say(f"The app's source changed but doesn't import, so it is not reloading:\n"
+                f"{problem.splitlines()[-1]}", "warn")
             continue
         while app.pending():
             time.sleep(0.2)
-        print("\nThe app's source changed: reloading …", file=sys.stderr, flush=True)
+        say("The app's source changed: reloading …")
         reloading.set()
         server.shutdown()
         return
@@ -1376,7 +1409,13 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
     session = write_session(base, token, mode)
     print(("milestones  (read-only: nothing will be written)" if app.read_only else "milestones")
           + f"\n{url}\nCtrl-C to stop."
-          + ("  Reloads when its Python changes." if reload else ""), file=sys.stderr, flush=True)
+          + ("  Reloads when its Python changes." if reload else "") + "\n",
+          file=sys.stderr, flush=True)
+    if not handoff:
+        repos = len(config["repos"])
+        say(f"Tracking {plural(repos, 'repository', 'repositories')}, as {core.config_path()} "
+            "says" if repos else f"No repositories tracked yet: `milestones add OWNER/NAME`, "
+            f"or edit {core.config_path()}")
     if open_browser and not handoff:
         webbrowser.open(url)
     reloading = threading.Event()
@@ -1458,10 +1497,50 @@ def closing_lines(snapshot: dict) -> list[str]:
         left = [a for a in actions if a["status"] == status]
         if left:
             lines.append(f"{len(left)} {label}:")
-            lines += [f"  #{a['issue']} " + (
-                          f"→ {titles.get(a['value'], 'no milestone')}"
-                          if a.get("kind", "milestone") == "milestone"
-                          else f"{a['kind']}: {json.dumps(a['value'], ensure_ascii=False)[:60]}")
+            lines += [f"  {action_text(a, titles)}"
                       + (f"  — {a['error'].splitlines()[0]}" if a["error"] else "")
                       for a in left]
     return lines
+
+
+def action_text(action: dict, titles: dict[int, str]) -> str:
+    """One action in a line: `#12 → Needed soon`, `#12 labels: ["bug"]`."""
+    said = (f"#{action['issue']} → {titles.get(action['value'], 'no milestone')}"
+            if action.get("kind", "milestone") == "milestone"
+            else f"#{action['issue']} {action['kind']}: "
+                 f"{json.dumps(action['value'], ensure_ascii=False)[:60]}")
+    return said + (f" (with #{action['carriedBy']})" if action.get("carriedBy") else "")
+
+
+def describe_overview(overview: dict) -> str:
+    """The terminal's line for each part of the overview's read."""
+    if not overview.get("untriaged_fresh"):
+        repos = len(overview.get("repos", []))
+        fixes = len(overview.get("findings", []))
+        return (f"{plural(len(overview.get('milestones', [])), 'open milestone')} across "
+                f"{plural(repos, 'tracked repository', 'tracked repositories')}; "
+                + (f"{plural(fixes, 'thing')} to fix" if fixes else "nothing to fix"))
+    rows = overview.get("untriaged", [])
+    issues, prs = sum(r["issues"] for r in rows), sum(r["prs"] for r in rows)
+    parked = sum(r["needs_triage"] for r in rows)
+    with_any = sum(bool(r["issues"] or r["prs"]) for r in rows)
+    return (f"{plural(issues, 'issue')} and {plural(prs, 'pull request')} on no milestone, "
+            f"in {plural(with_any, 'repository', 'repositories')}"
+            + (f"; {parked} parked on {TRIAGE_BUCKET}" if parked else ""))
+
+
+def describe_prs(answer: dict) -> str:
+    prs = answer.get("prs", [])
+    repos = {p["repo"].lower() for p in prs}
+    tracked = sum(p["group"] == "tracked" for p in prs)
+    drafts = sum(bool(p["draft"]) for p in prs)
+    return (f"Found {plural(len(prs), 'open pull request')} across "
+            f"{plural(len(repos), 'repository', 'repositories')}: {tracked} in tracked ones"
+            + (f", {plural(drafts, 'draft')}" if drafts else ""))
+
+
+def page_name(page: str, path: str) -> str:
+    """What the terminal calls a page when it is opened."""
+    if page == "board/index.html":
+        return f"the board for {'/'.join([p for p in path.split('/') if p][1:3])}"
+    return {"index.html": "the home page", "prs/index.html": "your pull requests"}.get(page, path)
