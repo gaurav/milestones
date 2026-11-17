@@ -12,7 +12,7 @@ import {
 } from '../shared/logic.ts';
 import type { ColumnId, DimKind } from '../shared/logic.ts';
 import {
-  actions, board, cards, reading, token, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
+  actions, board, cards, filling, gaps, reading, token, change, columnTitle, cycleDimension, detailOpen, dimension, discardPlan, fatal, filters, focused, groupBy, grouped,
   layout, loading, milestoneColumns, milestones, modal, move, moveToTitle, notify, openSuggestions, pending, place,
   planInfo, readOnly, reviewPlan, refresh, refreshCards, refreshing, resolve, retry, revert, scope, selectAll, selected, setDimension, setDue, shown, start, step,
   targets, toast, toggleColumn, toggleSelected, totals, trayOpen, undo, visibleColumns,
@@ -824,7 +824,7 @@ function Toolbar() {
           Suggestions ({openSuggestions.value.length})
         </button>
         <ColumnsMenu />
-        <button class="refresh" onClick={refresh} title="Read everything from GitHub again">{loading.value ? 'Reading…' : 'Refresh'}</button>
+        <button class="refresh" onClick={refresh} title="Read everything from GitHub again">{readingLabel()}</button>
         <Menu name="keys" align="right" label="?" title="Keys">
           <div class="keys">
             <div><kbd>j</kbd> <kbd>k</kbd> down, up</div><div><kbd>h</kbd> <kbd>l</kbd> column left, right</div>
@@ -841,6 +841,30 @@ function Toolbar() {
         </Menu>
       </div>
     </header>
+  );
+}
+
+/** The refresh button's label: what a read under way has got to, or Refresh. */
+function readingLabel(): string {
+  const f = filling.value;
+  if (f) return f.total === null ? 'Reading…' : `Reading ${f.what === 'issues' ? 'issues' : 'pull requests'} ${f.seen}/${f.total}…`;
+  return loading.value ? 'Reading…' : 'Refresh';
+}
+
+/** What the last read couldn't get. The board shows what it has; what it lacks is said here,
+ *  with what that means for a move made now. */
+function GapsBanner() {
+  if (!gaps.value.length) return null;
+  const said = gaps.value.map((g) => {
+    const what = g.what === 'issues' ? 'issues' : g.what === 'pullRequests' ? 'pull requests' : g.what;
+    return g.total === null ? `${what} (${g.error})` : `${g.total - g.seen} of ${g.total} ${what} (${g.error})`;
+  });
+  return (
+    <div class="banner rehearsal">
+      <strong>Not everything was read.</strong> GitHub failed reading {said.join('; ')}, so they are
+      not shown, and a pull request moved now carries only the issues that are.
+      <button onClick={refresh}>Refresh</button>
+    </div>
   );
 }
 
@@ -865,7 +889,8 @@ function PlanBanner() {
   return (
     <div class="banner waiting">
       A read-only session left a plan of <strong>{count} change{count === 1 ? '' : 's'}</strong>. None {count === 1 ? 'has' : 'have'} been written.
-      <button class="primary" onClick={reviewPlan}>Review as suggestions</button>
+      <button class="primary" onClick={reviewPlan} disabled={!!filling.value || gaps.value.length > 0}
+        title={filling.value ? 'Once every card is read' : gaps.value.length ? 'Once a Refresh has read every card' : ''}>Review as suggestions</button>
       <button onClick={() => { if (confirm(`Discard the plan of ${count} change${count === 1 ? '' : 's'}? This deletes the plan file.`)) discardPlan(); }}>Discard</button>
     </div>
   );
@@ -921,6 +946,7 @@ function App() {
       <Toolbar />
       <FilterBar />
       <PlanBanner />
+      <GapsBanner />
       <main class={openMenu.value ? 'menu-open' : ''}>
         <div class="columns">
           {visibleColumns.value.map((id, i) => <Column key={id} id={id} index={i} />)}

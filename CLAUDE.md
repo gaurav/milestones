@@ -245,8 +245,18 @@ the constants — the board has its own fetch (`board/data.py`), because a card 
   after a refetch for the same reason); only `revert` puts it back.
 - Both fetches page by `CREATED_AT`, newest first: by `UPDATED_AT`, the board's own writes during
   a read would move a card from after the cursor to before it, and it would never be read.
-- One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
-  PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
+- One page of fifty issues with every card field takes about 3.5 s, so Babel's 551 issues and 69
+  PRs take about 45 s, which is why a board doesn't wait for them. `Board.load` reads the frame
+  (`data.fetch_frame`: name, milestones, labels, fields) and is `ready` after it, then takes
+  `data.card_pages` a page at a time (issues first, so a PR never arrives before the issues it
+  closes), each a `cards` event. `data._pages` retries a failed page at the same cursor three
+  times with half the page size each time, then gives up on that kind and records a gap; the
+  rest still reads. A partial board is shown and written to, so three things wait for a whole
+  read: removing cards not seen (per kind), `restore_plan` (it would drop each unread card's
+  change from the plan), and `review_plan` (409; it would count an unread card as gone and
+  delete the file). `_save_state` keeps restored suggestions whose card hasn't arrived, or a
+  view saved mid-read would lose them. A write that lands after a read began beats the page
+  (`Board.landed`, `_reapply(since=)`). `Issue.issueFieldValues` is a union needing a fragment per value
   type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that
   mentions an issue without closing it; those come from `timelineItems(itemTypes:
   [CROSS_REFERENCED_EVENT])`. `projectItems { totalCount }` is readable without `read:project`;

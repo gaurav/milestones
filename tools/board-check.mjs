@@ -98,6 +98,12 @@ const focusedCard = () => page.$eval('.card.focused .card-facts a, .card.focused
 try {
   await page.goto(url);
   await page.waitForSelector('.column');
+  // The board comes up once its milestones are read, and its cards arrive a page at a time
+  // after: the refresh button says how far that has got, then Refresh once every card is in.
+  const label = await page.textContent('header .refresh');
+  check('the board shows while its cards are still being read', /^Reading/.test(label), label);
+  await page.waitForFunction(() => document.querySelector('header .refresh')?.textContent === 'Refresh', null, { timeout: 120000 });
+  check('and fills in to every card', (await page.locator('.card').count()) > 0);
 
   // --- The URL follows the view, and a reload reads it back.
   check('the token stays in the fragment', (await page.evaluate(() => location.hash)).startsWith('#t='));

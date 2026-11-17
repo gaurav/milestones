@@ -123,8 +123,8 @@ class Board:
     worker thread in the order the changes were made — so the page never waits on the
     network, and two moves of one issue can't arrive out of order."""
 
-    def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_board,
-                 write=None, fetch_cards=data.fetch_cards, state_file: Path | None = None, plan_file: Path | None = None,
+    def __init__(self, repo: str, buckets: list[str], sort_key, fetch=data.fetch_frame,
+                 pages=data.card_pages, write=None, fetch_cards=data.fetch_cards, state_file: Path | None = None, plan_file: Path | None = None,
                  aliases: dict[str, str] | None = None, first_id: int = 1):
         self.requested, self.buckets, self.sort_key = repo, buckets, sort_key
         # Action ids carry on from a reloaded board's, so an undo from a page that wasn't
@@ -145,7 +145,7 @@ class Board:
         self.view: dict = {}
         self._restored: list[dict] = []
         self._read_state()
-        self.fetch, self.write = fetch, write or self._write
+        self.fetch, self.pages, self.write = fetch, pages, write or self._write
         self.fetch_cards = fetch_cards
         self.lock = threading.RLock()
         self.repo, self.cards, self.milestones = repo, {}, {}
@@ -153,47 +153,52 @@ class Board:
         self.todo: queue.Queue = queue.Queue()
         self.listeners: list[queue.Queue] = []
         self.read_only = gh.read_only()
-        # "new" until something reads the repo; `start` reads it in the background, and the
-        # snapshot says only how far that has got ("loading") or why it stopped ("failed").
+        # "new" until something reads the repo; `start` reads it in the background. Until its
+        # milestones are read the snapshot says only that it is "loading", or why it "failed";
+        # after that the board is "ready", and its cards arrive a page at a time.
         self.status, self.error = "new", None
-        self.progress: dict = {}
+        # While cards are arriving, how far the read has got: {what, seen, total}; else None.
+        self.filling: dict | None = None
+        # What the last read couldn't get, each {what, error, seen, total}. A board with gaps
+        # shows what it has, removes nothing, and holds back what needs every card (below).
+        self.gaps: list[dict] = []
+        # When each write landed (time.monotonic()), by action id: a page read before a write
+        # landed must not put the card back as it was.
+        self.landed: dict[int, float] = {}
+        # Set once the first read has finished, well or badly; `milestones suggest` waits on it.
         self.ready = threading.Event()
+        self.reading, self.again = False, False
+        self.on_ready = lambda board: None
+        self.plan_restored = False
         # What `restore_plan` picked up and left out, for whoever started the board to say.
         self.plan_notes: tuple[int, list[str]] = (0, [])
 
     def start(self, on_ready=lambda board: None) -> None:
         """Start the writer, and read the repo without making anyone wait for it: a page can
-        open on the board at once and watch the read. `on_ready` is called when it ends,
-        well or badly."""
+        open on the board at once and watch it fill. `on_ready` is called when the first read
+        ends, well or badly."""
         threading.Thread(target=self.work, daemon=True).start()
-        self.status = "loading"
+        self.status, self.on_ready = "loading", on_ready
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Read the whole repo again in the background; if a read is already under way, read
+        again once it ends, since it may have passed a card before whatever prompted this."""
+        with self.lock:
+            if self.reading:
+                self.again = True
+                return
+            self.reading = True
 
         def read():
-            self.reload()
-            on_ready(self)
+            while True:
+                self.load()
+                with self.lock:
+                    if not self.again:
+                        self.reading = False
+                        return
+                    self.again = False
         threading.Thread(target=read, daemon=True).start()
-
-    def reload(self) -> None:
-        """The first read, or another go at one that failed. Never raises: the outcome is the
-        board's status, and a `reload` event to whichever pages are watching."""
-        def progress(what: str, seen: int, total: int) -> None:
-            self.progress = {"what": "issues" if what == "issues" else "pull requests",
-                             "seen": seen, "total": total}
-        self.status, self.error = "loading", None
-        start = time.monotonic()
-        say(f"Reading the issues and pull requests in {self.requested} …")
-        try:
-            self.load(progress)
-            self.plan_notes = self.restore_plan()
-            say(f"{self.repo}: {self.summary()}  ({seconds(start)})")
-        except SystemExit as exit:
-            self.status, self.error = "failed", str(exit)
-        except Exception as error:  # a bug in a read must not leave the page waiting for ever
-            self.status, self.error = "failed", f"{type(error).__name__}: {error}"
-        if self.status == "failed":
-            say(f"{self.requested} could not be read: {self.error}", "error")
-        self.ready.set()
-        self.publish("reload", {})
 
     def summary(self) -> str:
         with self.lock:
@@ -205,26 +210,106 @@ class Board:
 
     # --- state ---------------------------------------------------------------------------
 
-    def load(self, progress=lambda *a: None) -> None:
-        fetched = self.fetch(self.requested, progress)
+    def load(self) -> None:
+        """One read of the repo, in this thread: its milestones, labels and fields first, after
+        which the board is ready to show, then its cards a page at a time, each sent to the
+        pages as a `cards` event. Never raises: the outcome is the board's status and gaps,
+        and a `reload` event at the start and the end."""
+        began = time.monotonic()
+        first = not self.ready.is_set()
+        say(f"Reading the issues and pull requests in {self.requested} …")
+        try:
+            frame = self.fetch(self.requested)
+        except (SystemExit, Exception) as error:  # SystemExit is gh's failure; anything else, a bug
+            why = str(error) if isinstance(error, SystemExit) else f"{type(error).__name__}: {error}"
+            with self.lock:
+                if self.status == "ready":
+                    # A refresh: keep showing what there is, and say it wasn't read again.
+                    self.gaps = [{"what": "the repo", "error": why.strip().splitlines()[-1],
+                                  "seen": 0, "total": None}]
+                else:
+                    self.status, self.error = "failed", why
+            say(f"{self.requested} could not be read: {why}", "error")
+            self._finished(first)
+            return
         with self.lock:
-            self.repo = fetched["repo"]
-            self.milestones = {m["number"]: m for m in fetched["milestones"]}
-            self.cards = {c["number"]: c for c in fetched["cards"]}
-            self.labels = fetched.get("labels", [])
-            self.fields = fetched.get("fields", {})
-            self._reapply(self.cards)
-            # Suggestions kept from the last run, for the issues that are still open.
-            restored, self._restored = self._restored, []
-            self._add_suggestions([s for s in restored if s["issue"] in self.cards])
-            self._rules(self.cards)
-            self.status = "ready"
+            self.repo = frame["repo"]
+            self.milestones = {m["number"]: m for m in frame["milestones"]}
+            self.labels = frame.get("labels", [])
+            self.fields = frame.get("fields", {})
+            self.status, self.error, self.gaps = "ready", None, []
+            self.filling = {"what": "issues", "seen": 0, "total": None}
+        self.publish("reload", {})
+        seen: set[int] = set()
+        try:
+            for page in self.pages(self.repo):
+                if "gap" in page:
+                    gap = {k: page[k] for k in ("what", "seen", "total")} | {"error": page["gap"]}
+                    with self.lock:
+                        self.gaps.append(gap)
+                    say(f"{self.repo}: stopped reading {page['what']} after {page['seen']} of "
+                        f"{page['total']}: {page['gap']}", "error")
+                    continue
+                self._take_page(page, seen, began)
+        except (SystemExit, Exception) as error:
+            why = str(error) if isinstance(error, SystemExit) else f"{type(error).__name__}: {error}"
+            with self.lock:
+                self.gaps.append({"what": "the rest", "error": why.strip().splitlines()[-1],
+                                  "seen": len(seen), "total": None})
+            say(f"{self.repo}: stopped reading: {why}", "error")
+        with self.lock:
+            # Only a kind read to the end says which cards have closed since the last read.
+            unread = {g["what"] for g in self.gaps}
+            complete = {"issue": "issues" not in unread, "pr": "pullRequests" not in unread}
+            if "the rest" in unread:
+                complete = {"issue": False, "pr": False}
+            for number in [n for n, c in self.cards.items()
+                           if n not in seen and complete[c["kind"]]]:
+                del self.cards[number]
+            if not self.gaps:
+                # Kept suggestions for issues that have closed since they were made.
+                self._restored = []
+                self._save_state()
+            self.filling = None
+        if not self.gaps and not self.plan_restored:
+            # Only now: a plan restored onto a board missing cards would drop their changes.
+            self.plan_notes = self.restore_plan()
+            self.plan_restored = True
+        say(f"{self.repo}: {self.summary()}  ({seconds(began)})"
+            + ("; incomplete, Refresh to try again" if self.gaps else ""),
+            "warn" if self.gaps else None)
+        self._finished(first)
 
-    def _reapply(self, cards: dict[int, dict]) -> None:
+    def _take_page(self, page: dict, seen: set[int], began: float) -> None:
+        """Put one page of cards on the board and tell the pages."""
+        with self.lock:
+            fresh = {c["number"]: c for c in page["cards"]}
+            self._reapply(fresh, since=began)
+            self.cards.update(fresh)
+            seen.update(fresh)
+            # Suggestions kept from the last run, for the issues on this page.
+            matched = [s for s in self._restored if s["issue"] in fresh]
+            self._restored = [s for s in self._restored if s["issue"] not in fresh]
+            changed = self._add_suggestions(matched) + self._rules(fresh)
+            self.filling = {"what": page["what"], "seen": page["seen"], "total": page["total"]}
+            payload = {"cards": list(fresh.values()), "filling": dict(self.filling),
+                       "suggestions": [s for s in changed if s["status"] != "rejected"]}
+        self.publish("cards", payload)
+
+    def _finished(self, first: bool) -> None:
+        self.ready.set()
+        self.publish("reload", {})
+        if first:
+            self.on_ready(self)
+
+    def _reapply(self, cards: dict[int, dict], since: float | None = None) -> None:
         """What this session changed and GitHub hasn't confirmed is still the truth here: a
-        refetch must not put a card back where a failed write left it."""
+        refetch must not put a card back where a failed write left it. Nor where a write that
+        landed after `since` (when the read began) found it: the page may have been read
+        before the write."""
         for action in self.actions.values():
-            if action["status"] in (*UNSETTLED, "would") and action["issue"] in cards:
+            landed = since is not None and self.landed.get(action["id"], -1.0) >= since
+            if (action["status"] in (*UNSETTLED, "would") or landed) and action["issue"] in cards:
                 set_card_value(cards[action["issue"]], action["kind"], action["value"],
                                self._colours())
 
@@ -263,12 +348,17 @@ class Board:
     def snapshot(self) -> dict:
         with self.lock:
             if self.status in ("loading", "failed"):
-                # Nothing to show yet. A page asks again until `loading` is gone.
+                # Nothing to show until the milestones are read, which takes a second or two.
+                # A page asks again until `loading` is gone.
                 return {"repo": self.repo, "permissions": "read" if self.read_only else "write",
-                        "loading": dict(self.progress), "error": self.error}
+                        "loading": {}, "error": self.error}
             milestones = list(self.milestones.values())
             return {
                 "repo": self.repo,
+                # How far a read of the cards has got, while one is under way; and what the
+                # last one couldn't read.
+                "filling": self.filling,
+                "gaps": list(self.gaps),
                 "permissions": "read" if self.read_only else "write",
                 "buckets": self.buckets,
                 "milestones": milestones,
@@ -504,6 +594,8 @@ class Board:
                 outcome = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
             with self.lock:
                 action.update(outcome)
+                if outcome["status"] == "done":
+                    self.landed[action["id"]] = time.monotonic()
                 said = action_text(action, self._titles())
             if outcome["status"] == "done":
                 say(f"{self.repo}: wrote {said}")
@@ -578,6 +670,14 @@ class Board:
         if self.plan_file is None:
             return [], 0
         with self.lock:
+            # Each change is checked against its card, and the file is used up after: a card
+            # not read yet would count as gone, and its change be lost with the file.
+            if self.filling:
+                raise Refused(409, "the board is still reading the repo; review the plan once "
+                                   "every card is in")
+            if self.gaps:
+                raise Refused(409, "the board couldn't read every card; Refresh, and review "
+                                   "the plan once it has")
             saved = plan.read(self.plan_file)
             proposed, dropped = [], 0
             for entry in saved["changes"]:
@@ -625,7 +725,11 @@ class Board:
         kept = {"view": self.view, "rejected": sorted(self.rejected),
                 "open": [{k: s[k] for k in ("issue", "kind", "value", "reason", "source")}
                          for s in self.suggestions.values()
-                         if s["status"] == "open" and not s["source"].startswith("rule:")]}
+                         if s["status"] == "open" and not s["source"].startswith("rule:")]
+                # Kept ones whose cards haven't been read yet, or couldn't be: saving the
+                # view mid-read must not lose them.
+                + [{k: s.get(k) for k in ("issue", "kind", "value", "reason", "source")}
+                   for s in self._restored]}
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             self.state_file.write_text(json.dumps(kept, indent=2))
@@ -927,9 +1031,13 @@ class App:
         with self.lock:
             board = self.boards.get(self.names.get(repo.lower(), ""))
         if board is not None and board.status == "ready":
+            if cards:
+                board.refresh()
+                return
+
             def read():
                 try:
-                    board.load() if cards else board.refresh_milestones()
+                    board.refresh_milestones()
                 except SystemExit:
                     return  # the board's own Refresh will say what is wrong
                 board.publish("reload", {})
@@ -1180,7 +1288,8 @@ def make_handler(app: App, token: str):
             if method == "GET" and rest == ["events"]:
                 return self._events(board.listeners)
             if method == "POST" and rest == ["refresh"] and board.status == "failed":
-                board.reload()
+                board.status = "loading"
+                board.refresh()
                 return self._json(200, {**board.snapshot(), "gone": []})
             if method == "POST" and rest == ["suggestions"]:
                 # From `milestones suggest`, which may be the first thing to name this repo:
@@ -1255,12 +1364,16 @@ def make_handler(app: App, token: str):
                 if numbers is not None and (not isinstance(numbers, list) or not numbers
                                             or not all(isinstance(n, int) for n in numbers)):
                     raise Refused(400, "send {issues: [number, …]}, or no body")
+                if not numbers:
+                    # The whole repo is read in the background, its cards arriving as events.
+                    board.refresh()
+                    return self._json(200, {**board.snapshot(), "gone": []})
                 try:
-                    gone = board.refresh_cards(numbers) if numbers else board.load()
+                    gone = board.refresh_cards(numbers)
                 except SystemExit as exit:
                     raise Refused(502, str(exit))
                 board.publish("reload", {})
-                return self._json(200, {**board.snapshot(), "gone": gone or []})
+                return self._json(200, {**board.snapshot(), "gone": gone})
             raise Refused(404, "not found")
 
         def _static(self, path: str) -> None:

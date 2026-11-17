@@ -188,8 +188,10 @@ milestones NCATSTranslator/Babel --from Critical --from "Babel v1.19" --from non
 
 `milestones OWNER/NAME` (or `milestones board OWNER/NAME`) opens one repo as a column per
 milestone, with every open issue and pull request as a card. The repo is read from GitHub the
-first time its board is opened, which takes a few seconds, or up to a minute for several hundred
-issues; after that it stays in the app, so coming back to it is instant. `milestones board` with
+first time its board is opened: the board comes up in a second or two and fills in as its cards
+arrive, newest first, which takes up to a minute for several hundred issues. If GitHub keeps
+failing on part of it, the board shows what it has and says what is missing. After that it stays
+in the app, so coming back to it is instant. `milestones board` with
 no repo, from inside a checkout, takes that checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is the issues with no
 milestone); the rest are under **Columns**, including any closed milestone that still has open
 work on it.

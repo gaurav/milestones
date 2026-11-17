@@ -1,7 +1,9 @@
 """The board's pure parts: the card normalisers, and the Board's bookkeeping with the
 fetch and the write swapped for fakes. Nothing here calls gh."""
 
+import json
 import re
+import time
 
 import pytest
 
@@ -152,6 +154,16 @@ def test_a_board_is_served_for_any_repo_and_a_page_from_its_folder():
     assert server.page_for("/board/main.js") is None
 
 
+def reads(fetched):
+    """A Board's two reads from one fake answer: the frame, then every card as one page."""
+    frame = {k: v for k, v in fetched.items() if k != "cards"}
+
+    def pages(repo):
+        cards = fetched["cards"]
+        yield {"what": "issues", "cards": cards, "seen": len(cards), "total": len(cards)}
+    return {"fetch": lambda repo: frame, "pages": pages}
+
+
 class FakeApp(server.App):
     """An app whose repos are whatever they are called, and whose boards read nothing."""
 
@@ -159,7 +171,7 @@ class FakeApp(server.App):
         super().__init__({"buckets": DEFAULT_BUCKETS, "repos": [], "focus": [], "labels": {}},
                          make_board=lambda repo: server.Board(
                              repo, DEFAULT_BUCKETS, sort_key,
-                             fetch=lambda repo, progress: {"repo": repo, "milestones": [], "cards": []}),
+                             **reads({"repo": repo, "milestones": [], "cards": []})),
                          state=None)
         self.renamed, self.asked = renamed or {}, []
 
@@ -180,17 +192,15 @@ def test_one_repo_has_one_board_however_it_is_spelt_or_renamed(monkeypatch):
         app.board('o/r") { evil')
 
 
-def test_a_board_that_is_still_being_read_says_so_and_nothing_else(monkeypatch):
+def test_a_board_whose_milestones_cant_be_read_says_so_and_nothing_else(monkeypatch):
     monkeypatch.setattr(gh, "read_only", lambda: False)
-    def failing(repo, progress):
-        progress("issues", 50, 120)
-        raise SystemExit("gh api graphql failed:\nnot found")
+    def failing(repo):
+        raise SystemExit("gh api failed:\nnot found")
     board = server.Board("o/r", DEFAULT_BUCKETS, sort_key, fetch=failing)
     board.status = "loading"
     assert board.snapshot() == {"repo": "o/r", "permissions": "write", "loading": {}, "error": None}
-    board.reload()
+    board.load()
     assert board.status == "failed" and board.ready.is_set()
-    assert board.snapshot()["loading"] == {"what": "issues", "seen": 50, "total": 120}
     assert "not found" in board.snapshot()["error"]
 
 
@@ -220,7 +230,7 @@ def make_board(monkeypatch, cards, read_only=False, buckets=("Needs triage",), w
         {"number": 1, "title": "Soon", "state": "open", "due": None},
         {"number": 2, "title": "Needs triage", "state": "open", "due": None},
         {"number": 3, "title": "Old", "state": "closed", "due": None}]}
-    board = server.Board("o/r", list(buckets), sort_key, fetch=lambda repo, progress: fetched,
+    board = server.Board("o/r", list(buckets), sort_key, **reads(fetched),
                          write=write or (lambda action: None), state_file=state_file,
                          plan_file=plan_file)
     board.load()
@@ -252,9 +262,9 @@ def test_a_reloaded_board_numbers_its_actions_on_from_the_last(monkeypatch):
     # A page not refreshed after a --reload still holds the old ids; an undo from it must
     # find nothing rather than whichever new action took the same number.
     monkeypatch.setattr(gh, "read_only", lambda: False)
-    reloaded = server.Board("o/r", [], sort_key, fetch=lambda repo, progress: {
+    reloaded = server.Board("o/r", [], sort_key, **reads({
         "repo": "o/r", "cards": [card(5)], "milestones": [
-            {"number": 1, "title": "Soon", "state": "open", "due": None}]},
+            {"number": 1, "title": "Soon", "state": "open", "due": None}]}),
         write=lambda action: None, first_id=8)
     reloaded.load()
     (action,) = reloaded.submit([{"issue": 5, "kind": "milestone", "value": 1}])
@@ -741,7 +751,7 @@ def test_a_read_only_board_saves_its_changes_and_picks_them_up_again(monkeypatch
         (6, "#6: title → Better (was Card 6)", "Better")]   # the card as the plan leaves it
 
     again = make_board(monkeypatch, cards()[:1], read_only=True, plan_file=path)   # #6 has closed
-    restored, skipped = again.restore_plan()
+    restored, skipped = again.plan_notes   # picked up once every card was read
     assert restored == 1 and again.cards[5]["milestone"] == 1
     assert len(skipped) == 1 and "#6: title → Better" in skipped[0]
     assert [c["issue"] for c in plan.read(path)["changes"]] == [5]
@@ -894,3 +904,132 @@ def test_a_read_only_app_refuses_a_fix_before_gh_is_asked_to_write(monkeypatch):
         app.delete_milestone("o/r", 4)
     with pytest.raises(server.Refused, match="read-only: would set milestone 'Sprint'"):
         app.fix_milestone("o/r", 4, {"state": "closed"})
+
+
+# --- reading a board a page at a time -----------------------------------------------------
+
+def graphql_pages(monkeypatch, answers):
+    """Stand in for gh.graphql: each call takes the next of `answers`, a page of node numbers
+    or an exception to raise. Returns the (page size, cursor) of every call."""
+    calls = []
+
+    def graphql(query, owner):
+        calls.append((int(re.search(r"first: (\d+)", query).group(1)),
+                      re.search(r"after: (\S+?)[,)]", query).group(1)))
+        answer = answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        numbers, more = answer
+        connection = "issues" if "issues(first" in query else "pullRequests"
+        return {"repository": {connection: {
+            "totalCount": 3, "nodes": [{"number": n} for n in numbers],
+            "pageInfo": {"hasNextPage": more, "endCursor": f"c{numbers[-1]}"}}}}
+    monkeypatch.setattr(gh, "graphql", graphql)
+    return calls
+
+
+def test_a_failed_page_is_tried_again_at_the_same_cursor_a_smaller_page_at_a_time(monkeypatch):
+    calls = graphql_pages(monkeypatch, [
+        ([1, 2], True), SystemExit("gh api graphql failed:\nHTTP 502"),
+        SystemExit("gh api graphql failed:\nHTTP 502"), ([3], False)])
+    pages = list(data._pages(data.ISSUES_QUERY, "o", "r", "issues", sleep=lambda s: None))
+    assert [p["seen"] for p in pages] == [2, 3] and "gap" not in pages[-1]
+    assert calls == [(50, "null"), (50, '"c2"'), (25, '"c2"'), (12, '"c2"')]
+
+
+def test_a_page_that_never_comes_leaves_a_gap_and_the_pull_requests_are_read_anyway(monkeypatch):
+    failure = SystemExit("gh api graphql failed:\nSomething went wrong")
+    graphql_pages(monkeypatch, [([1, 2], True)] + [failure] * (len(data.RETRY_WAITS) + 1)
+                  + [([9], False)])
+    monkeypatch.setattr(data, "norm_issue", lambda n, repo: card(n["number"]))
+    monkeypatch.setattr(data, "norm_pr", lambda n, repo: card(n["number"], kind="pr"))
+    pages = list(data.card_pages("o/r", sleep=lambda s: None))
+    assert [(p["what"], p.get("gap"), p["seen"]) for p in pages] == [
+        ("issues", None, 2), ("issues", "Something went wrong", 2), ("pullRequests", None, 1)]
+    assert [c["number"] for c in pages[-1]["cards"]] == [9]
+
+
+def paged_board(monkeypatch, pages, cards=(), state_file=None, plan_file=None, read_only=False):
+    """A board read once with `cards`, whose next read yields `pages`: a list of page dicts,
+    or callables run (with the board) between them."""
+    board = make_board(monkeypatch, list(cards), read_only=read_only, state_file=state_file,
+                       plan_file=plan_file)
+
+    def read(repo):
+        for page in pages:
+            if callable(page):
+                page(board)
+            else:
+                yield page
+    board.pages = read
+    return board
+
+
+def page_of(*numbers, what="issues", seen=None, total=None):
+    return {"what": what, "cards": [card(n) for n in numbers], "seen": seen or len(numbers),
+            "total": total or len(numbers)}
+
+
+def test_a_board_shows_once_its_milestones_are_read_and_its_cards_arrive_by_page(monkeypatch):
+    seen = []
+    events = []
+    board = paged_board(monkeypatch, [
+        lambda b: seen.append((b.status, b.snapshot()["filling"], len(b.snapshot()["cards"]))),
+        page_of(5, total=2),
+        lambda b: seen.append(len(b.snapshot()["cards"])),
+        page_of(6, seen=2, total=2)])
+    board.cards.clear()
+    board.publish = lambda event, payload: events.append(event)
+    board.load()
+    assert seen == [("ready", {"what": "issues", "seen": 0, "total": None}, 0), 1]
+    assert events == ["reload", "cards", "cards", "reload"]
+    assert sorted(board.cards) == [5, 6] and board.snapshot()["filling"] is None
+
+
+def test_a_write_that_lands_during_a_read_beats_the_page_read_before_it(monkeypatch):
+    def landed(board):
+        (action,) = board.submit([{"issue": 5, "kind": "milestone", "value": 1}])
+        run_queue(board)
+        board.landed[action["id"]] = time.monotonic()
+    board = paged_board(monkeypatch, [landed, page_of(5)], cards=[card(5)])
+    board.load()   # the page has #5 on no milestone, as GitHub had it before the write
+    assert board.cards[5]["milestone"] == 1
+
+
+def test_kept_suggestions_wait_for_their_cards_and_survive_a_save_meanwhile(monkeypatch, tmp_path):
+    state = tmp_path / "board.json"
+    state.write_text(json.dumps({"open": [{"issue": 9, "kind": "milestone", "value": 1,
+                                           "reason": "r", "source": "opus"}]}))
+    board = paged_board(monkeypatch, [], state_file=state)
+    board.cards.clear()
+    board.pages = lambda repo: iter([page_of(5), page_of(9)])
+    saved = []
+    take = board._take_page
+
+    def take_and_save(page, seen, began):
+        take(page, seen, began)
+        board.set_view({"by": "milestone", "group": [], "shown": []})
+        saved.append([s["issue"] for s in json.loads(state.read_text())["open"]])
+    board._take_page = take_and_save
+    board._restored = [{"issue": 9, "kind": "milestone", "value": 1, "reason": "r",
+                        "source": "opus"}]
+    board.load()
+    assert saved == [[9], [9]]   # kept while #9 was unread, then open on its card
+    assert [s["issue"] for s in board.snapshot()["suggestions"]] == [9]
+
+
+def test_a_read_with_a_gap_takes_nothing_off_the_board_and_holds_the_plan(monkeypatch, tmp_path):
+    path = tmp_path / "plan.json"
+    gap = {"what": "issues", "gap": "HTTP 502", "seen": 1, "total": 3}
+    board = paged_board(monkeypatch, [page_of(5, total=3), gap], cards=[card(5), card(6)],
+                        plan_file=path)
+    path.write_text(json.dumps({"repo": "o/r", "changes": []}))
+    board.load()
+    assert sorted(board.cards) == [5, 6]   # #6 wasn't read, so it may still be open
+    assert board.snapshot()["gaps"] == [{"what": "issues", "seen": 1, "total": 3,
+                                         "error": "HTTP 502"}]
+    with pytest.raises(server.Refused, match="couldn't read every card"):
+        board.review_plan()
+    board.pages = lambda repo: iter([page_of(5)])
+    board.load()
+    assert sorted(board.cards) == [5] and board.snapshot()["gaps"] == []   # #6 has closed
