@@ -6,6 +6,11 @@ The normalisers here are pure, and are what `docs/BoardAPI.md` describes as a ca
 from .. import gh
 
 PAGE = 50
+# Both queries page by creation date, which nothing changes: by last update, the board's own
+# writes landing mid-read would move an issue from after the cursor to before it, and it would
+# never be read. Newest first, so that recent work is what a board filling in shows first; an
+# issue opened during the read is behind the cursor, and the next refresh finds it. The page
+# sorts its columns itself.
 
 # What a card needs of an issue, for a page of them and for one read alone.
 # `issueFieldValues` is a union, hence the per-type fragments; CROSS_REFERENCED_EVENT is how a
@@ -39,7 +44,7 @@ ISSUES_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
   nameWithOwner
   issues(first: %(page)d, states: OPEN, after: %(after)s,
-         orderBy: {field: UPDATED_AT, direction: DESC}) {
+         orderBy: {field: CREATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {""" + ISSUE_FIELDS + """} } } }
 """
@@ -60,7 +65,7 @@ PR_FIELDS = """
 PRS_QUERY = """
 query { repository(owner: "%(owner)s", name: "%(name)s") {
   pullRequests(first: %(page)d, states: OPEN, after: %(after)s,
-               orderBy: {field: UPDATED_AT, direction: DESC}) {
+               orderBy: {field: CREATED_AT, direction: DESC}) {
     totalCount pageInfo { hasNextPage endCursor }
     nodes {""" + PR_FIELDS + """} } } }
 """

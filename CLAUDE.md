@@ -243,6 +243,8 @@ the constants — the board has its own fetch (`board/data.py`), because a card 
 - The `Board` applies a change to its cards first and writes after, from one worker thread, in
   order. A failed write leaves the new value on the card (`load()` re-applies unsettled actions
   after a refetch for the same reason); only `revert` puts it back.
+- Both fetches page by `CREATED_AT`, newest first: by `UPDATED_AT`, the board's own writes during
+  a read would move a card from after the cursor to before it, and it would never be read.
 - One page of fifty issues with every card field takes about 3.5 s, so Babel's 539 issues and 60
   PRs load in under a minute. `Issue.issueFieldValues` is a union needing a fragment per value
   type, and each value's `field` is a union too. `closedByPullRequestsReferences` misses a PR that
