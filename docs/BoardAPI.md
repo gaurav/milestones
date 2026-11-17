@@ -1,24 +1,31 @@
-# The board's HTTP API
+# The app's HTTP API
 
-`milestones board` starts a server on `127.0.0.1` and prints a URL. Everything the page does goes
-through the API below, and nothing else is shared between the server and the page — so a front end
-that looks and behaves quite differently can be built against it without touching the Python, and
-a script or a coding agent can drive the same endpoints.
+`milestones` starts one server on `127.0.0.1` and prints a URL. It serves every page of the app:
+the home page at `/`, and a board for any repo at `/r/OWNER/NAME/`. Everything a page does goes
+through the API below, and nothing else is shared between the server and the pages — so a front
+end that looks and behaves quite differently can be built against it without touching the Python,
+and a script or a coding agent can drive the same endpoints.
 
-The front end in this repo lives in `ui/`; `ui/shared/api.ts` is the only file in it that knows a
-URL, and is the place to start a new one.
+The front end in this repo lives in `ui/`, a folder per page. `ui/shared/api.ts` (a board) and
+`ui/shared/app.ts` (everything else) are the only files in it that know a URL, and are the place
+to start a new one.
 
 ## Reaching it
 
-- The URL's fragment carries a token that is new on every start: `/?from=<title>…#t=<token>`.
-  It is in the fragment so that it is never sent in a request line or a `Referer`.
-- The URL's query string says how to open the board. `from` repeats once per `--from` given on
+- There is one app at a time. It listens on port 8377 unless `--port` names another, or on any
+  free port if 8377 is taken; a second `milestones` opens its page in the one already running.
+- A page's URL carries a token in its fragment that is new on every start:
+  `/r/OWNER/NAME/?from=<title>…#t=<token>`. It is in the fragment so that it is never sent in a
+  request line or a `Referer`; a link from one page to another carries it on.
+- A board's query string says how to open it. `from` repeats once per `--from` given on
   the command line, and is only a hint about which columns to show first; `by` and `group` (from
   `--by` and `--group`) are hints of the same kind. The page rewrites the query string as the
   view changes (`viewQuery` in `ui/shared/logic.ts`), so that a reload opens the same columns.
   One empty `from=` means no milestone is ticked. The page also keeps its filters there while
   they are on — `q` (the search), `kind`, `label`, `priority`, `pr=1`, `nolabels=1`, `author` —
-  and unlike the view they are saved nowhere else, so a new run starts with none.
+  and unlike the view they are saved nowhere else, so a new run starts with none. `card=<number>`
+  asks for that issue's or pull request's card to be focused with its panel open; it is read
+  once, and gone from the query at the view's first change.
 - Every `/api/` request must send the token as the `X-Milestones-Token` header. The event stream
   alone also accepts it as `?token=`, since a browser's `EventSource` cannot set a header.
 - The `Host` header must be `127.0.0.1:<port>` or `localhost:<port>`.
@@ -92,25 +99,51 @@ loses neither and a rejected suggestion is not made again.
 
 ## Endpoints
 
+A repo's board is everything under `/api/v1/repos/OWNER/NAME`, written `…` below. The repo need
+not be in the config, and is read from GitHub the first time anything asks for its board: in
+any spelling, since the name is settled with GitHub first (`404` for one it can't read). Until
+that read is done, `GET …/board` and `GET …/events` answer, `POST …/suggestions` waits for it,
+and everything else is `503`.
+
 | | |
 | --- | --- |
-| `GET /api/v1/board` | `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is the priority and effort label scheme, as `{priority: {field, prefix, options, colors, meanings, values, aliases}, effort: {…}}` — `options` are the values in order, each written as the label `<field>: <option>`; `prefix` is a regular expression for the name, before its colon, of any label about the kind; `values` maps what follows the colon, or the organisation field's value, lower-cased, to an option; `aliases` maps a label of the repo's own, lower-cased, to the option it stands for; `view` is what was last saved with `POST /api/v1/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
-| `POST /api/v1/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
-| `POST /api/v1/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
-| `POST /api/v1/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
-| `POST /api/v1/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Here alone a `milestone` value may be a **title** (matched ignoring case), for a caller with no way to know the numbers. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
-| `POST /api/v1/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
-| `POST /api/v1/plan/review` | On a writable board, turn the plan a read-only session left into suggestions with source `plan`, and remove the plan file. Returns `{suggestions, dropped}`: `dropped` counts changes already made, or no longer possible. `409` on a read-only board. |
-| `POST /api/v1/plan/discard` | Delete the plan file without reviewing it. `409` on a read-only board, where the plan is the session's own changes: undo them instead. |
-| `POST /api/v1/view` | Body `{by, group, shown, detail?}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, the milestone numbers ticked (`0` for none), and whether the card panel is open (`detail`, default `true`). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
-| `POST /api/v1/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
-| `PATCH /api/v1/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
-| `POST /api/v1/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. With body `{issues: [number, …]}`, read only those cards, and the milestones; one that has closed, merged or gone leaves the board, and the returned board's `gone` lists them. |
-| `GET /api/v1/events` | Server-sent events, below. |
+| `GET /api/v1/app` | `{permissions, repos, focus, config, boards}`: the mode, the tracked repos and the focused ones as the config spells them, where the config file is, and `[{repo, status}]` for each board opened so far (`loading`, `ready` or `failed`). |
+| `GET /api/v1/overview` | A **section**, below, whose `data` is what the home page shows: `{milestones, quiet_repos, stranded, untriaged, untriaged_fresh, findings, kinds, buckets, repos, focus, today}`. `milestones` is every open milestone of the tracked repos in due order, each `{repo, title, number, due, open, closed, open_prs, closed_prs, percent, flags, focus, bucket, url}`; `stranded` is the closed ones still holding open work; `untriaged` is per repo `{repo, issues, prs, needs_triage, focus}`, and comes from a slower search, so a read publishes once with the last counts known (`untriaged_fresh: false`) and again with new ones; `findings` is what is wrong with a milestone, each `{kind, repo, title, number, detail, due, bucket, url, issues, prs, free_buckets}`, and `kinds` says what each kind's fix is. |
+| `GET /api/v1/prs` | A section whose `data` is `{prs: [{repo, number, title, draft, updated, milestone, url, group}]}`: every open pull request you wrote, anywhere, `group` being `tracked`, `untracked` or `ignored`. `?assigned=1`, `?review_requested=1` and `?mentions=1` add the ones assigned to you, waiting on your review, or mentioning you; asking with different flags drops the kept answer and reads again. |
+| `POST /api/v1/refresh` | Read sections again: body `{sections: ["overview", "prs"]}`, or no body for both. Returns each one's section as it stands, `refreshing`. |
+| `PATCH /api/v1/milestones/OWNER/NAME/{number}` | Body any of `{title, due: "YYYY-MM-DD" \| null, state: "open" \| "closed"}`. The milestone is read from GitHub first, never taken from a kept answer. Closing a standing bucket is `409`. Returns `{milestone}`. Needs no board for the repo; one that is open is told to read its milestones again. |
+| `DELETE /api/v1/milestones/OWNER/NAME/{number}` | Delete a milestone nothing was ever filed on. `409` for a standing bucket, and for one with any issue or pull request on it, open or closed. |
+| `POST /api/v1/milestones/OWNER/NAME/{number}/rollover` | Body `{to, close?, dry?}`: move its open issues and pull requests onto the open milestone titled `to`, and close it after if `close`. Returns `{from, to, items: [{number, title, pr}], moved, closed}`; with `dry`, only says what would move. `409` for a title the repo hasn't got, a closed destination, or `close` on a standing bucket. |
+| `GET /api/v1/events` | Server-sent events for the pages that are not a board: `overview` and `prs`, each carrying its section whenever it changes. |
+| `GET …/board` | While the repo is being read: `{repo, permissions, loading: {what, seen, total}, error}`, where `loading` says how far it has got (empty before the first page) and `error` is why it stopped, if it did; ask again until `loading` is absent. `POST …/refresh` tries a failed read again. Then: `{repo, permissions, buckets, milestones, columns, cards, actions, labels, fields, suggestions}`. `permissions` is `"read"` or `"write"`; `columns` is the open milestones' numbers in display order; `labels` is every label in the repo; `fields` is the owner's single-select issue fields as `{name: [option names]}`, empty for a user account; `suggestions` leaves out rejected ones; `labelValues` is the priority and effort label scheme, as `{priority: {field, prefix, options, colors, meanings, values, aliases}, effort: {…}}` — `options` are the values in order, each written as the label `<field>: <option>`; `prefix` is a regular expression for the name, before its colon, of any label about the kind; `values` maps what follows the colon, or the organisation field's value, lower-cased, to an option; `aliases` maps a label of the repo's own, lower-cased, to the option it stands for; `view` is what was last saved with `POST …/view`, or `{}`; `plan` is `{path, count}` for the plan file, below. |
+| `POST …/actions` | Body `{actions: [{issue, kind, value}]}`. Applies them to the cards at once and in order, queues the writes, and returns `{actions: [Action]}` — including any made for the issues a moved pull request closes. A change that changes nothing makes no action. One bad request refuses the whole batch: `400` unknown kind or bad value, `404` unknown issue or milestone, `409` closed milestone. |
+| `POST …/actions/{id}/retry` | Queue a `failed` action again. `409` if it is not failed. |
+| `POST …/actions/{id}/revert` | Give up on a `failed` action; the card goes back to `previous` unless a later action on it stands. |
+| `POST …/suggestions` | Body `{suggestions: [{issue, kind, value, reason, source}]}`. Here alone a `milestone` value may be a **title** (matched ignoring case), for a caller with no way to know the numbers. Each is checked as an action would be, so one that could never be accepted is refused with why. Returns `{suggestions}`: the ones added — one already open, or already rejected, is skipped. Writes nothing to GitHub, in any mode. |
+| `POST …/suggestions/resolve` | Body `{ids: [...], decision: "accept" \| "reject"}`. Returns `{suggestions, actions}`: the suggestions that changed (including any of the board's own that accepting made due or moot) and the actions accepting made. |
+| `POST …/plan/review` | On a writable board, turn the plan a read-only session left into suggestions with source `plan`, and remove the plan file. Returns `{suggestions, dropped}`: `dropped` counts changes already made, or no longer possible. `409` on a read-only board. |
+| `POST …/plan/discard` | Delete the plan file without reviewing it. `409` on a read-only board, where the plan is the session's own changes: undo them instead. |
+| `POST …/view` | Body `{by, group, shown, detail?}`: what the columns are (`milestone`, `priority` or `effort`), the dimensions cards are grouped by, the milestone numbers ticked (`0` for none), and whether the card panel is open (`detail`, default `true`). Kept in the repo's state file and handed back as `view` in the board, so the next run can open the same way. A front end's own business: the server only stores it. |
+| `POST …/milestones` | Body `{title, reopen?}`. Returns `{milestone}`: the open milestone of that title (matched ignoring case), created if there is none. A closed one is `409` unless `reopen` is true. |
+| `PATCH …/milestones/{number}` | Body `{due: "YYYY-MM-DD"}` or `{due: null}`. Returns `{milestone}`. |
+| `POST …/refresh` | Read everything from GitHub again; returns the board. Changes not yet written stay on their cards. With body `{issues: [number, …]}`, read only those cards, and the milestones; one that has closed, merged or gone leaves the board, and the returned board's `gone` lists them. |
+| `GET …/events` | Server-sent events, below. |
 
 Milestone writes are made before the response and fail with `502` and GitHub's message; in a
 read-only run they are `403` with what would have been done. Nothing in the API closes or deletes
 a milestone.
+
+**Section** — an answer that takes seconds to read, kept on disk
+(`$XDG_STATE_HOME/milestones/<name>.json`) so that a page has something to show at once:
+`{data, fetched_at, params, fresh, refreshing, error}`. `data` is the last answer, or `null` if
+there has never been one; `fetched_at` is when it was read. Asking for a section starts a read
+if this run has not made one, or made it more than five minutes ago, and the new answer arrives
+as an event. `fresh` is true only for an answer this run read to the end. The kept copy is for
+looking at: a page should offer no write that was decided from it until `fresh`, and the
+milestone endpoints read the milestone again themselves either way. `error` is why the last
+read failed; `data` is then still the answer before it.
+
+A read-only app refuses the three milestone writes with `403`, saying what it would have done.
 
 ## Events
 
@@ -137,27 +170,28 @@ for a change that was undone; every comment — is saved after each change to
               "title": "…", "summary": "#2: milestone → none (was Not urgent)"}]}
 ```
 
-`issue`, `kind` and `value` are what `POST /api/v1/actions` takes; `title` and `summary` are for
+`issue`, `kind` and `value` are what `POST …/actions` takes; `title` and `summary` are for
 whoever reads the file. A read-only board applies the file to its cards when it starts. A writable
 board never applies it: `plan.count` in the board says one is waiting, and `/plan/review` makes
 suggestions of it. A labels change becomes `{add, remove}` on review, so labels added since the
 plan survive it.
 
-## Finding a running board
+## Finding the running app
 
-While it runs, a board keeps `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.session.json`
-(mode 0600) holding `{repo, url, token, pid}`, and removes it when it stops. That is how
-`milestones suggest` finds the board for a repo; anything else on the same machine can do the same.
-A file left behind by a board that was killed outright points at a port nothing answers on.
+While it runs, the app keeps `$XDG_STATE_HOME/milestones/app.session.json` (mode 0600) holding
+`{url, token, pid, permissions}`, and removes it when it stops. That is how `milestones suggest`
+reaches a repo's board, and how a second `milestones` finds the first; anything else on the same
+machine can do the same. A file left behind by an app that was killed outright names a process
+that is gone.
 
 ## Trying it
 
 ```sh
-milestones board gaurav/milestones --no-open --port 8765     # prints the URL with its token
+milestones --no-open --port 8765     # prints the URL with its token
 T=<token>
-curl -s -H "X-Milestones-Token: $T" http://127.0.0.1:8765/api/v1/board | jq '.columns'
+R=http://127.0.0.1:8765/api/v1/repos/gaurav/milestones
+curl -s -H "X-Milestones-Token: $T" $R/board | jq '.columns'
 curl -s -H "X-Milestones-Token: $T" -H 'Content-Type: application/json' \
-     -d '{"actions":[{"issue":1,"kind":"milestone","value":3}]}' \
-     http://127.0.0.1:8765/api/v1/actions
-curl -sN "http://127.0.0.1:8765/api/v1/events?token=$T"
+     -d '{"actions":[{"issue":1,"kind":"milestone","value":3}]}' $R/actions
+curl -sN "$R/events?token=$T"
 ```

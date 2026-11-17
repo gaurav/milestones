@@ -2,7 +2,8 @@
 
 I have measured out my life with GitHub milestones
 
-A personal CLI for viewing and managing GitHub milestones across all my repositories.
+A personal tool for viewing and managing GitHub milestones across all my repositories: a web app
+that runs on your own machine, with a few commands beside it.
 Milestones are the single source of truth: dated milestones for "this release"/"next release",
 plus standing undated buckets such as "Needed soon" that never close.
 [MILESTONES.md](MILESTONES.md) lists the buckets and says what each one, and each kind of dated
@@ -10,7 +11,7 @@ milestone, means. Every issue's bucket is publicly visible on its GitHub issue p
 see how it's triaged and complain in a comment if they disagree.
 
 The buckets are per repo and opt-in: `setup` creates them where you want that much triage, and
-a repo without them is simply left alone. Every command picks up whichever buckets a repo
+a repo without them is simply left alone. Everything picks up whichever buckets a repo
 actually has, and a repo is free to use only some of them.
 
 ## Setup
@@ -21,6 +22,7 @@ optional, see [Tokens and read-only runs](#tokens-and-read-only-runs)).
 
 ```sh
 uv tool install --editable .
+npm install && npm run build      # the app's pages; again after pulling changes to ui/
 ```
 
 That puts a `milestones` command on your PATH running the code in this working tree, so edits to the source take effect immediately; re-run it only if the dependencies or the entry point change. To run it out of the checkout without installing, prefix every command below with `uv run`.
@@ -47,13 +49,12 @@ ignore = [
   "TranslatorSRI/*",
 ]
 
-# Optional: the repos you're working on right now. `status` stars their rows;
+# Optional: the repos you're working on right now. The home page stars their rows;
 # `milestones focus` and `unfocus` rewrite this list.
 focus = ["gaurav/milestones"]
 
-# Optional: fixed colours for an owner's rows in `status`. Any owner left out that
-# owns several tracked repos gets one from the palette. Sibling organisations can
-# share a colour to read as one.
+# Optional: a colour for an owner. Read and checked, but not shown anywhere at the moment:
+# they coloured the status table the home page replaced.
 [colors]
 NCATSTranslator = "blue"
 TranslatorSRI = "blue"
@@ -84,15 +85,16 @@ Every command is described below; this is the order they are useful in.
    parked on `Needs triage`, one keypress each; `milestones triage --prs` does the pull requests.
    For a backlog, `triage --list` piped through `grep` or `fzf` into `milestones assign` does
    hundreds at once ([below](#triaging-in-bulk)).
-4. **Look.** `milestones status` (bare `milestones` too) is the table to keep open: every open
-   milestone across your repos by due date, and at the bottom what is still untriaged.
-   `milestones focus OWNER/NAME` stars the repos you are working on this week.
-5. **Tidy.** `milestones check` says what is wrong with the milestones themselves — undated,
-   misnamed, empty, done, or closed with work still on them — and `check -i` fixes each with a
-   keypress.
-6. **Release.** When a release goes out, `milestones rollover OWNER/NAME "v1.2" "v1.3" --close`
-   moves what didn't make it onto the next milestone and closes the old one; `triage --from
-   "v1.2"` is the same job one issue at a time, for when they shouldn't all go the same way.
+4. **Look.** `milestones` opens the app's home page, the one to keep open: every open
+   milestone across your repos by due date, and what is still untriaged in each.
+   `milestones focus OWNER/NAME` stars the repos you are working on this week. A repo's name
+   there opens its board, as `milestones OWNER/NAME` does from the terminal.
+5. **Tidy.** The home page's **To fix** says what is wrong with the milestones themselves —
+   undated, misnamed, empty, done, or closed with work still on them — with the fix for each
+   as a button.
+6. **Release.** When a release goes out, **Roll over…** on its milestone moves what didn't make
+   it onto the next one, and closes the old one if you tick that; `triage --from "v1.2"` is the
+   same job one issue at a time, for when they shouldn't all go the same way.
 
 [MILESTONES.md](MILESTONES.md) is the other half: what the buckets mean and how a release is
 put together. [LABELS.md](LABELS.md) goes with it: the `Priority:` and `Effort:` labels that
@@ -114,9 +116,11 @@ lines are read from a file.
 | `MILESTONES_PERMISSIONS` | `write` (the default) or `read`. |
 
 With `MILESTONES_PERMISSIONS=read` nothing is written, whatever the token could do: `setup` says
-what it would create, `rollover` and `assign` list what they would move and stop, the `triage` walk
-says where each issue would go, and `check -i` reports each fix it would have made. It is the way
-to see what the tool suggests for your repos before letting it act.
+what it would create, `assign` lists what it would move and stops, the `triage` walk says where
+each issue would go, a fix on the home page answers with what it would have done, and a board
+keeps its changes as a plan. It is the way to see what the tool suggests for your repos before
+letting it act. The mode belongs to the running app: `milestones` won't open a read-only look in
+an app that was started writable, or the other way round, and says to stop that one first.
 
 A fine-grained personal access token keeps the tool to what it should touch — Issues and Pull
 requests read and write, Metadata read, and organisation Projects read, with nothing for
@@ -128,16 +132,65 @@ the default token, which only has to be able to *read* them.
 use (the setting's name, never the token), who that token signs in as, and whether it can read
 projects and organisation issue fields.
 
+## The app
+
+```sh
+milestones                                  # the home page: every tracked repo
+milestones NCATSTranslator/Babel            # that repo's board, tracked or not
+milestones https://github.com/a/b/pull/12   # its repo's board, opened at that pull request
+```
+
+`milestones` starts a server on your machine (port 8377, or any free port if that is taken) and
+opens a page in your browser. There is one app at a time: run `milestones` again, with a repo or
+without, and it opens the page in the app that is already running and returns. In the terminal
+it started in, `o` opens the page again (if you closed the tab) and `q` or Ctrl-C stops it. That
+terminal is the app's log: a line for every page
+opened, every read from GitHub and what it found, and every change written or refused. If the
+pages haven't been built, or were built from other code, the page and the log both say so and
+what to run.
+
+**The home page** lists every open milestone of the tracked repos by due date, overdue first,
+then the standing buckets, with open and closed counts, open pull requests and how far along
+each is. A repo's name opens its board; a milestone's title opens the board on that milestone.
+Below that, **To triage** counts what is on no milestone, or parked on Needs triage, in each
+repo, and **To fix** lists what is wrong with a milestone, grouped by the fix:
+
+- *stranded*: closed with work still open on it, which nothing else can see. Roll the work
+  onto an open milestone, or reopen it.
+- *rename*: no version or date in the title, and not a standing bucket. Rename it, or with one
+  click make it a bucket the repo hasn't got.
+- *undated*: set a due date, however far out, since an undated milestone never comes due.
+- *overdue*: set a new date, or roll its open work onto the next milestone.
+- *done*: every issue on it is closed; close it.
+- *empty*: nothing was ever filed on it; delete it.
+
+A milestone is well-formed if it is one of the repo's standing buckets, or names a version or
+date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending 2026-08-31`) *and* carries a due date.
+Pull requests count as work on a milestone throughout, so one whose issues are all closed but
+whose pull requests are still open is not done. A standing bucket is never closed or deleted
+from here, and only an empty milestone can be deleted.
+
+Reading eight repos takes ten seconds or so, so the page shows the answer it got last time
+straight away, says how old that is, and replaces it when GitHub has answered. That kept copy
+is for looking at: the fix buttons stay off until the fresh answer is in, and each fix reads
+its milestone from GitHub again before it writes.
+
+**My pull requests** is every open pull request you wrote, anywhere on GitHub: the ones in
+tracked repos that are on no milestone yet, then the rest, with switches to add the ones
+assigned to you, waiting on your review, or mentioning you. A row opens its repo's board at
+that pull request, whether or not the repo is tracked.
+
 ## The board
 
 ```sh
-npm install && npm run build      # once, and after pulling changes to ui/
-milestones board NCATSTranslator/Babel --from Critical --from "Babel v1.19" --from none
+milestones NCATSTranslator/Babel --from Critical --from "Babel v1.19" --from none
 ```
 
-`milestones board` opens one repo in your browser as a column per milestone, with every open
-issue and pull request as a card. Run it with no repo from inside a checkout and it takes that
-checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is the issues with no
+`milestones OWNER/NAME` (or `milestones board OWNER/NAME`) opens one repo as a column per
+milestone, with every open issue and pull request as a card. The repo is read from GitHub the
+first time its board is opened, which takes a few seconds, or up to a minute for several hundred
+issues; after that it stays in the app, so coming back to it is instant. `milestones board` with
+no repo, from inside a checkout, takes that checkout's `origin`. `--from` chooses the columns shown to begin with (`none` is the issues with no
 milestone); the rest are under **Columns**, including any closed milestone that still has open
 work on it.
 
@@ -245,7 +298,7 @@ priority, effort and milestone whatever the columns are.
 
 The address bar keeps up with all three as you change them, and with the search and the filters,
 so reloading the page shows the same cards in the same columns rather than what the command line
-asked for. The filters last only as long as the tab: the next `milestones board` starts with none.
+asked for. The filters last only as long as the tab: the next time the board is opened it starts with none.
 
 ### Asking a coding agent
 
@@ -275,8 +328,8 @@ for you to accept or reject; nothing is written to GitHub until you accept. `sug
 `--title`, `--comment` or `--comment-file`, and `--close`. `--source` (or `MILESTONES_SOURCE` in
 the agent's environment) says who is suggesting, so two sessions on different models can look at
 the same issue and you can compare what each proposed. `milestones suggest --json` reads a batch
-from stdin. A board has to be running for the repo; `suggest` says so if one isn't. There is one
-board per repo at a time: starting a second says where the first is.
+from stdin. The app has to be running; `suggest` says so if it isn't. A repo whose
+board has not been opened yet is read first, and `suggest` waits for that.
 
 The page and the server share nothing but an HTTP API, described in
 [docs/BoardAPI.md](docs/BoardAPI.md), so a different front end — or a script — can use the same
@@ -285,24 +338,17 @@ server.
 ## Commands
 
 ```sh
-milestones board [OWNER/NAME] [--from M]  # the triage board in your browser; see above
+milestones [--port N] [--no-open]        # the app, on its home page; see above
+milestones REPO [--from M] [--by ...]    # a repo's board in the app: OWNER/NAME or its URL,
+                                         # or an issue or pull request to open it at.
+                                         # `milestones board [REPO]` is the same, and with
+                                         # no REPO takes the checkout you are in
 milestones suggest REF --priority high --reason "..."   # propose a change on a running
                                          # board, for the person there to accept or reject
 
 milestones doctor                        # which token and permissions are in effect, and
                                          # what that token can read
 
-milestones status [--json]               # the default command (bare `milestones` runs it):
-                                         # all open milestones across configured repos by
-                                         # due date, with open/closed issue counts, open
-                                         # PRs and % done; flags !OVERDUE, (empty) and
-                                         # (done), links each, then names any tracked repo
-                                         # with nothing open, says how many closed
-                                         # milestones still hold open work, and counts the
-                                         # issues and PRs in each repo with no milestone,
-                                         # and the ones parked on Needs triage.
-                                         # Colour-coded on a terminal (see below); --json
-                                         # prints the same thing for a script to read
 milestones triage [--repo OWNER/NAME] [--prs] [--from MILESTONE ...] [--list|--json]
                                          # walk untriaged issues (no milestone) one at a
                                          # time, then the ones parked on Needs triage, and
@@ -325,9 +371,6 @@ milestones assign MILESTONE [REF ...] [--priority urgent|high|medium|low]
                                          # skipped, not fatal. A PR takes the issues it
                                          # closes along, as in the walk. --priority also sets
                                          # each one's `Priority:` label
-milestones rollover OWNER/NAME FROM TO [--close]
-                                         # move all open issues from milestone FROM to TO
-                                         # (by title); --close closes FROM once empty
 milestones setup OWNER/NAME              # create the standing buckets and the priority and
                                          # effort labels in a repo (idempotent); asks before
                                          # renaming or recolouring a label that is there
@@ -341,27 +384,11 @@ milestones discover [--tracked-only|--list-ignored|--ignore-remaining]
                                          # --tracked-only stops after the first list,
                                          # --list-ignored spells out the ignored ones, and
                                          # --ignore-remaining ignores the ones suggested
-milestones prs [--assigned] [--review-requested] [--mentions] [--json]
-                                         # every open PR you authored, anywhere on GitHub,
-                                         # in three tables: PRs in tracked repos with no
-                                         # milestone (then run `triage --prs`), PRs in
-                                         # repos not in the config (`add` the repo, or
-                                         # put the PR on your TODO list), and PRs in
-                                         # ignored repos. Drafts and last-updated dates
-                                         # are marked, nothing is left out; the flags add
-                                         # PRs assigned to you, awaiting your review, or
-                                         # mentioning you
-milestones check [-i|--json]             # everything that needs fixing, grouped by fix:
-                                         # closed milestones with work still on them, and
-                                         # milestones to rename, date, close, delete or
-                                         # roll over.
-                                         # -i then walks the list and applies your answers;
-                                         # --json prints them for a script instead
 milestones add REPO                      # track a repo (OWNER/NAME or a github.com URL);
                                          # rewrites the repos list in the config
 milestones remove REPO                   # stop tracking a repo, same syntax
 milestones focus [REPO ...]              # mark the repos you're working on right now, so
-                                         # `status` stars their rows; no arguments lists them
+                                         # the home page stars their rows; no arguments lists them
 milestones unfocus REPO [...]            # stop marking them, once your attention moves on;
                                          # focused repos also come first in `triage`
 milestones ignore REPO|OWNER [...]       # hide repos from discover without tracking them;
@@ -369,22 +396,9 @@ milestones ignore REPO|OWNER [...]       # hide repos from discover without trac
                                          # you don't track; appends to the config
 ```
 
-`check` reports only; every finding carries the milestone's URL, so a fix is one click away.
-`--interactive` walks the same findings one at a time, offering the fixes that fit each one — rename
-to a standing bucket the repo hasn't got yet, set the due date to today / tomorrow / next Monday /
-the start of next month, close, delete, roll over, or reopen — plus open, skip and quit. Once
-you type a date of your own, the fourth date slot offers that date back for the rest of the session
-(the one you have typed most often, most recent winning ties), since a run of milestones usually
-wants the same day — "after the project meeting" is one keypress each after the first. A single
-keypress acts immediately; the fixes that need more (a new title, a typed date, a milestone to roll
-onto) then ask, and take blank as "skip". A milestone is well-formed if it is one of the repo's
-standing buckets, or names a version or date (`v1.2`, `Babel v1.19`, `2026aug24`, `Week ending
-2026-08-31`) *and* carries a due date — however far out, since an undated milestone never comes due
-to roll over. A closed milestone with open issues or pull requests still on it is *stranded*: nothing
-else can see that work, since `status` shows open milestones and `triage` only what has no
-milestone or sits on Needs triage, so `check` leads with those and offers to roll the work onto a milestone that is
-open, or to reopen the closed one. Pull requests count as work on a milestone throughout, so a
-milestone whose issues are all closed but whose PRs are still open is not `(done)`.
+What used to be `status`, `check`, `prs` and `rollover` is the app's home page and its pull
+requests page now; the commands that are left are the ones with no page yet (the `triage` walk,
+the config) and the ones made for a pipe or a coding agent (`triage --list`, `assign`, `suggest`).
 
 Owning a repo is not the same as triaging it, and `discover` searches by owner, so most of what it
 turns up is someone else's to manage. `ignore` is the third state beside tracked and untracked:
@@ -409,9 +423,6 @@ Use `OWNER/*` for an organisation you will never triage, and the sweep for owner
 care about — you have looked at these and said no, so clear them off the list, but any repo created
 there later is a fresh suggestion rather than something the glob silently swallows. After a sweep
 `discover` reads as a change feed: "Nothing new" until something appears.
-
-`rollover` asks for confirmation before touching anything, and is the point of the tool: at
-release time, roll what didn't make it into the next milestone instead of re-triaging by hand.
 
 ### Triaging in bulk
 
@@ -452,7 +463,7 @@ menu, and picking it again writes nothing.
 `--from MILESTONE` walks the open items on any milestone instead, and can be given more than
 once for several in that order. `--from none` is the no-milestone set on its own, the walk as it
 was before Needs triage existed; `--from "Needed later"` re-triages a bucket that has grown;
-`--from "Babel v1.19"` at release time is the one-at-a-time alternative to `rollover` for what
+`--from "Babel v1.19"` at release time is the one-at-a-time alternative to the home page's **Roll over…** for what
 didn't make it. `--list` and `--json` take `--from` too, and a listed item that has a milestone
 says so after its title (`(on Needs triage)`), while a no-milestone line reads exactly as before,
 so a pipeline into `assign` is not disturbed. GitHub matches the title whatever the milestone's
@@ -470,7 +481,7 @@ else is left where it is, and so is one in another repo. `assign` does the same 
 leaves it untriaged, so it comes round again next run. When none of the numbered milestones is the
 one, `c` asks for a title, with Tab completing over every milestone the repo has, open or closed: an
 open one is used as it is, a closed one is reopened and a new one created, each after asking. A
-milestone picked that way joins the numbered list for the rest of the run. `milestones prs` is the wider view: every
+milestone picked that way joins the numbered list for the rest of the run. The app's **My pull requests** page is the wider view: every
 open PR of yours anywhere on GitHub, grouped by whether its repo is tracked.
 
 ### Priority and order
@@ -485,39 +496,6 @@ and refused: GitHub has no API that writes that order
 ([#25](https://github.com/gaurav/milestones/issues/25)), so the milestone is set and the message
 links to it for dragging by hand.
 
-### Reading the status table
-
-The table is colour-coded so a long one can be skimmed rather than read. An owner is coloured
-when the config names a colour for it, or when several of your repos share it, so a run of rows
-from the same organisation lights up together. Version numbers in a milestone title are bold. A
-due date runs red (overdue), orange (this week), yellow (this month) or grey (further out).
-A bucket with work on it is coloured too: the urgency levels run down the same ramp, `Critical`
-bold red, `Needed soon` orange, `Needed later` light green and `Not urgent` grey, and the two that
-are states rather than levels sit off it, `Upstream` teal and `Needs triage` magenta. An empty
-bucket stays plain, so a quiet `Needed soon` reads as quiet. `Critical` is optional — `setup` leaves it to `triage` to create, and
-`status` leaves it out while nothing is open on it, so it only shows up when something is on fire.
-
-A repo you have said you are working on is starred with a gold `✦`, in a column of its own.
-The glyph carries the meaning and the colour only makes it easier to find, so a pipe loses
-nothing. The rows do **not** move: a repo's milestones include its standing buckets, and
-floating `Not urgent` above someone else's overdue release would make the table worse. The star
-says "this is mine right now" while the order goes on meaning "this is what's due next".
-
-`%` is grey up to halfway and then a lightening green, so the milestones near the end stand
-out. Nothing below halfway is coloured as a warning: a milestone at 10% is not one in trouble,
-just one somebody has only started. An undated milestone stays plain, for the same reason.
-
-Colour is switched off when the output is not a terminal, so `milestones status | grep …` and
-`milestones status > notes.txt` behave, and `NO_COLOR=1` turns it off in a terminal too. For a
-script — or a coding agent — `milestones status --json` prints the same data as JSON:
-`milestones` with `repo`, `title`, `due`, `open`, `closed`, `open_prs`, `closed_prs`,
-`percent`, `flags`, `focus` and `url` (`open` and `closed` are issues, as GitHub counts them, and
-`percent` is over issues and PRs together); `quiet_repos` in the same shape for the tracked repos
-with no open milestone; `stranded`, the closed milestones with open work still on them; `untriaged`,
-the per-repo counts of issues and PRs with no milestone, with `needs_triage` for what is parked on
-that bucket; and the configured `focus` list itself. `milestones check --json` does the same for the findings, with
-a `kinds` legend saying what each one's fix is.
-
 ## Why not something else
 
 Nothing off the shelf manages milestones across repositories. `gh` itself declined milestone
@@ -528,11 +506,13 @@ milestone, and it would be a second record that drifts from the first.
 
 What it deliberately leaves out:
 
-- **No local state or cache of GitHub.** Every command reads GitHub fresh, so nothing can go
-  stale except GitHub's own listings, which lag writes by a few seconds. Every decision lives on
-  GitHub; the one thing kept locally is what the board has *not* decided yet — suggestions still
-  waiting, the ones you turned down, so that they aren't made again, the changes of a read-only
-  session until they are reviewed — and how you last had the board laid out.
+- **No local copy of GitHub that anything is decided from.** Every decision lives on GitHub,
+  and every write reads what it is about to change first. Two things are kept locally. One is
+  the last answer the home page and the pull requests page got, so that they have something to
+  show while GitHub is asked again: it is marked with its age, and no fix is offered from it.
+  The other is what a board has *not* decided yet — suggestions still waiting, the ones you
+  turned down, so that they aren't made again, the changes of a read-only session until they
+  are reviewed — and how you last had the board laid out.
 - **Nothing beyond GitHub milestones.** No other tracker, and no planning objects of its own.
 - **No `repos` command.** "Which repos am I tracking, and which am I missing?" is one question, and
   `discover` answers both halves of it, so a `repos` subcommand beside `add` and `remove` would
@@ -542,10 +522,10 @@ What it deliberately leaves out:
 
 ```sh
 uv run pytest                     # the Python: pure functions only, nothing calls gh
-npm run typecheck && npm test     # the board's front end, in ui/
+npm run typecheck && npm test     # the app's front end, in ui/
 npm run dev                       # rebuild the front end on every change
-uv run milestones board OWNER/NAME --reload   # and restart the board, same URL, on a Python change
-PLAYWRIGHT_FROM=~/code/prcoder npm run drive   # drive a read-only board in a headless browser
+uv run milestones --reload        # and restart the app, same URL, on a Python change
+PLAYWRIGHT_FROM=~/code/prcoder npm run drive   # drive a read-only app in a headless browser
 ```
 
 The front end is TypeScript and Preact with signals, bundled by esbuild into

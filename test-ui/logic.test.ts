@@ -301,3 +301,50 @@ test("focus walks on to the card below that is still in the column, past any car
   assert.equal(focusAfter(column, [column[0]!, column[1]!], 3), 2);
   assert.equal(focusAfter(column, [], 1), null);
 });
+
+// --- the pages that are not a board ---------------------------------------------------------
+
+import { boardPath, pageLink, repoFromPath } from '../ui/shared/api.ts';
+import { ago, dateChoices, dueness, prsQuery } from '../ui/shared/app.ts';
+
+test('a board knows its repo from its address, and a link to one carries the token on', () => {
+  assert.equal(repoFromPath('/r/NCATSTranslator/Babel/'), 'NCATSTranslator/Babel');
+  assert.equal(repoFromPath('/r/o/my.repo'), 'o/my.repo');
+  assert.equal(repoFromPath('/'), '');
+  assert.equal(repoFromPath('/prs/'), '');
+  assert.equal(boardPath('o/r'), '/r/o/r/');
+  assert.equal(boardPath('o/r', { card: 12 }), '/r/o/r/?card=12');
+  assert.equal(boardPath('o/r', { from: ['none', 'Needs triage'] }), '/r/o/r/?from=none&from=Needs+triage');
+  assert.equal(pageLink(boardPath('o/r', { card: 12 }), 'tok'), '/r/o/r/?card=12#t=tok');
+  // What the board's own reader makes of that link.
+  assert.deepEqual(parseLocation('?from=none&from=Needs+triage', '#t=tok').from, ['none', 'Needs triage']);
+});
+
+test('a kept answer says how old it is', () => {
+  const now = new Date('2026-11-16T12:00:00Z');
+  assert.equal(ago('2026-11-16T11:59:40Z', now), 'just now');
+  assert.equal(ago('2026-11-16T11:55:00Z', now), '5 min ago');
+  assert.equal(ago('2026-11-16T09:00:00Z', now), '3 h ago');
+  assert.equal(ago('2026-11-15T09:00:00Z', now), '1 day ago');
+  assert.equal(ago('2026-11-10T09:00:00Z', now), '6 days ago');
+});
+
+test('a due date is late, soon, ahead or distant', () => {
+  assert.equal(dueness(null, '2026-11-16'), 'none');
+  assert.equal(dueness('2026-11-15', '2026-11-16'), 'late');
+  assert.equal(dueness('2026-11-16', '2026-11-16'), 'soon');
+  assert.equal(dueness('2026-11-23', '2026-11-16'), 'soon');
+  assert.equal(dueness('2026-12-16', '2026-11-16'), 'ahead');
+  assert.equal(dueness('2027-03-01', '2026-11-16'), 'distant');
+});
+
+test('the dates on offer are today, tomorrow, next Monday and the first of next month', () => {
+  // 2026-11-16 is a Monday: "next Monday" is a week on, never today.
+  assert.deepEqual(dateChoices('2026-11-16').map((c) => c.date), ['2026-11-16', '2026-11-17', '2026-11-23', '2026-12-01']);
+  assert.deepEqual(dateChoices('2026-12-31').map((c) => c.date), ['2026-12-31', '2027-01-01', '2027-01-04', '2027-01-01']);
+});
+
+test('whose pull requests to list goes in the query, in one order', () => {
+  assert.equal(prsQuery([]), '');
+  assert.equal(prsQuery(['mentions', 'assigned']), '?assigned=1&mentions=1');
+});

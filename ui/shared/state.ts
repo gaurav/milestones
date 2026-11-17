@@ -1,7 +1,7 @@
 // The board's state and everything a view may do to it. Views read the signals and call the
 // functions; nothing else talks to the API.
 import { computed, effect, signal } from '@preact/signals';
-import { Api, parseLocation } from './api.ts';
+import { Api, parseLocation, repoFromPath } from './api.ts';
 import type { Action, BoardData, Card, Kind, Milestone, Move, PlanInfo, Suggestion, Value } from './api.ts';
 import {
   DIMENSIONS, NONE, PLAIN_MAPPING, allColumns, columnFor, columnLabel, dimColumns, filtersFrom, group, initialView,
@@ -10,9 +10,15 @@ import {
 import type { ColumnId, DimKind, Filters, Layout } from './logic.ts';
 
 const asked = parseLocation(location.search, location.hash);
-export const api = new Api(asked.token);
+export const token = asked.token;
+export const api = new Api(asked.token, repoFromPath(location.pathname));
+/** The card the address asked to open at (`?card=N`): a pull request's page, a link from
+ *  another page. Asked once; the view's own query replaces it as soon as the view changes. */
+const askedCard = Number(new URLSearchParams(location.search).get('card')) || null;
 
 export const loading = signal(true);
+/** How far the first read of the repo has got, while there is no board to show yet. */
+export const reading = signal('');
 export const fatal = signal('');
 export const toast = signal('');
 export const board = signal<BoardData | null>(null);
@@ -120,6 +126,10 @@ function take(data: BoardData, first: boolean) {
     dimension.value = view.by;
     groupBy.value = view.group;
     detailOpen.value = view.detail;
+    if (askedCard !== null) {
+      if (cards.value.has(askedCard)) { focused.value = askedCard; detailOpen.value = true; }
+      else say(`#${askedCard} is not on the board: it is closed or merged, or not in ${data.repo}.`);
+    }
     rememberView();
     document.title = `milestones: ${data.repo}`;   // the tool first, so its tabs sort and search together
   }
@@ -154,10 +164,20 @@ function rememberView() {
 
 export async function start() {
   try {
-    take(await api.board(), true);
+    // The app reads a repo the first time its board is asked for, and answers at once with
+    // how far it has got; ask again until there is a board.
+    let data = await api.board();
+    while (data.loading) {
+      if (data.error) throw new Error(data.error);
+      const { what, seen, total } = data.loading;
+      reading.value = what ? `Reading ${data.repo}: ${what} ${seen}/${total} …` : `Reading ${data.repo} …`;
+      await new Promise((done) => setTimeout(done, 400));
+      data = await api.board();
+    }
+    take(data, true);
   } catch (error) {
-    fatal.value = `Could not load the board: ${(error as Error).message}. The link carries a `
-      + 'token that is new each time `milestones board` starts; open the one it printed.';
+    fatal.value = `Could not load the board: ${(error as Error).message}. If the token is `
+      + 'wrong: the link carries one that is new each time `milestones` starts; open the one it printed.';
     return;
   } finally {
     loading.value = false;

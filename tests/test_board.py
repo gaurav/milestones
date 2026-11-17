@@ -9,7 +9,8 @@ from milestones import gh
 from pathlib import Path
 
 from milestones.board import client, data, plan, reconcile, server
-from milestones.cli import DEFAULT_BUCKETS, remote_repo, sort_key, suggest_ref
+from milestones.cli import remote_repo, suggest_ref
+from milestones.core import DEFAULT_BUCKETS, sort_key
 
 
 def issue_node(number, **extra):
@@ -134,9 +135,63 @@ def test_remote_repo_reads_githubs_remote_spellings():
 
 
 def test_the_page_url_asks_for_the_view_in_its_query_and_keeps_the_token_in_its_fragment():
-    assert server.page_url(8000, "tok") == "http://127.0.0.1:8000/#t=tok"
-    assert (server.page_url(8000, "tok", ["Babel v1.19 & after", "none"], "priority", "effort")
-            == "http://127.0.0.1:8000/?by=priority&group=effort&from=Babel%20v1.19%20%26%20after&from=none#t=tok")
+    base = "http://127.0.0.1:8000"
+    assert server.page_url(base, "tok") == "http://127.0.0.1:8000/#t=tok"
+    query = server.board_query(["Babel v1.19 & after", "none"], "priority", "effort", card=12)
+    assert (server.page_url(base, "tok", server.board_path("o/r"), query)
+            == "http://127.0.0.1:8000/r/o/r/?by=priority&group=effort"
+               "&from=Babel%20v1.19%20%26%20after&from=none&card=12#t=tok")
+
+
+def test_a_board_is_served_for_any_repo_and_a_page_from_its_folder():
+    assert server.page_for("/") == "index.html"
+    assert server.page_for("/r/NCATSTranslator/Babel/") == "board/index.html"
+    assert server.page_for("/r/o/r") == "board/index.html"
+    assert server.page_for("/prs/") == "prs/index.html"
+    assert server.page_for("/base.css") is None
+    assert server.page_for("/board/main.js") is None
+
+
+class FakeApp(server.App):
+    """An app whose repos are whatever they are called, and whose boards read nothing."""
+
+    def __init__(self, renamed=None):
+        super().__init__({"buckets": DEFAULT_BUCKETS, "repos": [], "focus": [], "labels": {}},
+                         make_board=lambda repo: server.Board(
+                             repo, DEFAULT_BUCKETS, sort_key,
+                             fetch=lambda repo, progress: {"repo": repo, "milestones": [], "cards": []}),
+                         state=None)
+        self.renamed, self.asked = renamed or {}, []
+
+    def canonical(self, repo):
+        self.asked.append(repo)
+        return self.renamed.get(repo.lower(), repo)
+
+
+def test_one_repo_has_one_board_however_it_is_spelt_or_renamed(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: False)
+    app = FakeApp({"o/old": "O/New", "o/new": "O/New"})
+    board = app.board("o/old")
+    assert app.board("O/NEW") is board and app.board("o/old") is board
+    assert app.asked == ["o/old"]        # the name GitHub gave back needs no second lookup
+    assert board.ready.wait(5) and board.status == "ready" and board.repo == "O/New"
+    assert app.board("a/b") is not board
+    with pytest.raises(server.Refused, match="not a repo"):
+        app.board('o/r") { evil')
+
+
+def test_a_board_that_is_still_being_read_says_so_and_nothing_else(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: False)
+    def failing(repo, progress):
+        progress("issues", 50, 120)
+        raise SystemExit("gh api graphql failed:\nnot found")
+    board = server.Board("o/r", DEFAULT_BUCKETS, sort_key, fetch=failing)
+    board.status = "loading"
+    assert board.snapshot() == {"repo": "o/r", "permissions": "write", "loading": {}, "error": None}
+    board.reload()
+    assert board.status == "failed" and board.ready.is_set()
+    assert board.snapshot()["loading"] == {"what": "issues", "seen": 50, "total": 120}
+    assert "not found" in board.snapshot()["error"]
 
 
 def test_only_loopback_hosts_on_the_servers_own_port_are_served():
@@ -562,27 +617,29 @@ def test_suggest_refs_are_bare_numbers_inside_a_checkout():
         suggest_ref("62", None)
 
 
-def test_a_running_board_is_found_by_repo_whatever_the_case(tmp_path, monkeypatch):
+def test_the_running_app_is_found_through_its_session_file(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    with pytest.raises(SystemExit, match="No board is running for o/r"):
-        client.find_session("o/r")
-    path = client.write_session("O/R", "http://127.0.0.1:1", "tok")
+    with pytest.raises(SystemExit, match="milestones is not running"):
+        client.find_session()
+    path = client.write_session("http://127.0.0.1:1", "tok", "read")
+    assert path == tmp_path / "milestones" / "app.session.json"
     assert path.stat().st_mode & 0o777 == 0o600
-    assert client.find_session("o/r")["token"] == "tok"
+    assert client.find_session()["token"] == "tok"
+    assert client.find_session()["permissions"] == "read"
     with pytest.raises(SystemExit, match="not answering"):
-        client.post(client.find_session("o/r"), "/api/v1/suggestions", {})
+        client.post(client.find_session(), "/api/v1/repos/o/r/suggestions", {})
 
 
-def test_a_board_counts_as_running_only_while_its_process_is(tmp_path, monkeypatch):
+def test_the_app_counts_as_running_only_while_its_process_is(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    assert client.running_session("o/r") is None
-    path = client.write_session("o/r", "http://127.0.0.1:1", "tok")   # this process: alive
-    assert client.running_session("O/R")["url"] == "http://127.0.0.1:1"
-    # A pid no process has: what a board killed outright leaves behind.
-    path.write_text('{"repo": "o/r", "url": "u", "token": "t", "pid": 2147483646}')
-    assert client.running_session("o/r") is None
-    path.write_text('{"repo": "o/r", "url": "u", "token": "t"}')
-    assert client.running_session("o/r") is None
+    assert client.running_session() is None
+    path = client.write_session("http://127.0.0.1:1", "tok")   # this process: alive
+    assert client.running_session()["url"] == "http://127.0.0.1:1"
+    # A pid no process has: what an app killed outright leaves behind.
+    path.write_text('{"url": "u", "token": "t", "pid": 2147483646}')
+    assert client.running_session() is None
+    path.write_text('{"url": "u", "token": "t"}')
+    assert client.running_session() is None
 
 
 def test_brief_buckets_match_milestones_md():
@@ -731,3 +788,109 @@ def test_a_plan_can_be_discarded_and_a_bad_file_is_no_plan(monkeypatch, tmp_path
     board.discard_plan()
     assert not path.exists()
     assert server.plan_path("o/r", {"XDG_STATE_HOME": "/s"}) == Path("/s/milestones/board-o-r.plan.json")
+
+
+# --- the app's other pages ------------------------------------------------------------------
+
+from milestones.board import cache  # noqa: E402
+
+
+def wait(section):
+    for _ in range(500):
+        if not section.snapshot()["refreshing"]:
+            return section.snapshot()
+        __import__("time").sleep(0.01)
+    raise AssertionError("the section never finished reading")
+
+
+def test_a_section_shows_its_kept_copy_first_and_marks_only_a_new_read_fresh(tmp_path):
+    path, said = tmp_path / "state" / "overview.json", []
+    first = cache.Section("overview", path, lambda params: iter([{"n": 1}]),
+                          lambda name, payload: said.append((name, payload["data"], payload["fresh"])))
+    assert first.snapshot()["data"] is None
+    first.get()                          # nothing kept: a read starts
+    assert wait(first)["data"] == {"n": 1} and first.snapshot()["fresh"] is True
+    assert said[-1] == ("overview", {"n": 1}, True)
+
+    # The next run: the copy is there at once, and is not called fresh until read again.
+    def slow(params):
+        yield {"n": 2, "part": True}
+        yield {"n": 2}
+    second = cache.Section("overview", path, slow)
+    kept = second.snapshot()
+    assert kept["data"] == {"n": 1} and kept["fresh"] is False and kept["fetched_at"]
+    second.get()
+    assert wait(second)["data"] == {"n": 2} and second.snapshot()["fresh"] is True
+    second.fetch = lambda params: pytest.fail("a fresh copy is not read again so soon")
+    assert second.get()["data"] == {"n": 2}
+
+
+def test_a_section_asked_something_else_drops_its_copy_and_a_failed_read_says_why(tmp_path):
+    section = cache.Section("prs", tmp_path / "prs.json", lambda params: iter([{"for": dict(params)}]))
+    section.get({})
+    assert wait(section)["data"] == {"for": {}}
+    assert section.get({"assigned": True})["data"] in (None, {"for": {"assigned": True}})
+    assert wait(section)["data"] == {"for": {"assigned": True}}
+
+    def failing(params):
+        raise SystemExit("gh api ... failed:\nrate limited")
+        yield
+    section.fetch = failing
+    section.refresh()
+    after = wait(section)
+    assert "rate limited" in after["error"] and after["data"] == {"for": {"assigned": True}}
+
+
+def test_a_read_asked_for_while_one_is_under_way_is_followed_by_another():
+    import threading
+    started, go, reads = threading.Event(), threading.Event(), []
+
+    def fetch(params):
+        reads.append(len(reads) + 1)
+        started.set()
+        if len(reads) == 1:
+            go.wait(5)          # the first read is in flight when the write lands
+        yield {"read": reads[-1]}
+    section = cache.Section("overview", None, fetch)
+    section.refresh()
+    assert started.wait(5)
+    section.refresh()           # what a fix does: the read in flight may predate the write
+    go.set()
+    after = wait(section)
+    assert reads == [1, 2] and after["data"] == {"read": 2} and after["fresh"] is True
+
+
+def test_a_fix_from_the_home_page_never_closes_or_deletes_a_bucket():
+    release = {"title": "v1.2", "open_issues": 0, "closed_issues": 0}
+    bucket = {"title": "Needed soon", "open_issues": 0, "closed_issues": 0}
+    assert server.checked_fix(release, {"state": "closed"}, DEFAULT_BUCKETS) == {"state": "closed"}
+    assert server.checked_fix(bucket, {"state": "open"}, DEFAULT_BUCKETS) == {"state": "open"}
+    with pytest.raises(server.Refused, match="standing bucket"):
+        server.checked_fix(bucket, {"state": "closed"}, DEFAULT_BUCKETS)
+    with pytest.raises(server.Refused, match="standing bucket"):
+        server.checked_delete(bucket, DEFAULT_BUCKETS)
+    server.checked_delete(release, DEFAULT_BUCKETS)
+    with pytest.raises(server.Refused, match="only an empty milestone"):
+        server.checked_delete({**release, "closed_issues": 3}, DEFAULT_BUCKETS)
+
+
+def test_a_fix_is_a_title_a_date_or_a_state_and_nothing_else():
+    m = {"title": "Sprint", "open_issues": 1, "closed_issues": 0}
+    assert server.checked_fix(m, {"title": " Sprint v2 ", "due": "2026-12-01"}, []) == {
+        "title": "Sprint v2", "due_on": "2026-12-01T12:00:00Z"}
+    assert server.checked_fix(m, {"due": None}, []) == {"due_on": None}
+    for bad in ({}, {"description": "x"}, {"title": " "}, {"due": "tomorrow"}, {"state": "gone"}):
+        with pytest.raises(server.Refused):
+            server.checked_fix(m, bad, [])
+
+
+def test_a_read_only_app_refuses_a_fix_before_gh_is_asked_to_write(monkeypatch):
+    monkeypatch.setattr(gh, "read_only", lambda: True)
+    app = FakeApp()
+    monkeypatch.setattr(gh, "api", lambda path, **k: (
+        pytest.fail("a write reached gh") if k.get("method", "GET") != "GET"
+        else {"title": "Sprint", "number": 4, "open_issues": 0, "closed_issues": 0}))
+    with pytest.raises(server.Refused, match="read-only: would delete milestone 'Sprint'"):
+        app.delete_milestone("o/r", 4)
+    with pytest.raises(server.Refused, match="read-only: would set milestone 'Sprint'"):
+        app.fix_milestone("o/r", 4, {"state": "closed"})

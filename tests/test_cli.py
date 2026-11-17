@@ -1,5 +1,3 @@
-import datetime
-import io
 import re
 import tomllib
 import unicodedata
@@ -9,18 +7,14 @@ import pytest
 
 from milestones.board import reconcile
 from milestones.cli import (
-    AHEAD, COLOR_NAMES, DEFAULT_BUCKETS, DISTANT, KINDS, LATE, SOON, TRIAGE_BUCKET,
-    bucket_color, build_search_queries,
-    _norm_issue, carries, closes_line, complete_titles, parse_answer, label_plan,
-    pr_group, prs_query,
-    date_choices, FOCUS_MARK, due_color, excerpt, favourite_date, fg, is_focused, issue_count,
-    is_ignored, item_marker, load_config, triage_order,
-    free_buckets, milestone_problems, org_colors, parse_ignore, parse_issue_ref, parse_repo,
-    pct_color,
-    print_findings, print_table, read_key, sort_key, triage_scope, triage_sources,
-    triage_summary,
-    untriaged_counts, visible,
-    write_repo_list,
+    AHEAD, DISTANT, LATE, SOON, bucket_color, carries, closes_line, complete_titles,
+    parse_answer, label_plan, FOCUS_MARK, excerpt, item_marker, parse_ignore, print_table,
+    triage_scope, triage_sources, triage_summary, visible, write_repo_list,
+)
+from milestones.core import (
+    _norm_issue, build_search_queries, COLOR_NAMES, DEFAULT_BUCKETS, free_buckets,
+    is_focused, is_ignored, load_config, milestone_problems, parse_issue_ref, parse_repo,
+    pr_group, prs_query, sort_key, TRIAGE_BUCKET, triage_order, untriaged_counts,
 )
 
 BUCKETS = ["Needed soon", "Needed later", "Not urgent"]
@@ -245,97 +239,9 @@ def test_free_buckets_offers_renames_only_in_a_repo_that_uses_buckets():
     assert free_buckets(["Critical", *BUCKETS], {"Critical"}) == BUCKETS
 
 
-def test_date_choices_lands_on_the_next_monday_and_the_first_of_next_month():
-    monday = datetime.date(2026, 8, 24)
-    for offset in range(7):  # every weekday resolves to the *following* Monday
-        chosen = dict((label, d) for _, label, d in date_choices(monday + datetime.timedelta(offset)))
-        assert chosen["next Monday"] == monday + datetime.timedelta(7), offset
-        assert chosen["next Monday"].weekday() == 0
-        assert chosen["start of next month"] == datetime.date(2026, 9, 1), offset
-    # December has to roll the year over, and February is the short month.
-    assert dict((l, d) for _, l, d in date_choices(datetime.date(2026, 12, 31)))[
-        "start of next month"] == datetime.date(2027, 1, 1)
-    assert dict((l, d) for _, l, d in date_choices(datetime.date(2028, 2, 29)))[
-        "start of next month"] == datetime.date(2028, 3, 1)
-
-
-def test_date_choices_offers_back_the_session_favourite():
-    today, meeting = datetime.date(2026, 8, 24), datetime.date(2026, 9, 3)
-    key, label, date = date_choices(today, meeting)[-1]
-    assert (key, date) == ("x", meeting) and "Thu" in label  # 2026-09-03 is a Thursday
-    # The presets stay put; only the fourth slot follows the session.
-    assert date_choices(today, meeting)[:3] == date_choices(today)[:3]
-
-
-def test_favourite_date_prefers_the_most_used_then_the_most_recent():
-    a, b = datetime.date(2026, 9, 3), datetime.date(2026, 9, 10)
-    assert favourite_date([]) is None
-    assert favourite_date([a, b, a]) == a
-    assert favourite_date([a, b]) == b  # tie: whichever was typed last
-
-
-def test_issue_count_reads_naturally():
-    assert [issue_count(n) for n in (0, 1, 42)] == ["(0 issues)", "(1 issue)", "(42 issues)"]
-    assert issue_count(0, 1) == "(0 issues, 1 PR)"
-    assert issue_count(3, 2) == "(3 issues, 2 PRs)"
-
-
-def test_read_key_takes_one_character_from_a_piped_line(monkeypatch, capsys):
-    monkeypatch.setattr("sys.stdin", io.StringIO("skip\n"))
-    assert read_key("choose: ") == "s"
-    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # closed stdin ends the walk
-    with pytest.raises(SystemExit):
-        read_key("choose: ")
-
-
 def finding(kind, repo, title, detail="", issues=0, prs=0):
     return {"kind": kind, "repo": repo, "title": title, "detail": detail, "issues": issues,
             "prs": prs, "url": f"https://github.com/{repo}/milestone/1", "number": 1}
-
-
-def test_print_findings_groups_by_fix_and_aligns_within_a_group(capsys):
-    print_findings([
-        finding("rename", "owner/one", "Next release", issues=3),
-        finding("rename", "owner/a-much-longer-repo", "Later", issues=1),
-        finding("overdue", "owner/one", "v2.0", "due 2026-08-19, 4 still open", issues=12),
-    ])
-    out = capsys.readouterr().out
-    assert out.startswith("3 fixes across 2 repos.")
-    assert KINDS["rename"] in out and KINDS["overdue"] in out
-    # Same group, so the counts line up under each other whatever the repo name's length.
-    rename_lines = [l for l in out.splitlines() if "(3 issues)" in l or "(1 issue)" in l]
-    assert len(rename_lines) == 2
-    assert len({l.index("(") for l in rename_lines}) == 1
-    assert "  https://github.com/owner/one/milestone/1" in out  # a URL under every finding
-
-
-def test_org_colors_only_colours_owners_with_more_than_one_repo():
-    repos = ["a/one", "b/only", "a/two", "c/x", "c/y"]
-    colors = org_colors(repos)
-    assert set(colors) == {"a", "c"}
-    assert colors["a"] != colors["c"]  # distinct hues
-    # The caller hands these over sorted by due date, so an owner must not change colour
-    # just because a milestone came or went.
-    assert org_colors(list(reversed(repos))) == colors
-
-
-def test_org_colors_honours_the_config_even_for_a_single_repo():
-    colors = org_colors(["a/one", "b/only", "c/x", "c/y"],
-                        {"B": COLOR_NAMES["pink"], "c": COLOR_NAMES["pink"]})
-    # A hand-picked colour applies however few repos the owner has, and two owners may
-    # share one; "a" is left plain, owning only one repo and named by nobody.
-    assert colors == {"b": fg(COLOR_NAMES["pink"]), "c": fg(COLOR_NAMES["pink"])}
-
-
-def test_due_color_bands():
-    today = "2026-09-08"
-    assert due_color(None, today) is None
-    assert due_color("2026-09-07", today) == LATE
-    assert due_color("2026-09-08", today) == SOON       # due today is still "this week"
-    assert due_color("2026-09-15", today) == SOON       # exactly 7 days
-    assert due_color("2026-09-16", today) == AHEAD
-    assert due_color("2026-10-08", today) == AHEAD      # exactly 30 days
-    assert due_color("2026-10-09", today) == DISTANT
 
 
 def test_bucket_color_covers_every_default_bucket_only_while_it_holds_work():
@@ -346,17 +252,6 @@ def test_bucket_color_covers_every_default_bucket_only_while_it_holds_work():
     # Needs triage is a state, not a level of urgency, so it is off the due-date ramp.
     assert bucket_color(TRIAGE_BUCKET, 1) not in {"1;" + LATE, LATE, SOON, AHEAD, DISTANT}
     assert bucket_color("Some release v1.2", 5) is None
-
-
-def test_pct_color_ramps_up_from_halfway():
-    assert pct_color(0, 0) is None                      # nothing ever filed
-    # Nothing under halfway is coloured as progress, and none of it as a warning.
-    grey = pct_color(0, 10)
-    assert grey == pct_color(49, 100) == DISTANT
-    greens = [pct_color(n, 100) for n in (50, 65, 80, 95)]
-    assert len(set(greens)) == 4 and grey not in greens  # a four-step ramp above halfway
-    assert pct_color(64, 100) == greens[0]               # each band runs up to the next
-    assert pct_color(4, 4) == greens[-1]                 # everything closed is the brightest
 
 
 def test_print_table_aligns_around_escape_sequences(capsys):
@@ -646,7 +541,7 @@ def test_triage_summary_counts_by_milestone_and_says_what_is_left():
         "  - Set priority on 3: 1 Urgent, 2 Low",
         "  - Skipped 1: A/one#4",
         "  - Stopped at 5 of 7, with 3 left undecided",
-        "  - Created v1.2 in A/one (undated: `milestones check` will ask for a date)",
+        "  - Created v1.2 in A/one (undated: the app's home page will ask for a date)",
         "  - Created Critical in A/one",
         "  - Not moved 1 to the top of v1.2: GitHub has no API for that "
         "(gaurav/milestones#25), so drag it at https://x/1",
@@ -764,3 +659,83 @@ def test_doctor_lines_name_the_setting_and_never_the_token():
 def test_token_kind_tells_a_classic_token_by_its_scopes_header():
     assert token_kind("repo, read:org") == "classic token, scopes: repo, read:org"
     assert token_kind(None).startswith("fine-grained or app token")
+
+
+from milestones.cli import app_target, route_argv  # noqa: E402
+
+
+def test_a_repo_or_an_issue_in_place_of_a_command_opens_its_board():
+    commands = {"home", "board", "status", "triage"}
+    assert route_argv([], commands) == ["home"]
+    assert route_argv(["--no-open"], commands) == ["home", "--no-open"]
+    assert route_argv(["--port", "8792", "--no-open"], commands)[0] == "home"
+    assert route_argv(["--port", "8792", "a/b"], commands)[0] == "board"
+    assert route_argv(["status", "--json"], commands) == ["status", "--json"]
+    assert route_argv(["gaurav/milestones"], commands) == ["board", "gaurav/milestones"]
+    assert route_argv(["--no-open", "https://github.com/a/b/pull/7"], commands)[0] == "board"
+    assert route_argv(["a/b#7"], commands) == ["board", "a/b#7"]
+    assert route_argv(["--help"], commands) == ["--help"]
+    assert route_argv(["statsu"], commands) == ["statsu"]      # argparse says what is wrong
+    assert app_target("https://github.com/a/b/pull/7") == ("a/b", 7)
+    assert app_target("a/b#7") == ("a/b", 7)
+    assert app_target("https://github.com/a/b") == ("a/b", None)
+
+
+def test_the_app_opens_without_a_config_but_a_command_about_repos_does_not(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    with pytest.raises(SystemExit, match="No config found"):
+        load_config()
+    config = load_config(needs_repos=False)
+    assert config["repos"] == [] and config["buckets"] == DEFAULT_BUCKETS and config["labels"] == {}
+
+
+from milestones import core  # noqa: E402
+
+
+def gql_milestone(number, title, state="OPEN", due=None, open_=0, closed=0, open_prs=0, closed_prs=0):
+    return {"number": number, "title": title, "state": state, "dueOn": due and f"{due}T12:00:00Z",
+            "url": f"https://github.com/o/r/milestone/{number}",
+            "open": {"totalCount": open_}, "closed": {"totalCount": closed},
+            "openPrs": {"totalCount": open_prs}, "closedPrs": {"totalCount": closed_prs}}
+
+
+def test_the_overview_is_shaped_from_one_read_of_the_milestones():
+    config = {"repos": ["o/r", "o/quiet"], "buckets": DEFAULT_BUCKETS, "focus": ["O/R"], "ignore": []}
+    fetched = (["o/r", "o/quiet"], [
+        ("o/r", gql_milestone(1, "Needed soon", open_=2)),
+        ("o/r", gql_milestone(2, "v1.0", due="2020-01-01", open_=1, closed=2, open_prs=1)),
+        ("o/r", gql_milestone(3, "Critical")),                     # optional and empty: hidden
+        ("o/r", gql_milestone(4, "v0.9", state="CLOSED", open_=3)),  # stranded
+        ("o/r", gql_milestone(5, "Needs triage", open_=4)),
+        ("o/quiet", gql_milestone(1, "old", state="CLOSED", closed=5)),
+    ])
+    items = [{"repo": "o/r", "pr": False}, {"repo": "o/r", "pr": True}, {"repo": "o/quiet", "pr": False}]
+    data = core.status_data(config, fetched, items)
+    assert [(m["title"], m["number"], m["bucket"]) for m in data["milestones"]] == [
+        ("v1.0", 2, False), ("Needed soon", 1, True), ("Needs triage", 5, True)]
+    assert data["milestones"][0]["flags"] == ["overdue"] and data["milestones"][0]["percent"] == 50
+    assert all(m["focus"] for m in data["milestones"])
+    assert data["quiet_repos"] == [{"repo": "o/quiet", "focus": False, "url": "https://github.com/o/quiet"}]
+    assert [(s["title"], s["number"], s["open"]) for s in data["stranded"]] == [("v0.9", 4, 3)]
+    assert data["untriaged"] == [
+        {"repo": "o/quiet", "issues": 1, "prs": 0, "needs_triage": 0, "focus": False},
+        {"repo": "o/r", "issues": 1, "prs": 1, "needs_triage": 4, "focus": True}]
+    # The findings come from the same read, and say what a fix needs to know.
+    findings = core.collect_findings(config, fetched)
+    assert [(f["kind"], f["title"]) for f in findings] == [("stranded", "v0.9"), ("overdue", "v1.0")]
+    assert findings[1]["due"] == "2020-01-01" and findings[1]["bucket"] is False
+
+
+def test_a_rollover_is_checked_before_anything_moves(monkeypatch):
+    listing = [{"title": "v1", "number": 1, "state": "closed"}, {"title": "v2", "number": 2, "state": "open"},
+               {"title": "Needed soon", "number": 3, "state": "open"}, {"title": "old", "number": 4, "state": "closed"}]
+    monkeypatch.setattr(core.gh, "api", lambda path, **k: listing if "milestones?" in path else [{"number": 9}])
+    src, dst, items = core.rollover_plan("o/r", "v1", "v2", True, DEFAULT_BUCKETS)   # a closed source is fine
+    assert (src["number"], dst["number"], items) == (1, 2, [{"number": 9}])
+    with pytest.raises(SystemExit, match="No milestone 'v3'"):
+        core.rollover_plan("o/r", "v1", "v3", False, DEFAULT_BUCKETS)
+    with pytest.raises(SystemExit, match="'old' is closed"):
+        core.rollover_plan("o/r", "v1", "old", False, DEFAULT_BUCKETS)
+    with pytest.raises(SystemExit, match="standing bucket"):
+        core.rollover_plan("o/r", "Needed soon", "v2", True, DEFAULT_BUCKETS)
+    core.rollover_plan("o/r", "Needed soon", "v2", False, DEFAULT_BUCKETS)

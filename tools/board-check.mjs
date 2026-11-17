@@ -13,7 +13,7 @@
 // Playwright is not a dependency of this repo (its browsers are some 300 MB). Install it
 // anywhere and say where:  PLAYWRIGHT_FROM=/path/to/a/project/with/playwright
 import { spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -36,6 +36,20 @@ try {
 }
 
 const state = mkdtempSync(join(tmpdir(), 'board-check-'));
+// A last-known overview from "three hours ago", holding one milestone no repo has: the home
+// page must show it at once, and drop it when the real answer arrives.
+const KEPT = 'Kept only v0.0';
+mkdirSync(join(state, 'milestones'), { recursive: true });
+writeFileSync(join(state, 'milestones', 'overview.json'), JSON.stringify({
+  fetched_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(), params: {},
+  data: {
+    milestones: [{ repo: 'kept/copy', title: KEPT, number: 1, due: null, open: 1, closed: 0, open_prs: 0, closed_prs: 0, percent: 0, flags: [], focus: false, bucket: false, url: 'https://github.com/kept/copy/milestone/1' }],
+    quiet_repos: [], stranded: [], untriaged: [], untriaged_fresh: true,
+    findings: [{ kind: 'undated', repo: 'kept/copy', title: KEPT, number: 1, detail: '', due: null, bucket: false, url: '', issues: 1, prs: 0, free_buckets: [] }],
+    kinds: { stranded: '', rename: '', undated: 'Set a due date', overdue: '', done: '', empty: '' },
+    buckets: [], repos: ['kept/copy'], focus: [], today: '2026-01-01',
+  },
+}));
 const board = spawn('uv', ['run', '--project', root, 'milestones', 'board', repo, '--no-open', '--port', port], {
   cwd: state,   // not the checkout: a .env there must not decide the mode
   env: { ...process.env, MILESTONES_PERMISSIONS: 'read', XDG_STATE_HOME: state },
@@ -205,9 +219,11 @@ try {
     // In the panel, a linked pull request that is on the board (an open one) is focused rather
     // than opened on GitHub; a closed one, which has no card, still opens GitHub.
     if (await page.locator('.detail-strip').count()) { await page.click('.detail-strip .open'); await settle(); }
-    await page.click('.card:has(.card-ties .closed-by) .card-title >> nth=0'); await settle();
+    // Only where some card is closed by a pull request: a repo may have mentions and no more.
+    const closed = page.locator('.card:has(.card-ties .closed-by) .card-title').first();
+    if (await closed.count()) { await closed.click(); await settle(); }
     const link = page.locator('.detail dt:text-is("Closed by") + dd a').first();
-    if (await link.count()) {
+    if (await closed.count() && await link.count()) {
       const number = (await link.textContent()).trim();
       const popup = page.context().waitForEvent('page', { timeout: 1500 }).catch(() => null);
       await link.click(); await settle();
@@ -331,6 +347,48 @@ try {
     note(`top bar height at ${width}px`, Math.round((await page.locator('.toolbar').boundingBox()).height));
     note(`filter row height at ${width}px`, Math.round((await page.locator('.filterbar').boundingBox()).height));
     await shot(`bar-${width}`, { x: 0, y: 0, width, height: 200 });
+  }
+  // --- The pages that are not a board. From the board, as a person gets there: its link home.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const token = await page.evaluate(() => location.hash);
+  const number = await page.$eval('.card .card-facts', (e) => /#(\d+)/.exec(e.textContent)?.[1]).catch(() => null);
+  check("the board's link home carries the token", (await page.getAttribute('.toolbar a.home', 'href')) === `/${token}`);
+  await page.click('.toolbar a.home');
+  await page.waitForSelector('table.milestones');
+  // The app may have read the overview already, while the board was being driven: then there
+  // is no kept copy left to see, and that is said rather than failed.
+  if (await page.locator(`a.title:text-is("${KEPT}")`).count()) {
+    check('home shows the kept answer first, and says how old it is', /as of 3 h ago/.test(await page.textContent('header.top .age')), await page.textContent('header.top .age'));
+    check('a fix waits for a fresh read', await page.$$eval('.fixes button', (e) => e.length > 0 && e.every((b) => b.disabled)));
+  } else {
+    note('kept answer', 'already replaced by a fresh read; not checked');
+  }
+  await shot('home-kept');
+  await page.waitForFunction((kept) => ![...document.querySelectorAll('a.title')].some((a) => a.textContent === kept), KEPT, { timeout: 90000 });
+  await page.waitForFunction(() => !document.querySelector('header.top .refresh')?.disabled, null, { timeout: 90000 });
+  check('then the answer read from GitHub replaces it', (await page.locator('table.milestones tbody tr').count()) > 0 && /as of just now/.test(await page.textContent('header.top .age')), await page.textContent('header.top .age'));
+  check('and the fixes are offered', await page.$$eval('.fixes button', (e) => e.every((b) => !b.disabled)));
+  check('every link to a board carries the token', await page.$$eval('a.repo, table.milestones a.title', (e, t) => e.length > 0 && e.every((a) => a.href.endsWith(t) && /\/r\/[^/]+\/[^/]+\//.test(a.href)), token));
+  await page.fill('header.top input[type="search"]', 'zzz-no-such-repo'); await settle();
+  check('the filter narrows the milestones', (await page.locator('table.milestones tbody tr').count()) === 0);
+  await page.fill('header.top input[type="search"]', ''); await settle();
+  const fixes = page.locator('.fixes button:text-is("Set a date…")').first();
+  if (await fixes.count()) {
+    await fixes.click(); await page.waitForTimeout(200);
+    check('a fix opens its dialog', /^Due date for/.test(await page.textContent('.picker-head')));
+    await page.keyboard.press('Escape'); await settle();
+    check('and Escape closes it', (await page.locator('.overlay').count()) === 0);
+  }
+  await shot('home');
+  await page.click('header.top nav a:text-is("My pull requests")');
+  await page.waitForSelector('table.prs, p.fatal');
+  await page.waitForFunction(() => !document.querySelector('header.top .refresh')?.disabled, null, { timeout: 90000 });
+  check('the pull requests page lists them, or says there are none', (await page.locator('table.prs tbody tr').count()) > 0 || /No open pull requests/.test(await page.textContent('#app')));
+  await shot('prs');
+  if (number) {
+    await page.goto(`${new URL(url).origin}/r/${repo}/?card=${number}${token}`);
+    await page.waitForSelector('.column');
+    check('?card=N opens the board at that card', (await page.textContent('.detail h2 a')).trim() === `#${number}` && (await page.locator('.card.focused').count()) === 1, await page.textContent('.detail h2'));
   }
   check('no errors on the page', errors.length === 0, errors);
 } finally {

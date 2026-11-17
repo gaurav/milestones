@@ -1,5 +1,13 @@
 # milestones — agent notes
 
+The tool is a web app first: `milestones` starts one local server (`milestones/board/server.py`)
+whose home page shows every tracked repo and which serves a board per repo; see **The app**
+below. `cli.py` is what is left on the command line: the `triage` walk, `assign`, `setup`,
+`suggest`, `doctor` and the config commands. `core.py` is what both stand on — the config, the
+conventions (`milestone_problems`, buckets) and the cross-repo reads — and prints nothing.
+`cli.py` imports from core only what it uses, so import a shared name from `milestones.core`,
+and put a new shared function there.
+
 All GitHub access goes through `milestones/gh.py`, which shells out to the authenticated `gh`
 CLI. Hard-won API facts (verified live, Aug 2026):
 
@@ -9,7 +17,7 @@ CLI. Hard-won API facts (verified live, Aug 2026):
   `(repo:a/b OR repo:c/d)`. Query strings cap at 256 chars, so `build_search_queries`
   splits the configured repos across as many queries as that takes.
 - `@me` works in REST advanced search, inside an OR group too (`(author:@me OR
-  assignee:@me)`), and a search item carries `draft` and `milestone`, so `prs` lists pull
+  assignee:@me)`), and a search item carries `draft` and `milestone`, so `core.prs_data` lists pull
   requests from the one search with no second call. Unlike `triage`, it is not scoped to the
   config — that is its point.
 - Milestone writes are REST-only; no GraphQL mutations exist. Reads are fine in GraphQL.
@@ -84,12 +92,6 @@ The `triage` walk ends on `triage_summary`, printed from a `finally` so that a `
 `ask` or a failed write still says what got written. It reads the walk's `done` log, so a new
 write in the walk needs an entry there, or the summary will under-report it.
 
-`check -i` reads single keypresses, but falls back to whole lines when stdin is not a tty, so
-`printf 's\ns\ne\n2026-09-03\nq\n' | milestones check -i` drives it end to end. Its findings
-are collected once up front and one milestone can raise several, so anything a walk does to a
-milestone has to be carried across to its other findings by hand (`walk_findings`'s `rename` and
-`gone`) — the list is never re-fetched mid-run.
-
 `MILESTONES.md` holds the conventions this tool encodes: what each bucket means, and how release
 milestones are used. `LABELS.md` does the same for the priority and effort labels. Both are written
 for agents working in *other* repos, so keep them free of CLI detail. When `DEFAULT_BUCKETS` or `OPTIONAL_BUCKETS` changes, update it too;
@@ -97,7 +99,7 @@ for agents working in *other* repos, so keep them free of CLI detail. When `DEFA
 
 `assign` confirms only when stdin is a tty: piped refs (`triage --list | fzf -m | assign`, or a
 coding agent) run unprompted, since `--yes` would kill the bare pipeline (EOF on the drained
-pipe) and `/dev/tty` can't go into `ask()` while `check -i` is driven from a pipe. It is the
+pipe) and `/dev/tty` can't go into `ask()` while a walk is driven from a pipe. It is the
 only write that never closes or deletes anything, which is what makes that safe. A PR ref is
 accepted on purpose — the issues endpoint sets a PR's milestone too — and `triage --prs --list`
 lists them; like the walk, it carries the issues a PR closes, counted before the prompt. To exercise the prompt itself, `expect -c 'spawn milestones assign …; expect
@@ -107,18 +109,19 @@ it hands the program an EOF before the answer, so `ask()` aborts whatever you se
 
 Buckets are per repo, and a repo may use any subset of them: nothing here treats a missing
 bucket as a problem. `free_buckets` is the configured buckets a repo hasn't got, and nothing at all
-for a repo that has none of them. It is only the walk's rename targets — the buckets a repo already
+for a repo that has none of them. It is only the home page's one-click rename targets — the buckets a repo already
 has are exactly the ones a rename would 422 on. An optional bucket (`OPTIONAL_BUCKETS`, just
-"Critical") is one `status` hides while nothing is open on it.
+"Critical") is one the home page hides while nothing is open on it.
 
-A closed standing bucket is invisible to `status` and to the `triage` menu, so nothing here may
-close or delete one. That invariant is enforced in four places (`setup` reopens, `rollover` refuses
-both a closed destination and `--close` on a bucket, and `milestone_problems` returns early for a
-bucket, so `check` never raises a `done`, `empty`, `rename` or `undated` finding against one); add
-the guard when you add a path that could close a milestone. A closed milestone of any kind with
-work still on it is `check`'s `stranded` finding — the only one raised against a closed milestone,
-buckets included — and `check -i`'s `[p]` reopens it, as `setup` would for a bucket. `status`
-fetches closed milestones too, purely to count what is stranded in one closing line.
+A closed standing bucket is invisible to the home page and to the `triage` menu, so nothing here
+may close or delete one. That invariant is enforced in five places: `setup` reopens;
+`core.rollover_plan` refuses both a closed destination and a closing rollover of a bucket;
+`server.checked_fix` refuses to close one and `server.checked_delete` to delete one; and
+`milestone_problems` returns early for a bucket, so no `done`, `empty`, `rename` or `undated`
+finding is ever raised against one and the home page never offers those fixes. Add the guard
+when you add a path that could close a milestone. A closed milestone of any kind with work still
+on it is the `stranded` finding — the only one raised against a closed milestone, buckets
+included — and its **Reopen** button works on a bucket too, as `setup` would.
 
 `print_table` measures every cell in characters, and there are two ways to make that lie. Colour
 is one — `visible()` discounts the escapes, so a cell may carry its own, and `paint` is the only
@@ -132,7 +135,7 @@ guards the marker; anything else you add to a table needs the same two checks by
 
 Colour is decided once at import (`COLOR`, from `sys.stdout.isatty()` and `NO_COLOR`), so a piped
 run is plain and you cannot see the escapes you are debugging. `script -q /dev/null milestones
-status` gives it a pty and shows the real thing; pipe that through `cat -v` to read the codes.
+focus` gives it a pty and shows the real thing; pipe that through `cat -v` to read the codes.
 
 `write_repo_list` puts a top-level key the config hasn't got above the first `[table]` header and
 above the comment block introducing it — a key appended to the end of the file would land *inside*
@@ -141,25 +144,29 @@ top-level and this keeps working; a new `[table]` of your own goes after every s
 
 To exercise a command against one repo only, point `XDG_CONFIG_HOME` at a scratch config — but
 symlink `~/.config/gh` into it too, since `gh` reads its auth from the same variable. This is not
-optional when piping answers into `check -i` or `triage`: findings and items are ordered across
-every tracked repo, so a keypress meant for a scratch milestone in `gaurav/milestones` lands on
-whichever repo sorts first. One such run reopened a closed Babel milestone and rolled 27 issues.
+optional when piping answers into `triage`: items are ordered across every tracked repo, so a
+keypress meant for `gaurav/milestones` lands on whichever repo sorts first. One such run (of
+`check -i`, since replaced by the home page) reopened a closed Babel milestone and rolled 27
+issues.
 
 Verify live against `gaurav/milestones` itself — `setup` is idempotent, and issues #1/#2 sit in
-the standing buckets for exercising `rollover`/`triage`. `check` finds nothing there, though: its
-only milestones are the four buckets, and a bucket raises nothing but `overdue`. To exercise the
-walk's write paths, create a scratch milestone with no due date and no issues — that one milestone
-raises `rename`, `undated` and `empty` together, so a single walk reaches the rename, the date and
-the delete prompts, and `[d]` clears it up at the end. Tests (`uv run pytest`) cover only the
-pure functions; keep it that way rather than mocking `gh`.
+the standing buckets for exercising `triage`. The home page finds nothing to fix there, though:
+its only milestones are buckets and dated releases, and a bucket raises nothing but `overdue`.
+To exercise the fixes, create a scratch milestone with no due date and no issues (`gh api -X POST
+repos/gaurav/milestones/milestones -f title=...`): that one milestone raises `rename`, `undated`
+and `empty` together, so rename, date and delete can all be tried on it, a rollover of it moves
+nothing, and delete clears it up at the end. Do it with a scratch `XDG_CONFIG_HOME` naming only
+that repo, so the overview can't offer you anything else. Tests (`uv run python -m pytest`) cover
+only the pure functions; keep it that way rather than mocking `gh`.
 
 Every write goes through `gh._refuse_write`: `gh.api` with any method but GET, and `gh.mutate`
 for a GraphQL mutation. That is what makes `MILESTONES_PERMISSIONS=read` trustworthy, so never
 send a mutation through `gh.graphql`, which can't tell a write from a read. The refusal is
-`gh.ReadOnly`, a `SystemExit` like every other failed call, so `check -i` and the priority writes
-report it and carry on as they do for a failure; `rollover`, `assign`, `setup` and the `triage`
-walk ask `gh.read_only()` first and print a preview instead, because a refusal at their first
-write would show one line of a plan that has many.
+`gh.ReadOnly`, a `SystemExit` like every other failed call, so the priority writes report it
+and carry on as they do for a failure; `assign`, `setup` and the `triage` walk ask
+`gh.read_only()` first and print a preview instead, because a refusal at their first write
+would show one line of a plan that has many. The app asks first too (`App._write`,
+`Board._refuse_read_only`) and answers 403 with what it would have done.
 
 Tokens are per owner (`env.token_key`), because a fine-grained token belongs to one resource
 owner: `gh.api` reads the owner off the REST path (`gh.path_owner`), and `gh.graphql`/`gh.mutate`
@@ -171,13 +178,67 @@ Not yet verified live: whether a fine-grained token can read or write organisati
 `gh.settings()` is cached for the run, so a test that wants a mode monkeypatches `gh.settings`
 rather than the environment.
 
+## The app
+
+`milestones` is `milestones/board/` (stdlib server; the package kept its name when the board
+stopped being the only page) plus `ui/` (Preact, built by `npm run build` into
+`milestones/board/static/`, which is gitignored). They share only the API in
+`docs/BoardAPI.md`: change an endpoint and that file changes in the same commit.
+
+- **One process.** `server.run` starts the app, or, if `app.session.json` in the state directory
+  names a live process, opens the page in that one and returns. So `milestones`, `milestones
+  REPO` and `milestones board` never start a second server, which is what keeps a repo to one
+  board (two would each hold their own cards and overwrite each other's saved suggestions). The
+  session records the mode, and a run asking for the other mode is refused rather than handed
+  over: a read-only look must not land in an app that writes. `cli.route_argv` is what turns a
+  bare repo, issue or pull request into `board`, and nothing into `home`.
+- **Pages are separate documents, not routes.** `/` is `ui/home/`, `/prs/` is `ui/prs/`, and
+  every `/r/OWNER/NAME/` is `ui/board/` (`server.page_for`). A router was not used because
+  `ui/shared/state.ts` holds one repo's board in module-level signals; a full load per repo
+  keeps that true and left the board's code alone. The cost is that the token, which lives only
+  in the URL's fragment, has to be carried by every link between pages: use `pageLink` (or
+  `link` in `pages.tsx`), never a bare `href`. A new page is a folder under `ui/` with its own
+  `index.html` (asset URLs absolute, since a board's address is three levels deep).
+- **`App` holds a `Board` per repo**, made the first time something asks, keyed by the name
+  GitHub gives back (`App.canonical`, one REST call per new spelling) so two spellings can't get
+  two boards. `Board.start` reads the repo in a background thread; until `status` is `ready`
+  the snapshot is only `{repo, permissions, loading, error}` and the page asks again. A board
+  is never dropped, so memory grows with the repos opened in one run; nobody has opened enough
+  for that to matter.
+- **Sections** (`board/cache.py`) are the slow reads the other pages show: `overview` and `prs`.
+  Each keeps its last answer in `$XDG_STATE_HOME/milestones/<name>.json` and hands it over at
+  once; a read starts if this run hasn't made one or it is five minutes old, and lands as an
+  event on `GET /api/v1/events`. `fresh` means this run read it. **Nothing is decided from a
+  kept copy**: the pages disable their fixes until `fresh`, and `App.fix_milestone`,
+  `delete_milestone` and `rollover` read the milestone from GitHub themselves first. Keep both
+  halves when adding a write. A read asked for while one is in flight is followed by another
+  (`Section.again`): the one in flight may have looked before the write that prompted the ask.
+- The overview's fetch re-reads the config, which is how `milestones add` in another terminal
+  shows up on Refresh. A board takes its buckets and label aliases from the config as it was
+  when the board was made.
+- The fixes on the home page go through `/api/v1/milestones/OWNER/NAME/N`, not through a
+  `Board`: fixing a milestone must not first read five hundred issues. If that repo has a
+  board open, `App._fixed` tells it to read its milestones (or everything, after a rollover).
+- The terminal the app runs in is its log: one timestamped line (`board/log.say`, never a bare
+  `print`, since reads and writes run on their own threads) for each page opened, read started
+  and landed, write made, refused or kept in a read-only plan, and suggestion received. A
+  `Section` says what each of its yields came to through `describe`; a new section should pass
+  one. Only the startup banner and the closing summary print plainly.
+- The same terminal takes one-key commands (`board/keys.py`: `o` opens the page, `q` stops as
+  Ctrl-C does, by sending the process SIGINT). It holds the terminal in cbreak mode with signals
+  left on, only while the app's process group is in the terminal's foreground, and gives it back
+  in `run`'s `finally`, which also comes before a `--reload`'s `exec`. Nothing of it happens when
+  stdin isn't a tty. Drive it with `expect` and `BROWSER` set to a script that logs its argument,
+  so `o` opens no real tab.
+- The port is 8377 unless it is taken, so the origin is stable and the home page keeps its two
+  filters in `localStorage`. A board still saves its view on the server: a run that fell back to
+  another port would otherwise lose it.
+
 ## The board
 
-`milestones board` is `milestones/board/` (stdlib server) plus `ui/` (Preact, built by `npm run
-build` into `milestones/board/static/`, which is gitignored). They share only the API in
-`docs/BoardAPI.md`: change an endpoint and that file changes in the same commit. Keep `cli.py` out
-of it beyond the subparser — the board has its own fetch (`board/data.py`), because a card needs
-far more than `_norm_issue` keeps.
+The board is `Board` in `server.py` and `ui/board/`. Keep `cli.py` and `core.py` out of it beyond
+the constants — the board has its own fetch (`board/data.py`), because a card needs far more than
+`_norm_issue` keeps.
 
 - The `Board` applies a change to its cards first and writes after, from one worker thread, in
   order. A failed write leaves the new value on the card (`load()` re-applies unsettled actions
@@ -192,8 +253,9 @@ far more than `_norm_issue` keeps.
   `gh.api(body=...)` (`--input -`); `-F milestone=null` sends the string.
 - There is no browser tool in an agent session unless the Chrome extension is connected.
   `tools/board-check.mjs` (`npm run drive`) is the headless check: it starts its own read-only
-  board on a scratch `XDG_STATE_HOME`, drives the URL, the menus and the card panel, and prints
-  what held. Playwright is not a dependency here; `PLAYWRIGHT_FROM=~/code/prcoder` borrows that
+  app on a scratch `XDG_STATE_HOME`, drives a board's URL, menus and card panel, then the home
+  page (from a kept overview it seeds, to see that shown first and replaced) and the pull
+  requests page, and prints what held. Playwright is not a dependency here; `PLAYWRIGHT_FROM=~/code/prcoder` borrows that
   checkout's. Add a check there when you change something only a browser can show, and build
   first (`npm run build`): it drives `milestones/board/static/`, not `ui/`. It covers no write.
   Three things scripts get wrong that a person never notices: a key sent straight after a click
@@ -204,22 +266,28 @@ far more than `_norm_issue` keeps.
   visible.
 - While the user has a board open from this checkout under `npm run dev`, the watcher rebuilds
   `static/` from whatever is checked out, so there is no need to build: `npm run drive` uses the
-  watcher's output. Checking out another branch to restack or test is fine: the board keeps
-  nothing that a GitHub write hasn't already saved, so the worst case is a change the user makes
-  mid-checkout failing until the branch is back. Reach for a scratch `git worktree` (with
+  watcher's output. Not so after a checkout that changes `build.mjs` itself: Node read the
+  script once, so the watcher goes on building the old way, and a page whose HTML names files
+  in the new places comes up blank. `board/build.py` catches that on every page load (a
+  referenced file missing, or a ui/ page with no built copy), serves a page saying what to do
+  instead, and finds the stale watcher by its start time to name the pid to kill. Checking out
+  another branch to restack or test is fine: the board keeps nothing that a GitHub write hasn't
+  already saved, so the worst case is a change the user makes mid-checkout failing until the
+  branch is back. Reach for a scratch `git worktree` (with
   `node_modules` symlinked in) only for a big, radical change; the user finds them more trouble
   than they're worth.
 - Start a board the user will work in while you change the code with `--reload` (in the
-  background, from this checkout: `uv run milestones board OWNER/NAME --reload`). When any
+  background, from this checkout: `uv run milestones OWNER/NAME --reload`). When any
   `milestones/**/*.py` changes and then stays put for a couple of seconds, it waits for queued
   writes, then `exec`s itself, keeping its pid, its listening socket and its token, so the URL
   and `milestones suggest`'s session file stay good. The user refreshes the page when they want
-  the change. It refetches the repo on every reload (about a minute for Babel), and a request in
-  the meantime waits in the socket's backlog rather than failing. It keeps only the undo history
+  the change. Every board is gone after a reload and is read again when its page next asks
+  (about a minute for Babel); a request made while the new process starts waits in the socket's
+  backlog rather than failing. It keeps only the undo history
   and failed writes' log in memory, so those go; action ids carry on, so a stale page's undo
   finds nothing rather than the wrong action. Code that doesn't import, or that has no
   `--reload` (a branch below the one that added it, checked out to restack), is reported and
-  not loaded, so the board stays on the code it had until you are back. Without `--reload`, a Python change needs a restart, which gives a new port and URL.
+  not loaded, so the board stays on the code it had until you are back. Without `--reload`, a Python change needs a restart, which gives a new token and so a new URL.
 - An action's kind decides how its value is read off a card and put on one: `card_value` and
   `set_card_value` in `server.py`, mirrored by `cardValue` and `withValue` in `ui/shared/logic.ts`.
   A new kind needs all four, a branch in `Board.normalise` and `Board._write`, a row in
@@ -251,11 +319,10 @@ far more than `_norm_issue` keeps.
   `$XDG_STATE_HOME/milestones/board-<owner>-<repo>.json` — the tool's only local state. Point
   `XDG_STATE_HOME` at a scratch directory when testing, or a test rejection will hide a real
   suggestion later.
-- `milestones suggest` finds a running board through the session file `board/client.py` writes
-  (`board-<owner>-<repo>.session.json` beside the suggestions file, mode 0600, removed on exit;
-  SIGTERM is turned into the Ctrl-C path so `kill` cleans up too). `server.run` refuses to start
-  a second board for a repo whose session file names a live process: two would overwrite each
-  other's saved suggestions. It only ever POSTs
+- `milestones suggest` finds the app through the session file `board/client.py` writes
+  (`app.session.json` in the state directory, mode 0600, removed on exit; SIGTERM is turned into
+  the Ctrl-C path so `kill` cleans up too) and posts under the repo's prefix. If that repo's
+  board has not been opened, the app reads it first and the request waits. It only ever POSTs
   suggestions, so it is safe for an agent to run unprompted and in a read-only run alike.
 - `client.BUCKET_MEANINGS` repeats MILESTONES.md's bucket table for `board --brief`, and
   `test_brief_buckets_match_milestones_md` fails when either moves without the other.
@@ -274,9 +341,9 @@ far more than `_norm_issue` keeps.
   drawing. `submit` in `ui/shared/state.ts` moves the focus on when a change takes the focused card
   out of its column, in any view.
 - The page's layout (view, grouping, ticked milestones) is saved through `POST /api/v1/view` into
-  the state file, not `localStorage`: each run is on a new port, which a browser treats as a new
-  origin. `initialView` in `logic.ts` decides precedence: flags, then saved, then defaults.
-  The flags arrive in the URL's query string (`server.page_url`), and the page writes the query
+  the state file, not `localStorage`: a run can land on another port (8377 taken), which a
+  browser treats as a new origin. `initialView` in `logic.ts` decides precedence: flags, then saved, then defaults.
+  The flags arrive in the URL's query string (`server.board_query`), and the page writes the query
   back as the view changes (`viewQuery`, from `rememberView`), so "flags" on a reload means the
   view as it was left. `by` and `group` are always written, never left to the saved view, since
   the POST may still be in flight when the page reloads; a new view setting that a flag can set
@@ -308,7 +375,7 @@ far more than `_norm_issue` keeps.
 - `uv run` forwards SIGTERM to its child, so `pkill -f` on a board's command line delivers it
   twice, near enough at once; the first SIGTERM's handler ignores the rest. An ignored signal
   stays ignored across `exec`, so a reload puts SIGTERM back to the default first.
-- Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
+- Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
   `MILESTONES_PERMISSIONS=read`. That is for testing only. When the user asks for a board to work
   in, start it writable: they manage and triage Babel, and read-only is for repos they don't want
