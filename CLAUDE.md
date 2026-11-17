@@ -230,6 +230,13 @@ stopped being the only page) plus `ui/` (Preact, built by `npm run build` into
   in `run`'s `finally`, which also comes before a `--reload`'s `exec`. Nothing of it happens when
   stdin isn't a tty. Drive it with `expect` and `BROWSER` set to a script that logs its argument,
   so `o` opens no real tab.
+- A page switches itself off when the app behind it goes (`ui/shared/alive.ts`, hooked into both
+  `events()`): an overlay, `#app` made inert, and a capture-phase keydown guard on window, which
+  runs before any page's own keys. The app sends `stopped` on its way out; a dropped
+  stream is checked with `GET /api/v1/app`, which waits through a `--reload` (the socket is kept)
+  and answers 401 to a new run, whose token the page can't have. Checked by driving pages in
+  Playwright through a reload, a SIGTERM, a `kill -9` and a new run; `npm run drive` can't, as it
+  owns the app it starts.
 - The port is 8377 unless it is taken, so the origin is stable and the home page keeps its two
   filters in `localStorage`. A board still saves its view on the server: a run that fell back to
   another port would otherwise lose it.

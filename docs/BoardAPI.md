@@ -158,6 +158,7 @@ A read-only app refuses the three milestone writes with `403`, saying what it wo
 | `plan` | `{path, count}` | the plan file changed: after any action on a read-only board, and after a review or a discard |
 | `cards` | `{cards, filling, suggestions}` | a page of cards has been read: put them on the board, in place of any of the same number; `suggestions` are the ones they brought (kept from an earlier run, or the board's own rules) |
 | `reload` | `{}` | a read started or finished; fetch the board again |
+| `stopped` | `{}` | the app is shutting down (not on a `--reload`, which keeps every connection's place); also sent on `GET /api/v1/events` |
 
 A comment line arrives every 15 seconds to keep the connection open.
 

@@ -1,5 +1,6 @@
 // The board's HTTP API, as docs/BoardAPI.md describes it. This is the only file that knows a
 // URL: a different front end starts by copying it.
+import { watch } from './alive.ts';
 
 export interface Label { name: string; color: string }
 export interface PrRef { number: number; title: string; state: string; draft: boolean; url: string }
@@ -220,6 +221,7 @@ export class Api {
     source.addEventListener('plan', (e) => on.plan(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('cards', (e) => on.cards(JSON.parse((e as MessageEvent).data)));
     source.addEventListener('reload', () => on.reload());
+    watch(source, this.token);
     return source;
   }
 }

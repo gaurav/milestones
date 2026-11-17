@@ -1592,6 +1592,12 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if not reloading.is_set():
             session.unlink(missing_ok=True)
+            # Every open page switches itself off on this (ui/shared/alive.ts) rather than
+            # finding out at its next click. A reload sends nothing: it keeps the socket, and
+            # the pages never notice.
+            app.publish("stopped", {})
+            for board in list(app.boards.values()):
+                board.publish("stopped", {})
         # A write already handed to gh finishes or fails within its own timeout; give the
         # queues a moment, then say what never reached GitHub.
         deadline = time.time() + 10
@@ -1600,6 +1606,8 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
         for board in list(app.boards.values()):
             if board.actions:
                 print("\n".join(closing_lines(board.snapshot())), file=sys.stderr, flush=True)
+        if not reloading.is_set() and (app.listeners or any(b.listeners for b in app.boards.values())):
+            time.sleep(0.3)  # for the event streams' threads to send `stopped` before exit
     if reloading.is_set():
         # The same process, pid and all, on the same socket: every page's URL and token, and
         # the session file `milestones suggest` reads, stay good. What this run kept only in
