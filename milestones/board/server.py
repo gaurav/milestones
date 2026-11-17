@@ -4,6 +4,7 @@ each repo that has been opened, read from GitHub the first time its page is visi
 `docs/BoardAPI.md` is the contract; a front end needs nothing from this file but that."""
 
 import datetime
+import html
 import json
 import mimetypes
 import os
@@ -24,10 +25,10 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from .. import gh
 from ..core import TRIAGE_BUCKET
 from .. import core
-from . import cache, data, plan, reconcile
+from . import build, cache, data, plan, reconcile
 from .log import plural, say, seconds
 
-STATIC = Path(__file__).parent / "static"
+STATIC = build.STATIC
 TOKEN_HEADER = "X-Milestones-Token"
 # Statuses an action can be left in when the page or the server goes away with work undone.
 UNSETTLED = ("pending", "failed")
@@ -37,13 +38,15 @@ UNSETTLED = ("pending", "failed")
 # is taken, any free port does.
 DEFAULT_PORT = 8377
 
-NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>milestones</title>
-<body style="font: 16px system-ui; max-width: 40em; margin: 4em auto">
-<h1>The front end hasn't been built</h1>
-<p>From the top of the <code>milestones</code> checkout, run:</p>
-<pre>npm install
-npm run build</pre>
-<p>then reload this page. The API is up either way: see <code>docs/BoardAPI.md</code>.</p>"""
+BROKEN_BUILD = """<!doctype html><meta charset="utf-8"><title>milestones: not built</title>
+<body style="font: 16px system-ui; max-width: 44em; margin: 4em auto; padding: 0 16px">
+<h1>The app's pages can't be served</h1>
+<p>The front end in <code>milestones/board/static/</code> isn't a whole build:</p>
+<ul>{problems}</ul>
+<p>To fix it:</p>
+<ol>{steps}</ol>
+<p>The terminal running <code>milestones</code> says the same. The API is up either way:
+see <code>docs/BoardAPI.md</code>.</p>"""
 
 
 class Refused(Exception):
@@ -1041,6 +1044,31 @@ def allowed_host(host: str | None, port: int) -> bool:
     return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
 
+# What a built page loads: an asset missing from the build is worth saying in the terminal,
+# while a stray request (a favicon the browser guessed at) is not.
+REFERENCED = re.compile(r"/(?:[\w-]+/)?[\w.-]+\.(?:js|css)$")
+_said_broken: list[str] = []
+
+
+def build_check() -> str | None:
+    """None if the built pages can be served; otherwise the page to serve instead, saying
+    what is wrong and what to do, which the terminal is told too (once for each problem)."""
+    problems = build.problems()
+    if not problems:
+        _said_broken.clear()
+        return None
+    steps = build.remedy(build.watchers())
+    if problems != _said_broken:
+        _said_broken[:] = problems
+        say("The app's pages can't be served:\n" + "\n".join(f"  {p}" for p in problems)
+            + "\nTo fix it:\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(steps, 1)),
+            "error")
+    def items(lines):
+        return "".join("<li>" + re.sub(r"`([^`]*)`", r"<code>\1</code>", html.escape(line))
+                       + "</li>" for line in lines)
+    return BROKEN_BUILD.format(problems=items(problems), steps=items(steps))
+
+
 def page_for(path: str) -> str | None:
     """The built file a page's address is served from, relative to the static folder; None
     for an address that is a file of its own. `/r/OWNER/NAME/` is the board, whichever repo."""
@@ -1238,11 +1266,14 @@ def make_handler(app: App, token: str):
             page = page_for(path)
             name = page or path.lstrip("/")
             target = (STATIC / name).resolve()
-            if not (STATIC / "index.html").exists():
-                return self._send(200, NOT_BUILT.encode(), "text/html; charset=utf-8")
             if page:
+                if broken := build_check():
+                    return self._send(500, broken.encode(), "text/html; charset=utf-8")
                 say(f"Opened {page_name(page, path)}")
             if STATIC.resolve() not in target.parents or not target.is_file():
+                if not page and REFERENCED.match(path):
+                    say(f"A page asked for {path}, which the build doesn't have; "
+                        "`npm run build` makes it", "warn")
                 raise Refused(404, "not found")
             kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             if kind.startswith("text/") or kind.endswith("javascript"):
@@ -1416,6 +1447,10 @@ def run(config: dict, path: str = "/", query: list[tuple[str, str]] | None = Non
         say(f"Tracking {plural(repos, 'repository', 'repositories')}, as {core.config_path()} "
             "says" if repos else f"No repositories tracked yet: `milestones add OWNER/NAME`, "
             f"or edit {core.config_path()}")
+    if build_check() is None and (stale := build.warnings()):
+        say("The app's pages are older than the code checked out, so they may not match it:\n"
+            + "\n".join(f"  {w}" for w in stale) + "\n"
+            + "\n".join(f"  {s}" for s in build.remedy(build.watchers())), "warn")
     if open_browser and not handoff:
         webbrowser.open(url)
     reloading = threading.Event()

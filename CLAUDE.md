@@ -260,9 +260,14 @@ the constants — the board has its own fetch (`board/data.py`), because a card 
   visible.
 - While the user has a board open from this checkout under `npm run dev`, the watcher rebuilds
   `static/` from whatever is checked out, so there is no need to build: `npm run drive` uses the
-  watcher's output. Checking out another branch to restack or test is fine: the board keeps
-  nothing that a GitHub write hasn't already saved, so the worst case is a change the user makes
-  mid-checkout failing until the branch is back. Reach for a scratch `git worktree` (with
+  watcher's output. Not so after a checkout that changes `build.mjs` itself: Node read the
+  script once, so the watcher goes on building the old way, and a page whose HTML names files
+  in the new places comes up blank. `board/build.py` catches that on every page load (a
+  referenced file missing, or a ui/ page with no built copy), serves a page saying what to do
+  instead, and finds the stale watcher by its start time to name the pid to kill. Checking out
+  another branch to restack or test is fine: the board keeps nothing that a GitHub write hasn't
+  already saved, so the worst case is a change the user makes mid-checkout failing until the
+  branch is back. Reach for a scratch `git worktree` (with
   `node_modules` symlinked in) only for a big, radical change; the user finds them more trouble
   than they're worth.
 - Start a board the user will work in while you change the code with `--reload` (in the

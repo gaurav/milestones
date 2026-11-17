@@ -1,6 +1,67 @@
-"""The app's terminal: the lines the log says about reads and writes."""
+"""The app's terminal and its check of the built front end: the build checks against a
+scratch `static/` and `ui/`, and the lines the log says about reads and writes."""
 
-from milestones.board import server
+import os
+
+from milestones.board import build, server
+
+
+def page(root, rel, refs=()):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f'<script src="{r}"></script>' for r in refs))
+    return path
+
+
+def sources(tmp_path):
+    ui = tmp_path / "ui"
+    for name in ("home", "board"):
+        page(ui, f"{name}/index.html")
+        (ui / name / "main.tsx").write_text("")
+    (ui / "shared").mkdir()
+    (ui / "shared" / "base.css").write_text("body {}")
+    return ui
+
+
+def test_a_whole_build_has_no_problems(tmp_path):
+    ui, static = sources(tmp_path), tmp_path / "static"
+    page(static, "index.html", ["/main.js", "/base.css"])
+    page(static, "board/index.html", ["/board/main.js", "/base.css"])
+    for rel in ("main.js", "base.css", "board/main.js"):
+        (static / rel).write_text("")
+    assert build.problems(static, ui) == []
+
+
+def test_a_watcher_left_on_an_old_build_script_is_caught(tmp_path):
+    # What `npm run dev` started before the pages had folders of their own leaves behind:
+    # the board's new HTML at the root, naming files that only the new build makes.
+    ui, static = sources(tmp_path), tmp_path / "static"
+    page(static, "index.html", ["/board/main.js", "/base.css"])
+    (static / "main.js").write_text("")
+    assert build.problems(static, ui) == [
+        "ui/board/ has not been built (no static/board/index.html)",
+        "static/index.html loads /board/main.js, which the build doesn't have",
+        "static/index.html loads /base.css, which the build doesn't have",
+    ]
+
+
+def test_an_empty_static_folder_is_a_problem_even_without_sources(tmp_path):
+    assert build.problems(tmp_path / "static", tmp_path / "no-ui") == [
+        "static/index.html is missing"]
+
+
+def test_warnings_notice_a_copied_file_or_a_script_newer_than_the_build(tmp_path):
+    ui, static = sources(tmp_path), tmp_path / "static"
+    page(static, "index.html")
+    page(static, "board/index.html")
+    (static / "base.css").write_text("body { color: red }")
+    for rel in ("main.js", "board/main.js"):
+        (static / rel).write_text("")
+        os.utime(static / rel, (1, 1))
+    assert build.warnings(static, ui) == [
+        "static/base.css differs from ui/shared/base.css",
+        "2 scripts in ui/ changed since the last build (ui/board/main.tsx, …)",
+    ]
 
 
 def test_describe_overview_says_each_half_of_the_read():
