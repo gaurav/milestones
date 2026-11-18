@@ -5,6 +5,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { pageLink } from '../shared/api.ts';
+import { SearchBox } from '../shared/search.tsx';
 import type { Action, Card as CardData, Kind, PrRef, Suggestion } from '../shared/api.ts';
 import {
   DIMENSIONS, FIELD_OF, NONE, age, askPrompt, cardStatus, cardValue, describe, effectiveValue, inkOn, isValueLabel,
@@ -771,8 +772,8 @@ function FilterBar() {
   const mark = (v: unknown) => (v ? 'filtering' : '');
   return (
     <div class="filterbar">
-      <input id="search" type="search" placeholder="Search (/)" value={f.text} class={mark(f.text)}
-        onInput={(e) => set({ text: (e.target as HTMLInputElement).value })}
+      <SearchBox id="search" placeholder="Search (/)" value={f.text} class={mark(f.text)}
+        onInput={(text) => set({ text })}
         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape' || e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
       <label class={mark(f.kind)}>Show
         <select value={f.kind} onChange={(e) => set({ kind: (e.target as HTMLSelectElement).value as typeof f.kind })}>

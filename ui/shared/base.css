@@ -28,6 +28,14 @@ button, select, input[type="search"], input[type="date"], .picker input {
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.625rem;
 }
 button { cursor: pointer; }
+/* SearchBox (ui/shared/search.tsx): a field with a × at its end. The wrapper is what a page's
+   layout sizes; the field fills it and leaves room on the right for the button. */
+.search { position: relative; display: inline-flex; align-items: center; }
+.search input { width: 100%; padding-right: 1.75rem; }
+.search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.search .search-clear { position: absolute; right: 0.25rem; border: none; background: none; padding: 0 0.3rem;
+  color: var(--muted); font-size: 1.125rem; line-height: 1; border-radius: 4px; }
+.search .search-clear:hover { color: var(--ink); background: var(--chip); }
 button:hover { border-color: var(--accent); }
 kbd { font: 0.8125rem ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3rem; background: var(--chip); }
 small { color: var(--muted); }

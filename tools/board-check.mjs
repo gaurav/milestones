@@ -156,6 +156,11 @@ try {
   await page.reload(); await page.waitForSelector('.toolbar');
   check('a reload keeps the search and filters',
     (await page.inputValue('#search')) === 'the' && (await page.locator('.card').count()) === shown);
+  await page.click('.filterbar .search-clear');
+  check("the search's × empties it and keeps the cursor there",
+    (await page.inputValue('#search')) === '' && await page.evaluate(() => document.activeElement?.id === 'search')
+    && !('q' in await query()) && (await page.locator('.filterbar .search-clear').count()) === 0);
+  await page.keyboard.press('Escape');
   await page.click('.filterbar .clear');
   check('Clear goes once nothing is on', (await page.locator('.filterbar .clear').count()) === 0);
   check('clearing them clears the query', !('q' in await query()) && !('kind' in await query()), await query());
@@ -377,7 +382,8 @@ try {
   check('every link to a board carries the token', await page.$$eval('a.repo, table.milestones a.title', (e, t) => e.length > 0 && e.every((a) => a.href.endsWith(t) && /\/r\/[^/]+\/[^/]+\//.test(a.href)), token));
   await page.fill('header.top input[type="search"]', 'zzz-no-such-repo'); await settle();
   check('the filter narrows the milestones', (await page.locator('table.milestones tbody tr').count()) === 0);
-  await page.fill('header.top input[type="search"]', ''); await settle();
+  await page.click('header.top .search-clear'); await settle();
+  check("the filter's × empties it", (await page.inputValue('header.top input[type="search"]')) === '' && (await page.locator('table.milestones tbody tr').count()) > 0);
   const fixes = page.locator('.fixes button:text-is("Set a date…")').first();
   if (await fixes.count()) {
     await fixes.click(); await page.waitForTimeout(200);
