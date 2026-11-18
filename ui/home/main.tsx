@@ -7,6 +7,7 @@ import { computed, signal } from '@preact/signals';
 import { boardPath } from '../shared/api.ts';
 import { dateChoices, dueness } from '../shared/app.ts';
 import type { Finding, FindingKind, MilestoneRow, Overview, Rollover } from '../shared/app.ts';
+import { SearchBox } from '../shared/search.tsx';
 import { Toast, Top, api, fatal, follow, info, link, say } from '../shared/pages.tsx';
 
 const section = follow<Overview>('overview', () => api.overview());
@@ -269,7 +270,7 @@ function Home() {
   return (
     <>
       <Top page="home" section={section.value} onRefresh={refresh}>
-        <input type="search" placeholder="Filter by repo or milestone" value={search.value} onInput={(e) => { search.value = (e.target as HTMLInputElement).value; }} />
+        <SearchBox placeholder="Filter by repo or milestone" value={search.value} onInput={(v) => { search.value = v; }} />
         <label class="check"><input type="checkbox" checked={focusOnly.value} onChange={(e) => { focusOnly.value = (e.target as HTMLInputElement).checked; keep('milestones.focusOnly', focusOnly.value); }} /> focused repos</label>
         <label class="check"><input type="checkbox" checked={showBuckets.value} onChange={(e) => { showBuckets.value = (e.target as HTMLInputElement).checked; keep('milestones.showBuckets', showBuckets.value); }} /> buckets</label>
       </Top>

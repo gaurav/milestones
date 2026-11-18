@@ -6,6 +6,7 @@ import { computed, signal } from '@preact/signals';
 import { boardPath } from '../shared/api.ts';
 import { PR_FLAGS, prsQuery } from '../shared/app.ts';
 import type { PrFlag, PullRequest } from '../shared/app.ts';
+import { SearchBox } from '../shared/search.tsx';
 import { Toast, Top, api, fatal, follow, link, say } from '../shared/pages.tsx';
 
 const LABELS: Record<PrFlag, string> = { assigned: 'assigned', review_requested: 'to review', mentions: 'mentions' };
@@ -66,7 +67,7 @@ function Prs() {
   return (
     <>
       <Top page="prs" section={section.value} onRefresh={refresh}>
-        <input type="search" placeholder="Filter by repo or title" value={search.value} onInput={(e) => { search.value = (e.target as HTMLInputElement).value; }} />
+        <SearchBox placeholder="Filter by repo or title" value={search.value} onInput={(v) => { search.value = v; }} />
         {PR_FLAGS.map((flag) => (
           <label key={flag} class="check" title={HINTS[flag]}><input type="checkbox" checked={flags.value.includes(flag)} onChange={() => toggle(flag)} /> {LABELS[flag]}</label>
         ))}
