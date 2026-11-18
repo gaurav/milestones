@@ -202,6 +202,13 @@ far more than `_norm_issue` keeps.
   Playwright's `dragTo` scrolls the target into view mid-drag, so a card in a column that is
   off-screen picks up whatever card ends under the pointer — drag between columns that are both
   visible.
+- While the user has a board open from this checkout under `npm run dev`, the watcher rebuilds
+  `static/` from whatever is checked out, so there is no need to build: `npm run drive` uses the
+  watcher's output. Checking out another branch to restack or test is fine: the board keeps
+  nothing that a GitHub write hasn't already saved, so the worst case is a change the user makes
+  mid-checkout failing until the branch is back. Reach for a scratch `git worktree` (with
+  `node_modules` symlinked in) only for a big, radical change; the user finds them more trouble
+  than they're worth.
 - Start a board the user will work in while you change the code with `--reload` (in the
   background, from this checkout: `uv run milestones board OWNER/NAME --reload`). When any
   `milestones/**/*.py` changes and then stays put for a couple of seconds, it waits for queued
@@ -303,4 +310,6 @@ far more than `_norm_issue` keeps.
   stays ignored across `exec`, so a reload puts SIGTERM back to the default first.
 - Drive the write paths against `gaurav/milestones` only (`uv run --project .. milestones board
   gaurav/milestones` from `data/`, so no `.env` is picked up by accident), and look at Babel with
-  `MILESTONES_PERMISSIONS=read`.
+  `MILESTONES_PERMISSIONS=read`. That is for testing only. When the user asks for a board to work
+  in, start it writable: they manage and triage Babel, and read-only is for repos they don't want
+  to change by accident.

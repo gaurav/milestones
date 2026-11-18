@@ -1,6 +1,8 @@
 """The board's pure parts: the card normalisers, and the Board's bookkeeping with the
 fetch and the write swapped for fakes. Nothing here calls gh."""
 
+import re
+
 import pytest
 
 from milestones import gh
@@ -602,6 +604,14 @@ def test_labels_md_matches_the_label_table():
             assert f"| `{label}` | `#{spec['colors'][option]}` | {meaning} |" in doc
             assert f"- {spec['field']} {option}: {meaning}" in brief
     assert "XL, L, M, S, XS" in brief
+
+
+def test_group_headings_are_drawn_in_the_labels_colours():
+    # The board's headings, light theme, are the labels' colours, so a heading and a label on
+    # GitHub say the same thing. The dark theme's are lighter and only need to keep the hue.
+    css = Path(__file__).parent.parent.joinpath("ui/board/main.css").read_text()
+    light = {int(n): c.lower() for n, c in re.findall(r"\.group-head \.level-(\d) \{ color: light-dark\(#([0-9a-fA-F]{6}),", css)}
+    assert {n: light[n] for n in light if n > 0} == {i + 1: c for i, c in enumerate(reconcile.SCALE)}
 
 
 def test_the_board_hands_the_page_its_label_table(monkeypatch):

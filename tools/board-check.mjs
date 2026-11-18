@@ -87,6 +87,15 @@ try {
 
   // --- The URL follows the view, and a reload reads it back.
   check('the token stays in the fragment', (await page.evaluate(() => location.hash)).startsWith('#t='));
+
+  // --- A new board is grouped by priority and effort, and each part of a heading has its colour.
+  const groupHeads = await page.$$eval('.group-head', (e) => e.slice(0, 40).map((h) => ({
+    bar: /\blevel-\d\b/.test(h.className) && getComputedStyle(h).boxShadow !== 'none',
+    parts: [...h.querySelectorAll('span[class^="level-"]')].map((p) => getComputedStyle(p).color),
+    muted: getComputedStyle(h.querySelector('small')).color,
+  })));
+  check('columns open grouped, each heading with a bar and a part per dimension', groupHeads.length > 0 && groupHeads.every((h) => h.bar && h.parts.length === 2), groupHeads[0]);
+  check("a heading's parts are coloured, not the grey of its count", groupHeads.every((h) => h.parts.every((c) => c !== h.muted)), groupHeads[0]);
   await page.click('.segmented button:has-text("Priority")');
   await page.selectOption('.toolbar > select', 'effort');
   let q = await query();
@@ -112,6 +121,10 @@ try {
   check('a reload keeps none ticked', (await page.locator('.column').count()) === 0);
   await menu('Columns'); await page.click('.menu-actions button:has-text("All")'); await page.keyboard.press('Escape');
   check('all ticked drops from=', !(await search()).includes('from='), await search());
+
+  // --- A column's hide button is on its title line, not beside the due date it once seemed to clear.
+  check("a column's × is on its title line",
+    (await page.locator('.column-title .hide').count()) > 0 && (await page.locator('.column-sub .hide').count()) === 0);
 
   // --- Filters ride in the URL too.
   await page.fill('#search', 'the'); await page.keyboard.press('Enter');
@@ -213,19 +226,22 @@ try {
     const facts = await page.$$eval('.detail dt', (e) => e.map((x) => x.textContent));
     if (facts.includes('Branch')) {
       check("a pull request's panel names its branch and the branch it targets",
-        facts.includes('Targets') && (await page.locator('.detail dd code').count()) === 2, facts);
+        facts.includes('Targets') && (await page.locator('.detail .copy-field input').count()) === 2, facts);
       const below = await page.$$eval('.detail dt', (e) => {
         const dd = e.find((x) => x.textContent === 'Targets')?.nextElementSibling;
         return dd ? [...dd.querySelectorAll('a')].map((a) => a.href) : [];
       });
       check('the pull request it targets, if any, is a link to it', below.every((h) => /\/pull\/\d+$/.test(h)), below);
-      const branch = (await page.textContent('.detail button.copy >> nth=0')).trim();
-      await page.click('.detail button.copy >> nth=0'); await settle();
+      const branch = await page.inputValue('.detail .copy-field input >> nth=0');
+      const field = await page.$eval('.detail .copy-field input', (i) => [i.readOnly, i.getBoundingClientRect().width, i.closest('dd').getBoundingClientRect().width]);
+      check('the branch is a read-only field nearly as wide as its row', field[0] && field[1] > field[2] * 0.75, field);
+      await page.click('.detail .copy-field button.copy >> nth=0'); await settle();
       const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`);
-      check('a click on the branch copies it', copied === branch, [branch, copied]);
+      check("the branch's copy button copies it", copied === branch, [branch, copied]);
+      check('the copy button is an icon, not text', await page.locator('.detail .copy-field button.copy svg >> nth=0').count() === 1);
       if (below.length) {
         const target = below[0].match(/\/pull\/(\d+)$/)[1];
-        await page.click('.detail dd:has(code) a >> nth=-1'); await settle();
+        await page.click('.detail dd:has(.copy-field) a >> nth=-1'); await settle();
         const head = (await page.textContent('.detail h2 a')).trim();
         check("a click on the target pull request focuses its card", head === `#${target}`, [target, head]);
       } else {
@@ -236,6 +252,17 @@ try {
     }
   }
 
+  // --- A double-click on a card opens the collapsed panel on it.
+  if (await page.locator('.detail .collapse').count()) {
+    await page.click('.detail .collapse'); await settle();
+    const card = page.locator('.column:first-child .card >> nth=1');
+    const number = (await card.locator('.card-facts a').first().textContent()).trim();
+    await card.locator('.card-title').dblclick(); await settle();
+    const head = (await page.textContent('.detail h2 a').catch(() => '')).trim();
+    check('a double-click on a card opens the panel on it', head === number, [number, head]);
+    check('and selects no text', (await page.evaluate(() => String(getSelection()))) === '');
+  }
+
   // --- The panel's ↻ reads its card again on its own: a read, so safe on a read-only board.
   if (await page.locator('.detail .reread').count()) {
     const head = (await page.textContent('.detail h2 a')).trim();
@@ -244,6 +271,24 @@ try {
     const toast = await page.waitForSelector('.toast', { timeout: 20000 }).then((t) => t.textContent()).catch(() => null);
     check('the panel\'s ↻ reads its card again, and says so', toast === `Read ${head} from GitHub again.`, toast);
     check('and the card stays focused', (await page.textContent('.detail h2 a')).trim() === head);
+  }
+
+  // --- Number keys walk down a column: each moved card hands the focus to the one below it.
+  {
+    const first = () => page.$$eval('.column:first-child .card .card-facts a, .column:first-child .card .card-title a',
+      (e) => e.map((x) => x.textContent.trim()));
+    const start = await first();
+    if (start.length >= 3) {
+      await page.click('.column:first-child .card >> nth=0'); await settle();
+      await page.keyboard.press('2'); await settle();
+      await page.keyboard.press('2'); await settle();
+      check('number keys walk down a column', (await focusedCard())?.trim() === start[2], [start.slice(0, 3), await focusedCard()]);
+      await page.keyboard.press('z'); await settle();
+      await page.keyboard.press('z'); await settle();
+      check('and z puts them back', JSON.stringify((await first()).slice(0, 3)) === JSON.stringify(start.slice(0, 3)), await first());
+    } else {
+      note('walk down a column', 'first column too short; skipped');
+    }
   }
 
   // --- The card panel's buttons, where this build has them.

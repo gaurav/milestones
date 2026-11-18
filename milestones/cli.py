@@ -2052,8 +2052,11 @@ def main():
                             "`none` is the issues with no milestone)")
     board.add_argument("--by", choices=["milestone", "priority", "effort"],
                        help="what the columns are to begin with (default: milestone)")
+    # argparse joins choices with commas, so "priority,effort" would read as a repeat in --help
     board.add_argument("--group", choices=["priority", "effort", "priority,effort", "milestone"],
-                       help="group the cards within each column to begin with")
+                       metavar="KIND",
+                       help="group the cards within each column to begin with: priority, "
+                            "effort, milestone, or priority,effort for both (the default)")
     board.add_argument("--port", type=int, default=0, help="default: any free port")
     board.add_argument("--no-open", action="store_true", help="print the URL, open nothing")
     board.add_argument("--reload", action="store_true",

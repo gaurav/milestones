@@ -5,7 +5,7 @@ import type { Action, Card, Milestone } from '../ui/shared/api.ts';
 import type { DimKind, Layout, Mapping } from '../ui/shared/logic.ts';
 import {
   NONE, age, allColumns, askPrompt, cardStatus, cardValue, columnFor, columnLabel, describe, dimColumns,
-  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, keyedOptions, optionForKey, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus,
+  effectiveValue, effortOf, estimatedEffort, filtersFrom, group, inView, initialColumns, keyedOptions, optionForKey, initialView, inkOn, isValueLabel, latestAction, matches, nextFocus, focusAfter,
   noFilters, pickerMatches, priorityOf, sections, shownByLayout, sizeOf, unsettled, viewQuery, withValue,
 } from '../ui/shared/logic.ts';
 
@@ -128,6 +128,12 @@ test('cards group within a column, judged ones first, and cut into headed sectio
   assert.deepEqual(list.map((c) => c.number), [3, 5, 4, 2, 1]);
   assert.deepEqual(sections(list, ['priority', 'effort'], l).map((s) => [s.label, s.cards.length]),
     [['Urgent · L', 1], ['Urgent · S', 2], ['Low · No effort', 1], ['No priority · No effort', 1]]);
+  // A heading's level is its place in the first grouping: Urgent 1, Low 4, unset 0.
+  const levels = (by: DimKind[], cs = list) => sections(cs, by, l).map((s) => s.parts.map((p) => p.level));
+  assert.deepEqual(levels(['priority', 'effort']), [[1, 2], [1, 4], [4, 0], [0, 0]]);
+  assert.deepEqual(sections(list, ['priority', 'effort'], l)[0]!.parts.map((p) => p.text), ['Urgent', 'L']);
+  assert.deepEqual(levels(['effort']), [[2], [4], [0]]);
+  assert.deepEqual(levels(['milestone'], [...list, card(9, { milestone: 7 })]), [[0], [-1]]);
   assert.deepEqual(sections(list, [], l).map((s) => [s.label, s.cards.length]), [['', 5]]);
   assert.deepEqual(sections([], ['priority'], l), []);
 });
@@ -214,12 +220,15 @@ test('the board opens as asked, else as it was left, else everything by mileston
   const ms = [milestone(7, 'Critical'), milestone(8, 'v1')];
   const all = [NONE, 7, 8];
   const none = { from: [], by: '', group: [] };
-  assert.deepEqual(initialView(none, undefined, all, ms), { by: 'milestone', group: [], shown: all, detail: true });
+  assert.deepEqual(initialView(none, undefined, all, ms), { by: 'milestone', group: ['priority', 'effort'], shown: all, detail: true });
+  // Grouping turned off stays off, whether saved or in the URL (`group=none`).
+  assert.deepEqual(initialView(none, { group: [] }, all, ms).group, []);
+  assert.deepEqual(initialView({ from: [], by: '', group: ['none'] }, undefined, all, ms).group, []);
   const saved = { by: 'priority', group: ['effort'], shown: [7, 99], detail: false };   // 99 has since gone
   assert.deepEqual(initialView(none, saved, all, ms), { by: 'priority', group: ['effort'], shown: [7], detail: false });
   assert.deepEqual(initialView({ from: ['v1'], by: 'effort', group: ['priority'] }, saved, all, ms),
     { by: 'effort', group: ['priority'], shown: [8], detail: false });
-  assert.deepEqual(initialView(none, { by: 'nonsense', group: ['x'], shown: [99] }, all, ms), { by: 'milestone', group: [], shown: all, detail: true });
+  assert.deepEqual(initialView(none, { by: 'nonsense', shown: [99] }, all, ms), { by: 'milestone', group: ['priority', 'effort'], shown: all, detail: true });
 });
 
 test('the query written back opens the board the way it stands', () => {
@@ -282,4 +291,13 @@ test('a number key picks the option at that place in the list', () => {
   assert.deepEqual(keys('priority'), [undefined, 'Urgent', 'High', 'Medium', 'Low', undefined, undefined]);
   assert.deepEqual(keys('effort'), [undefined, 'XL', 'L', 'M', 'S', 'XS', undefined]);
   assert.deepEqual(keyedOptions('effort').map((o) => o.keys), [[1], [2], [3], [4], [5]]);
+});
+
+test("focus walks on to the card below that is still in the column, past any carried away with it", () => {
+  const column = [card(1, { kind: 'pr' }), card(2), card(3)];
+  assert.equal(focusAfter(column, [column[1]!, column[2]!], 1), 2);
+  // The pull request closed #2, which went with it: the walk carries on at #3.
+  assert.equal(focusAfter(column, [column[2]!], 1), 3);
+  assert.equal(focusAfter(column, [column[0]!, column[1]!], 3), 2);
+  assert.equal(focusAfter(column, [], 1), null);
 });
